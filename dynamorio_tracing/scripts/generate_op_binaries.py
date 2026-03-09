@@ -18,8 +18,13 @@ from pathlib import Path
 from typing import Dict, List
 
 import onnx
+from onnx import shape_inference
 
-from ort_per_op_trace import _build_single_op_model, _safe_name
+from ort_per_op_trace import (
+    _build_single_op_model,
+    _load_runtime_shape_overrides,
+    _safe_name,
+)
 
 
 def _c_ident(s: str) -> str:
@@ -65,7 +70,101 @@ def _c_str_literal(s: str) -> str:
     )
 
 
-def _input_infos(sub_model: onnx.ModelProto, batch_size: int):
+def _resolve_dynamic_dim(
+    tensor_name: str,
+    dim_index: int,
+    dim: "onnx.TensorShapeProto.Dimension",
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> int:
+    if dim.HasField("dim_value") and dim.dim_value > 0:
+        return int(dim.dim_value)
+
+    dim_param = dim.dim_param if dim.HasField("dim_param") else ""
+    is_indices = tensor_name.startswith("indices") or tensor_name == "indices"
+    if is_indices and num_indices_per_lookup <= 0:
+        raise ValueError(
+            f"Input {tensor_name!r} has a dynamic indices dimension; "
+            "pass --num-indices-per-lookup to preserve the original shape."
+        )
+
+    if is_indices or dim_param == "indices_total":
+        return batch_size * max(1, num_indices_per_lookup)
+    if "batch" in dim_param.lower() or dim_index == 0:
+        return batch_size
+    return 1
+
+
+def _resolve_value_info_shape(
+    vi: onnx.ValueInfoProto,
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> List[int]:
+    tt = vi.type.tensor_type
+    if not tt.HasField("shape"):
+        return []
+    return [
+        _resolve_dynamic_dim(vi.name, i, dim, batch_size, num_indices_per_lookup)
+        for i, dim in enumerate(tt.shape.dim)
+    ]
+
+
+def _fallback_shape_for_single_node_input(
+    sub_model: onnx.ModelProto,
+    input_name: str,
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> List[int]:
+    if len(sub_model.graph.node) != 1:
+        return []
+
+    node = sub_model.graph.node[0]
+    if node.op_type != "Reshape" or not node.input or input_name != node.input[0]:
+        return []
+
+    output_name = node.output[0] if node.output else ""
+    output_vi = next((out for out in sub_model.graph.output if out.name == output_name), None)
+    if output_vi is None:
+        return []
+
+    output_shape = _resolve_value_info_shape(
+        output_vi, batch_size, num_indices_per_lookup
+    )
+    if not output_shape:
+        return []
+
+    total = 1
+    for dim in output_shape:
+        total *= dim
+    if len(output_shape) >= 2 and output_shape[-1] > 0 and total % output_shape[-1] == 0:
+        return [total // output_shape[-1], output_shape[-1]]
+    return [total]
+
+
+def _shape_tensor_values_for_single_node(
+    sub_model: onnx.ModelProto,
+    input_name: str,
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> List[int] | None:
+    if len(sub_model.graph.node) != 1:
+        return None
+
+    node = sub_model.graph.node[0]
+    if len(node.input) < 2 or input_name != node.input[1]:
+        return None
+    if node.op_type not in ("Reshape", "Expand"):
+        return None
+
+    output_name = node.output[0] if node.output else ""
+    output_vi = next((out for out in sub_model.graph.output if out.name == output_name), None)
+    if output_vi is None:
+        return None
+
+    return _resolve_value_info_shape(output_vi, batch_size, num_indices_per_lookup)
+
+
+def _input_infos(sub_model: onnx.ModelProto, batch_size: int, num_indices_per_lookup: int):
     init_names = {x.name for x in sub_model.graph.initializer}
     infos = []
     for inp in sub_model.graph.input:
@@ -74,20 +173,21 @@ def _input_infos(sub_model: onnx.ModelProto, batch_size: int):
         tt = inp.type.tensor_type
         elem_type = tt.elem_type if tt.HasField("elem_type") else onnx.TensorProto.FLOAT
 
-        dims: List[int] = []
-        if tt.HasField("shape"):
-            for i, dim in enumerate(tt.shape.dim):
-                if dim.HasField("dim_value") and dim.dim_value > 0:
-                    dims.append(int(dim.dim_value))
-                else:
-                    dims.append(batch_size if i == 0 else 1)
+        dims = _resolve_value_info_shape(inp, batch_size, num_indices_per_lookup)
+        if not dims:
+            dims = _fallback_shape_for_single_node_input(
+                sub_model, inp.name, batch_size, num_indices_per_lookup
+            )
+        literal_values = _shape_tensor_values_for_single_node(
+            sub_model, inp.name, batch_size, num_indices_per_lookup
+        )
 
-        # Scalar case: shape can be absent.
         infos.append(
             {
                 "name": inp.name,
                 "elem_type": int(elem_type),
                 "dims": dims,
+                "literal_values": literal_values,
             }
         )
     return infos
@@ -132,6 +232,7 @@ def _gen_c_source(
     dims_blocks = []
     create_input_blocks = []
     release_input_blocks = []
+    input_literal_blocks = []
 
     for i, info in enumerate(input_infos):
         dims = info["dims"]
@@ -143,7 +244,26 @@ def _gen_c_source(
         dims_decl = f"static const int64_t {dims_name}[] = {{{dims_literal}}};" if dims else ""
         dims_blocks.append(dims_decl)
 
+        literal_name = f"input_{i}_literal"
+        literal_values = info.get("literal_values")
+        if literal_values is not None:
+            literal_vals = ", ".join(str(int(v)) for v in literal_values)
+            input_literal_blocks.append(
+                f"static const int64_t {literal_name}[] = {{{literal_vals}}};"
+            )
+        else:
+            literal_name = ""
+
         ort_enum = _onnx_elem_to_ort_enum(int(info["elem_type"]))
+        literal_init = ""
+        if literal_values is not None:
+            literal_init = f"""
+    if (input_{i}_elem_count != (sizeof({literal_name}) / sizeof({literal_name}[0]))) {{
+        fprintf(stderr, "input {i} literal size mismatch\\n");
+        goto cleanup;
+    }}
+    memcpy(input_bufs[{i}], {literal_name}, sizeof({literal_name}));
+"""
         create_input_blocks.append(
             f"""
     size_t input_{i}_elem_count = (size_t)({n_elem_expr});
@@ -153,6 +273,7 @@ def _gen_c_source(
         fprintf(stderr, "calloc failed for input {i}\\n");
         goto cleanup;
     }}
+{literal_init}
     ORT_OK(ort->CreateTensorWithDataAsOrtValue(
         cpu_mem,
         input_bufs[{i}],
@@ -203,6 +324,7 @@ static const size_t {model_var}_len = sizeof({model_var});
 {output_names_decl}
 
 {chr(10).join(x for x in dims_blocks if x)}
+{chr(10).join(input_literal_blocks)}
 
 static size_t ort_elem_size(ONNXTensorElementDataType t) {{
     switch (t) {{
@@ -232,7 +354,17 @@ static size_t ort_elem_size(ONNXTensorElementDataType t) {{
         }} \\
     }} while (0)
 
-int main(void) {{
+int main(int argc, char** argv) {{
+    int intra_threads = 1;
+    int inter_threads = 1;
+    for (int i = 1; i < argc; i++) {{
+        if (strcmp(argv[i], "--intra-threads") == 0 && i + 1 < argc) {{
+            intra_threads = atoi(argv[++i]);
+        }} else if (strcmp(argv[i], "--inter-threads") == 0 && i + 1 < argc) {{
+            inter_threads = atoi(argv[++i]);
+        }}
+    }}
+
     const OrtApi* ort = OrtGetApiBase()->GetApi(ORT_API_VERSION);
     OrtEnv* env = NULL;
     OrtSessionOptions* sess_opts = NULL;
@@ -249,8 +381,8 @@ int main(void) {{
 
     ORT_OK(ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "op_runner", &env));
     ORT_OK(ort->CreateSessionOptions(&sess_opts));
-    ORT_OK(ort->SetIntraOpNumThreads(sess_opts, 1));
-    ORT_OK(ort->SetInterOpNumThreads(sess_opts, 1));
+    ORT_OK(ort->SetIntraOpNumThreads(sess_opts, intra_threads));
+    ORT_OK(ort->SetInterOpNumThreads(sess_opts, inter_threads));
     ORT_OK(ort->CreateSessionFromArray(env, {model_var}, {model_var}_len, sess_opts, &sess));
     ORT_OK(ort->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &cpu_mem));
 
@@ -352,9 +484,24 @@ def main() -> int:
     ap.add_argument("--start-op", type=int, default=0)
     ap.add_argument("--max-ops", type=int, default=0, help="0 means all")
     ap.add_argument("--batch-size", type=int, default=1, help="Used for dynamic dims")
+    ap.add_argument("--num-indices-per-lookup", type=int, default=0,
+                    help="Concrete bag size for resolving dynamic indices_* dims")
+    ap.add_argument("--allow-shape-fixups", action="store_true",
+                    help="Allow legacy single-op shape coercions that may change input/output dims")
+    ap.add_argument("--shape-csv", default="",
+                    help="Optional runtime op-shape CSV used to restore missing intermediate tensor shapes")
+    ap.add_argument("--intra-threads", type=int, default=1,
+                    help="Default ORT intra-op thread count embedded in manifest (runtime override via CLI arg)")
+    ap.add_argument("--inter-threads", type=int, default=1,
+                    help="Default ORT inter-op thread count embedded in manifest (runtime override via CLI arg)")
     args = ap.parse_args()
 
     model = onnx.load(args.onnx)
+    try:
+        model = shape_inference.infer_shapes(model, check_type=False, strict_mode=False)
+    except Exception:
+        pass
+    shape_overrides = _load_runtime_shape_overrides(args.shape_csv) if args.shape_csv else {}
 
     out_dir = Path(args.out_dir).resolve()
     models_dir = out_dir / "models"
@@ -373,7 +520,12 @@ def main() -> int:
 
     for idx in range(start, stop):
         node = nodes[idx]
-        sub = _build_single_op_model(model, idx)
+        sub = _build_single_op_model(
+            model,
+            idx,
+            allow_shape_fixups=args.allow_shape_fixups,
+            shape_overrides=shape_overrides,
+        )
         if sub is None:
             continue
 
@@ -384,7 +536,7 @@ def main() -> int:
         onnx.save(sub, str(op_onnx))
 
         model_bytes = op_onnx.read_bytes()
-        inputs = _input_infos(sub, args.batch_size)
+        inputs = _input_infos(sub, args.batch_size, args.num_indices_per_lookup)
         outputs = _output_names(sub)
 
         c_src = _gen_c_source(
@@ -408,6 +560,12 @@ def main() -> int:
                 "onnx": str(op_onnx),
                 "c_source": str(src_dir / c_name),
                 "exe_name": Path(c_name).stem,
+                "batch_size": args.batch_size,
+                "num_indices_per_lookup": args.num_indices_per_lookup,
+                "allow_shape_fixups": args.allow_shape_fixups,
+                "shape_csv": args.shape_csv,
+                "default_intra_threads": args.intra_threads,
+                "default_inter_threads": args.inter_threads,
             }
         )
 
@@ -422,6 +580,12 @@ def main() -> int:
         "out_dir": str(out_dir),
         "cmake": str(out_dir / "CMakeLists.txt"),
         "manifest": str(out_dir / "manifest.json"),
+        "batch_size": args.batch_size,
+        "num_indices_per_lookup": args.num_indices_per_lookup,
+        "allow_shape_fixups": args.allow_shape_fixups,
+        "shape_csv": args.shape_csv,
+        "default_intra_threads": args.intra_threads,
+        "default_inter_threads": args.inter_threads,
     }, indent=2))
     return 0
 

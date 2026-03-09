@@ -36,17 +36,107 @@ def _elem_type_to_numpy(elem_type: int):
     return m.get(elem_type, np.float32)
 
 
-def _normalize_shape(dims: List[int], batch_size: int) -> List[int]:
-    out = []
-    for i, d in enumerate(dims):
-        if d > 0:
-            out.append(d)
-        else:
-            out.append(batch_size if i == 0 else 1)
-    return out
+def _resolve_dynamic_dim(
+    tensor_name: str,
+    dim_index: int,
+    dim: "onnx.TensorShapeProto.Dimension",
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> int:
+    if dim.HasField("dim_value") and dim.dim_value > 0:
+        return int(dim.dim_value)
+
+    dim_param = dim.dim_param if dim.HasField("dim_param") else ""
+    is_indices = tensor_name.startswith("indices") or tensor_name == "indices"
+    if is_indices and num_indices_per_lookup <= 0:
+        raise ValueError(
+            f"Input {tensor_name!r} has a dynamic indices dimension; "
+            "pass --num-indices-per-lookup to preserve the original shape."
+        )
+
+    if is_indices or dim_param == "indices_total":
+        return batch_size * max(1, num_indices_per_lookup)
+    if "batch" in dim_param.lower() or dim_index == 0:
+        return batch_size
+    return 1
 
 
-def _gen_inputs(model: onnx.ModelProto, batch_size: int, seed: int) -> Dict[str, np.ndarray]:
+def _resolve_value_info_shape(
+    vi: onnx.ValueInfoProto,
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> List[int]:
+    tt = vi.type.tensor_type
+    if not tt.HasField("shape"):
+        return []
+    return [
+        _resolve_dynamic_dim(vi.name, i, dim, batch_size, num_indices_per_lookup)
+        for i, dim in enumerate(tt.shape.dim)
+    ]
+
+
+def _fallback_shape_for_single_node_input(
+    model: onnx.ModelProto,
+    input_name: str,
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> List[int]:
+    if len(model.graph.node) != 1:
+        return []
+
+    node = model.graph.node[0]
+    if node.op_type != "Reshape" or not node.input or input_name != node.input[0]:
+        return []
+
+    output_name = node.output[0] if node.output else ""
+    output_vi = next((out for out in model.graph.output if out.name == output_name), None)
+    if output_vi is None:
+        return []
+
+    output_shape = _resolve_value_info_shape(
+        output_vi, batch_size, num_indices_per_lookup
+    )
+    if not output_shape:
+        return []
+
+    total = int(np.prod(output_shape, dtype=np.int64))
+    if len(output_shape) >= 2 and output_shape[-1] > 0 and total % output_shape[-1] == 0:
+        return [total // output_shape[-1], output_shape[-1]]
+    return [total]
+
+
+def _shape_tensor_values_for_single_node(
+    model: onnx.ModelProto,
+    input_name: str,
+    batch_size: int,
+    num_indices_per_lookup: int,
+) -> np.ndarray | None:
+    if len(model.graph.node) != 1:
+        return None
+
+    node = model.graph.node[0]
+    if len(node.input) < 2 or input_name != node.input[1]:
+        return None
+    if node.op_type not in ("Reshape", "Expand"):
+        return None
+
+    output_name = node.output[0] if node.output else ""
+    output_vi = next((out for out in model.graph.output if out.name == output_name), None)
+    if output_vi is None:
+        return None
+
+    target_shape = _resolve_value_info_shape(
+        output_vi, batch_size, num_indices_per_lookup
+    )
+    return np.asarray(target_shape, dtype=np.int64)
+
+
+def _gen_inputs(
+    model: onnx.ModelProto,
+    batch_size: int,
+    seed: int,
+    num_indices_per_lookup: int,
+) -> Dict[str, np.ndarray]:
     rng = np.random.default_rng(seed)
     init_names = {x.name for x in model.graph.initializer}
     feeds: Dict[str, np.ndarray] = {}
@@ -56,12 +146,20 @@ def _gen_inputs(model: onnx.ModelProto, batch_size: int, seed: int) -> Dict[str,
             continue
         tt = inp.type.tensor_type
         elem_type = tt.elem_type
-        shape = _normalize_shape([
-            d.dim_value if d.HasField("dim_value") else -1
-            for d in tt.shape.dim
-        ], batch_size)
+        shape = _resolve_value_info_shape(inp, batch_size, num_indices_per_lookup)
+        if not shape:
+            shape = _fallback_shape_for_single_node_input(
+                model, inp.name, batch_size, num_indices_per_lookup
+            )
 
         np_dtype = _elem_type_to_numpy(elem_type)
+        shape_tensor_values = _shape_tensor_values_for_single_node(
+            model, inp.name, batch_size, num_indices_per_lookup
+        )
+
+        if shape_tensor_values is not None:
+            feeds[inp.name] = shape_tensor_values.astype(np_dtype, copy=False)
+            continue
 
         if np_dtype in (np.float16, np.float32, np.float64):
             arr = rng.standard_normal(size=shape).astype(np_dtype)
@@ -100,7 +198,12 @@ def main() -> int:
     ap.add_argument("--warmup", type=int, default=1)
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument("--num-indices-per-lookup", type=int, default=0)
     ap.add_argument("--out-json", default="", help="Optional summary json path")
+    ap.add_argument("--intra-threads", type=int, default=1,
+                    help="ORT intra-op parallelism thread count")
+    ap.add_argument("--inter-threads", type=int, default=1,
+                    help="ORT inter-op parallelism thread count")
     args = ap.parse_args()
 
     model_path = Path(args.onnx)
@@ -108,11 +211,15 @@ def main() -> int:
 
     sess_opts = ort.SessionOptions()
     sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    sess_opts.intra_op_num_threads = args.intra_threads
+    sess_opts.inter_op_num_threads = args.inter_threads
 
     providers = [args.provider]
     sess = ort.InferenceSession(str(model_path), sess_options=sess_opts, providers=providers)
 
-    feeds = _gen_inputs(model, args.batch_size, args.seed)
+    feeds = _gen_inputs(
+        model, args.batch_size, args.seed, args.num_indices_per_lookup
+    )
 
     for _ in range(max(0, args.warmup)):
         _ = sess.run(None, feeds)

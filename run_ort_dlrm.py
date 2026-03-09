@@ -855,7 +855,7 @@ def build_session(
     replace_loop: bool = True,
     force_cpu_ops: Optional[List[str]] = None,
     bag_size: int = 0,
-) -> Tuple[object, List[str]]:
+) -> Tuple[object, List[str], str]:
     """
     构建 ORT InferenceSession。
 
@@ -873,6 +873,11 @@ def build_session(
     """
     _setup_cann_env()
     ort, available_providers = _import_onnxruntime()
+
+    # ── 图预处理 ──────────────────────────────────────────────────────────────
+    # Loop→Gather 替换是否生效只由 replace_loop 控制，与是否启用 CANN 解耦。
+    # 这样即便仅使用 CPUExecutionProvider，也可以显式生成替换后的新 ONNX 图。
+    effective_onnx_path = onnx_path
 
     # ── Session 选项 ──────────────────────────────────────────────────────────
     opts = ort.SessionOptions()
@@ -927,25 +932,28 @@ def build_session(
         ]
         active_providers_str = "CANNExecutionProvider + CPUExecutionProvider (混合执行)"
         # Step 1：修复 int64 Mul → BroadcastToD 在 CANN 上的兼容性问题
-        onnx_path = _patch_model_for_cann(onnx_path)
-        # Step 2：将 emb_l.N Loop → Gather(emb_l.N.weight, indices_N)
-        #         使 EmbeddingBag 查表在 CANN（NPU）上执行而非回退到 CPU Loop
-        if replace_loop:
-            onnx_path = _replace_loop_with_gather(onnx_path,
-                                                  override_bag_size=bag_size)
-        # Step 3：将指定算子替换为 CANN 不支持的等价算子，强制其落回 CPU
-        #         例如：Relu → LeakyRelu(alpha=0)（CANN 无此核 → 走 CPU）
-        if force_cpu_ops:
-            onnx_path = _force_ops_to_cpu(onnx_path, force_cpu_ops)
+        effective_onnx_path = _patch_model_for_cann(effective_onnx_path)
     else:
         providers = ["CPUExecutionProvider"]
         active_providers_str = "CPUExecutionProvider (仅 CPU)"
 
-    print(f"\n[ORT] 加载模型: {onnx_path}")
+    # 将 emb_l.N Loop → Gather(emb_l.N.weight, indices_N)
+    # 使 EmbeddingBag 查表使用改写后的新图；是否执行只由 replace_loop 控制。
+    if replace_loop:
+        effective_onnx_path = _replace_loop_with_gather(
+            effective_onnx_path, override_bag_size=bag_size
+        )
+
+    # 将指定算子替换为 CANN 不支持的等价算子，强制其落回 CPU。
+    # 保持在 Loop→Gather 之后执行，与原有图改写顺序一致。
+    if use_cann and cann_available and force_cpu_ops:
+        effective_onnx_path = _force_ops_to_cpu(effective_onnx_path, force_cpu_ops)
+
+    print(f"\n[ORT] 加载模型: {effective_onnx_path}")
     print(f"[ORT] 使用 provider: {active_providers_str}")
 
     t0 = time.perf_counter()
-    session = ort.InferenceSession(onnx_path, sess_options=opts, providers=providers)
+    session = ort.InferenceSession(effective_onnx_path, sess_options=opts, providers=providers)
     load_time = (time.perf_counter() - t0) * 1000
 
     # 打印实际使用的 providers（ORT 内部分配结果）
@@ -953,7 +961,27 @@ def build_session(
     print(f"[ORT] 模型加载耗时: {load_time:.1f} ms")
     print(f"[ORT] 实际 providers: {actual}")
 
-    return session, actual, onnx_path
+    return session, actual, effective_onnx_path
+
+
+def run_warmup(
+    session: object,
+    batch_size: int,
+    warmup_batches: int,
+    onnx_path: Optional[str] = None,
+    bag_size: int = 1,
+) -> None:
+    """执行 warmup，不返回延迟统计。"""
+    if warmup_batches <= 0:
+        return
+
+    output_names = [o.name for o in session.get_outputs()]
+    print(f"\n[INFER] Warmup: {warmup_batches} 次 ...")
+    for i in range(warmup_batches):
+        feed = generate_inputs(session, batch_size, seed=i,
+                               onnx_path=onnx_path, bag_size=bag_size)
+        session.run(output_names, feed)
+    print("[INFER] Warmup 完成。")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1510,15 +1538,8 @@ def run_inference(
     bag_size 用于正确生成 indices_* 输入（大小为 batch_size * bag_size）。
     """
     output_names = [o.name for o in session.get_outputs()]
-
-    # ── Warmup ────────────────────────────────────────────────────────────────
-    if warmup_batches > 0:
-        print(f"\n[INFER] Warmup: {warmup_batches} 次 ...")
-        for i in range(warmup_batches):
-            feed = generate_inputs(session, batch_size, seed=i,
-                                   onnx_path=onnx_path, bag_size=bag_size)
-            session.run(output_names, feed)
-        print("[INFER] Warmup 完成。")
+    run_warmup(session, batch_size, warmup_batches,
+               onnx_path=onnx_path, bag_size=bag_size)
 
     # ── 正式推理 ──────────────────────────────────────────────────────────────
     latencies: List[float] = []
@@ -1594,10 +1615,11 @@ def parse_args() -> argparse.Namespace:
                         help="ORT 算子内部并行线程数（CPU 算子用）")
     parser.add_argument("--inter-threads", type=int, default=1,
                         help="ORT 算子间并行线程数")
-    # Loop → Gather 变换（EmbeddingBag NPU 卸载）
+    # Loop → Gather 变换（独立于 --use-cann 的图改写开关）
     parser.add_argument("--no-replace-loop", action="store_true", default=False,
-                        help="禁用 Loop→Gather 替换变换（默认: 启用，"
-                             "将 emb_l.N Loop 节点替换为 Gather 使其在 NPU 上运行）")
+                        help="禁用 Loop→Gather 替换变换（默认: 启用；"
+                             "是否创建替换后的新 ONNX 图仅由该开关控制，"
+                             "不依赖 --use-cann）")
     parser.add_argument(
         "--num-indices-per-lookup", type=int, default=0,
         metavar="N",
@@ -1625,6 +1647,10 @@ def parse_args() -> argparse.Namespace:
     # Profiling
     parser.add_argument("--enable-profiling", action="store_true", default=False,
                         help="启用 ORT profiling（输出 JSON）")
+    parser.add_argument(
+        "--profile-warmup", action="store_true", default=False,
+        help="将 warmup 阶段也写入 profiling；默认关闭，即 warmup 不计入 profiling",
+    )
     parser.add_argument("--profile-dir", type=str,
                         default="./onnx_operator_analysis",
                         help="Profiling JSON 输出目录")
@@ -1651,10 +1677,13 @@ def main() -> None:
     print(f"  Batch size    : {args.batch_size}")
     print(f"  Batches       : {args.num_batches}（warmup={args.warmup_batches}）")
     print(f"  CANN (NPU)    : {'启用' if args.use_cann else '禁用（仅 CPU）'}")
+    print(f"  Replace Loop  : {'启用' if not args.no_replace_loop else '禁用'}")
     if args.use_cann:
         print(f"  NPU device_id : {args.device_id}")
     print(f"  Intra threads : {args.intra_threads}")
     print(f"  Profiling     : {'启用' if args.enable_profiling else '禁用'}")
+    if args.enable_profiling:
+        print(f"  Profile warmup: {'计入' if args.profile_warmup else '不计入'}")
 
     # ── CANN 环境检查 ─────────────────────────────────────────────────────────
     cann_found = _setup_cann_env()
@@ -1677,18 +1706,43 @@ def main() -> None:
         [t.strip() for t in args.force_cpu_ops.split(",") if t.strip()]
         if args.force_cpu_ops else []
     )
-    session, actual_providers, effective_onnx_path = build_session(
-        onnx_path       = args.onnx_path,
-        use_cann        = args.use_cann,
-        device_id       = args.device_id,
-        enable_profiling= args.enable_profiling,
-        profile_dir     = args.profile_dir,
-        intra_threads   = args.intra_threads,
-        inter_threads   = args.inter_threads,
-        replace_loop    = not args.no_replace_loop,
-        force_cpu_ops   = force_cpu_ops,
-        bag_size        = args.num_indices_per_lookup,
-    )
+    session_kwargs = {
+        "onnx_path": args.onnx_path,
+        "use_cann": args.use_cann,
+        "device_id": args.device_id,
+        "profile_dir": args.profile_dir,
+        "intra_threads": args.intra_threads,
+        "inter_threads": args.inter_threads,
+        "replace_loop": not args.no_replace_loop,
+        "force_cpu_ops": force_cpu_ops,
+        "bag_size": args.num_indices_per_lookup,
+    }
+
+    if args.enable_profiling and args.warmup_batches > 0 and not args.profile_warmup:
+        print("\n[PROFILE] warmup 不计入 profiling：先执行无 profiling warmup，再重建 profiled session。")
+        warmup_session, _, warmup_onnx_path = build_session(
+            enable_profiling=False,
+            **session_kwargs,
+        )
+        run_warmup(
+            warmup_session,
+            batch_size=args.batch_size,
+            warmup_batches=args.warmup_batches,
+            onnx_path=warmup_onnx_path,
+            bag_size=args.num_indices_per_lookup,
+        )
+        del warmup_session
+        session, actual_providers, effective_onnx_path = build_session(
+            enable_profiling=True,
+            **session_kwargs,
+        )
+        effective_warmup_batches = 0
+    else:
+        session, actual_providers, effective_onnx_path = build_session(
+            enable_profiling=args.enable_profiling,
+            **session_kwargs,
+        )
+        effective_warmup_batches = args.warmup_batches
 
     # ── 模型输入信息 ──────────────────────────────────────────────────────────
     if args.verbose:
@@ -1713,7 +1767,7 @@ def main() -> None:
         session        = session,
         num_batches    = args.num_batches,
         batch_size     = args.batch_size,
-        warmup_batches = args.warmup_batches,
+        warmup_batches = effective_warmup_batches,
         onnx_path      = effective_onnx_path,
         bag_size       = args.num_indices_per_lookup,
     )

@@ -11,12 +11,24 @@ set -euo pipefail
 
 ONNX_PATH=${1:-/data/qc/dlrm/dlrm_onnx/dlrm_s_pytorch.onnx.cann_patched.onnx.loop_to_gather.onnx}
 ORT_ROOT=${2:-$CONDA_PREFIX}
-OUT_DIR=${3:-/data/qc/dlrm/ORT/dynamorio_tracing/out_per_op_bins}
+OUT_DIR=${OUT_DIR:-/data/qc/dlrm/ORT/dynamorio_tracing/out_per_op_bins}
 MAX_OPS=${MAX_OPS:-0}
 START_OP=${START_OP:-0}
 BATCH_SIZE=${BATCH_SIZE:-1}
+NUM_INDICES_PER_LOOKUP=${NUM_INDICES_PER_LOOKUP:-0}
+INTRA_THREADS=${INTRA_THREADS:-4}
+INTER_THREADS=${INTER_THREADS:-1}
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
+DEFAULT_SHAPE_CSV="$SCRIPT_DIR/../op_shapes.csv"
+SHAPE_CSV=${SHAPE_CSV:-}
+if [[ -z "$SHAPE_CSV" && -f "$DEFAULT_SHAPE_CSV" ]]; then
+  SHAPE_CSV="$DEFAULT_SHAPE_CSV"
+fi
+
+echo "batch size: $BATCH_SIZE"
+echo "num indices per lookup: $NUM_INDICES_PER_LOOKUP"
+echo "shape csv: ${SHAPE_CSV:-<none>}"
 
 if [[ -z "${ORT_ROOT:-}" ]]; then
   echo "ERROR: ORT_ROOT is empty. Activate conda env first or pass arg2 as ORT install root."
@@ -87,12 +99,20 @@ if [[ $_has_header -eq 0 ]]; then
   echo "INFO: Bootstrapped ORT SDK at $ORT_ROOT"
 fi
 
-python3 "$SCRIPT_DIR/scripts/generate_op_binaries.py" \
-  --onnx "$ONNX_PATH" \
-  --out-dir "$OUT_DIR" \
-  --start-op "$START_OP" \
-  --max-ops "$MAX_OPS" \
+GEN_ARGS=(
+  --onnx "$ONNX_PATH"
+  --out-dir "$OUT_DIR"
+  --start-op "$START_OP"
+  --max-ops "$MAX_OPS"
   --batch-size "$BATCH_SIZE"
+  --num-indices-per-lookup "$NUM_INDICES_PER_LOOKUP"
+  --intra-threads "$INTRA_THREADS"
+  --inter-threads "$INTER_THREADS"
+)
+if [[ -n "$SHAPE_CSV" ]]; then
+  GEN_ARGS+=(--shape-csv "$SHAPE_CSV")
+fi
+python3 "$SCRIPT_DIR/scripts/generate_op_binaries.py" "${GEN_ARGS[@]}"
 
 cmake -S "$OUT_DIR" -B "$OUT_DIR/build" -DORT_ROOT="$ORT_ROOT"
 cmake --build "$OUT_DIR/build" -j"$(nproc)"

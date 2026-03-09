@@ -7,6 +7,7 @@ and running each model under DynamoRIO drmemtrace.
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import json
 import os
@@ -31,6 +32,12 @@ class OpTask:
     log_path: Path
 
 
+@dataclass(frozen=True)
+class TensorMeta:
+    elem_type: int
+    dims: List[int]
+
+
 def _safe_name(s: str) -> str:
     bad = '/\\:<>"|?* '
     out = s
@@ -50,6 +57,56 @@ def _value_info_map(model: onnx.ModelProto):
 
 def _initializer_map(model: onnx.ModelProto):
     return {x.name: x for x in model.graph.initializer}
+
+
+def _dtype_name_to_tensor_proto(dtype_name: str) -> int:
+    mapping = {
+        "bool": onnx.TensorProto.BOOL,
+        "float16": onnx.TensorProto.FLOAT16,
+        "float32": onnx.TensorProto.FLOAT,
+        "float64": onnx.TensorProto.DOUBLE,
+        "int8": onnx.TensorProto.INT8,
+        "int16": onnx.TensorProto.INT16,
+        "int32": onnx.TensorProto.INT32,
+        "int64": onnx.TensorProto.INT64,
+        "uint8": onnx.TensorProto.UINT8,
+        "uint16": onnx.TensorProto.UINT16,
+        "uint32": onnx.TensorProto.UINT32,
+        "uint64": onnx.TensorProto.UINT64,
+    }
+    return mapping.get(dtype_name.strip().lower(), onnx.TensorProto.FLOAT)
+
+
+def _parse_shape_literal(shape_text: str) -> Optional[List[int]]:
+    text = (shape_text or "").strip()
+    if not text:
+        return None
+    try:
+        value = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return None
+    if isinstance(value, (list, tuple)):
+        try:
+            return [int(v) for v in value]
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _load_runtime_shape_overrides(csv_path: str) -> Dict[str, TensorMeta]:
+    overrides: Dict[str, TensorMeta] = {}
+    with open(csv_path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            tensor_name = (row.get("tensor_name") or "").strip()
+            if not tensor_name:
+                continue
+            dims = _parse_shape_literal(row.get("shape", ""))
+            if dims is None:
+                continue
+            elem_type = _dtype_name_to_tensor_proto(row.get("dtype", ""))
+            overrides[tensor_name] = TensorMeta(elem_type=elem_type, dims=dims)
+    return overrides
 
 
 def _constant_tensor_map(model: onnx.ModelProto) -> Dict[str, onnx.TensorProto]:
@@ -99,7 +156,16 @@ def _clone_vi(vi: onnx.ValueInfoProto) -> onnx.ValueInfoProto:
     return out
 
 
-def _build_single_op_model(model: onnx.ModelProto, node_idx: int) -> Optional[onnx.ModelProto]:
+def _make_vi_with_meta(name: str, meta: TensorMeta) -> onnx.ValueInfoProto:
+    return helper.make_tensor_value_info(name, meta.elem_type, meta.dims)
+
+
+def _build_single_op_model(
+    model: onnx.ModelProto,
+    node_idx: int,
+    allow_shape_fixups: bool = False,
+    shape_overrides: Optional[Dict[str, TensorMeta]] = None,
+) -> Optional[onnx.ModelProto]:
     g = model.graph
     if node_idx < 0 or node_idx >= len(g.node):
         return None
@@ -108,6 +174,7 @@ def _build_single_op_model(model: onnx.ModelProto, node_idx: int) -> Optional[on
     vi_map = _value_info_map(model)
     init_map = _initializer_map(model)
     const_tensor_map = _constant_tensor_map(model)
+    shape_overrides = shape_overrides or {}
 
     # Collect required graph inputs for this node.
     new_inputs: List[onnx.ValueInfoProto] = []
@@ -128,7 +195,14 @@ def _build_single_op_model(model: onnx.ModelProto, node_idx: int) -> Optional[on
             new_inits.append(const_tensor_map[inp])
             continue
         if inp in vi_map:
-            new_inputs.append(_clone_vi(vi_map[inp]))
+            meta = shape_overrides.get(inp)
+            if meta is not None:
+                new_inputs.append(_make_vi_with_meta(inp, meta))
+            else:
+                new_inputs.append(_clone_vi(vi_map[inp]))
+            continue
+        if inp in shape_overrides:
+            new_inputs.append(_make_vi_with_meta(inp, shape_overrides[inp]))
             continue
         # Fallback: unspecified rank (None) to avoid axis-out-of-range errors
         # during shape inference when the actual rank is > 1.
@@ -138,16 +212,21 @@ def _build_single_op_model(model: onnx.ModelProto, node_idx: int) -> Optional[on
     for out_name in node.output:
         if not out_name:
             continue
-        if out_name in vi_map:
-            vi = vi_map[out_name]
-            # Keep elem_type but drop shape — let shape_inference fill in the
-            # correct shape to avoid "MergeShapeInfo" conflicts at load time.
-            elem_type = (
-                vi.type.tensor_type.elem_type
-                if vi.type.HasField("tensor_type")
-                else onnx.TensorProto.FLOAT
-            )
-            new_outputs.append(helper.make_tensor_value_info(out_name, elem_type, None))
+        if out_name in shape_overrides:
+            new_outputs.append(_make_vi_with_meta(out_name, shape_overrides[out_name]))
+        elif out_name in vi_map:
+            if allow_shape_fixups:
+                vi = vi_map[out_name]
+                # Legacy compatibility path: keep elem_type but drop shape so
+                # downstream fixups can coerce the single-op model to run.
+                elem_type = (
+                    vi.type.tensor_type.elem_type
+                    if vi.type.HasField("tensor_type")
+                    else onnx.TensorProto.FLOAT
+                )
+                new_outputs.append(helper.make_tensor_value_info(out_name, elem_type, None))
+            else:
+                new_outputs.append(_clone_vi(vi_map[out_name]))
         else:
             new_outputs.append(helper.make_tensor_value_info(out_name, onnx.TensorProto.FLOAT, None))
 
@@ -181,10 +260,11 @@ def _build_single_op_model(model: onnx.ModelProto, node_idx: int) -> Optional[on
     except Exception:
         pass
 
-    new_model = _patch_missing_shapes(new_model)
-    new_model = _fixup_reshape_shapes(new_model)
-    new_model = _fixup_expand_shape_input(new_model)
-    new_model = _fixup_gather_data_size(new_model)
+    if allow_shape_fixups:
+        new_model = _patch_missing_shapes(new_model)
+        new_model = _fixup_reshape_shapes(new_model)
+        new_model = _fixup_expand_shape_input(new_model)
+        new_model = _fixup_gather_data_size(new_model)
 
     return new_model
 
@@ -555,6 +635,41 @@ def main() -> int:
     ap.add_argument("--max-ops", type=int, default=0, help="0 means all ops")
     ap.add_argument("--start-op", type=int, default=0)
     ap.add_argument("--seed", type=int, default=2026)
+    ap.add_argument(
+        "--intra-threads", type=int, default=1,
+        help="ORT intra-op thread count passed to each single_op_runner session",
+    )
+    ap.add_argument(
+        "--inter-threads", type=int, default=1,
+        help="ORT inter-op thread count passed to each single_op_runner session",
+    )
+    ap.add_argument(
+        "--cpunodebind", type=int, default=None,
+        help="numactl --cpunodebind value; omit to disable numactl",
+    )
+    ap.add_argument(
+        "--membind", type=int, default=None,
+        help="numactl --membind value; omit to disable numactl",
+    )
+    ap.add_argument(
+        "--use-physical",
+        action="store_true",
+        help="Enable physical-address tracing mode for downstream trace processing",
+    )
+    ap.add_argument(
+        "--num-indices-per-lookup", type=int, default=0,
+        help="Concrete bag size for resolving dynamic indices_* dims in strict single-op execution",
+    )
+    ap.add_argument(
+        "--allow-shape-fixups",
+        action="store_true",
+        help="Allow legacy single-op shape coercions that may change input/output dims to improve runability",
+    )
+    ap.add_argument(
+        "--shape-csv",
+        default="",
+        help="Optional runtime op-shape CSV (for example ORT/op_shapes.csv) used to restore missing intermediate tensor shapes",
+    )
     args = ap.parse_args()
 
     model = onnx.load(args.onnx)
@@ -567,6 +682,9 @@ def main() -> int:
         model = shape_inference.infer_shapes(model, check_type=False, strict_mode=False)
     except Exception:
         pass
+    shape_overrides: Dict[str, TensorMeta] = {}
+    if args.shape_csv:
+        shape_overrides = _load_runtime_shape_overrides(args.shape_csv)
 
     out_dir = Path(args.out_dir).resolve()
     models_dir = out_dir / "models"
@@ -586,7 +704,12 @@ def main() -> int:
     tasks: List[OpTask] = []
     for idx in range(start, stop):
         node = nodes[idx]
-        sub = _build_single_op_model(model, idx)
+        sub = _build_single_op_model(
+            model,
+            idx,
+            allow_shape_fixups=args.allow_shape_fixups,
+            shape_overrides=shape_overrides,
+        )
         if sub is None:
             continue
 
@@ -614,17 +737,40 @@ def main() -> int:
     script_dir = Path(__file__).resolve().parent
     runner = script_dir / "single_op_runner.py"
 
+    # Build optional numactl prefix once (same settings apply to every op).
+    numactl_prefix: List[str] = []
+    if args.use_physical:
+        numactl_prefix.append("sudo")
+    if args.cpunodebind is not None or args.membind is not None:
+        numactl_prefix.append("numactl")
+        if args.cpunodebind is not None:
+            numactl_prefix.append(f"--cpunodebind={args.cpunodebind}")
+        if args.membind is not None:
+            numactl_prefix.append(f"--membind={args.membind}")
+
     for t in tasks:
         t.trace_dir.mkdir(parents=True, exist_ok=True)
 
-        cmd = [
+        # -no_follow_children is a DR *runtime* option and must appear before
+        # -t/-c so that drrun itself parses it, not the drmemtrace client.
+        # Without it, Python's fork/clone calls during import and ORT
+        # thread-pool init cause DynamoRIO to trace 100+ child processes.
+        # Their short-lived raw files have incomplete headers, making
+        # raw2trace abort with "Unknown trace type 2".
+        cmd = numactl_prefix + [
             args.drrun,
+            "-no_follow_children",
             "-t",
             "drmemtrace",
             "-offline",
             "-outdir",
             str(t.trace_dir),
-            "--",
+        ]
+
+        if args.use_physical:
+            cmd.append("-use_physical")
+
+        cmd += ["--",
             args.python,
             str(runner),
             "--onnx",
@@ -639,9 +785,16 @@ def main() -> int:
             str(args.runs),
             "--seed",
             str(args.seed),
+            "--num-indices-per-lookup",
+            str(args.num_indices_per_lookup),
+            "--intra-threads",
+            str(args.intra_threads),
+            "--inter-threads",
+            str(args.inter_threads),
             "--out-json",
-            str(t.run_json),
-        ]
+            str(t.run_json),]
+
+        print("dynamorio trace: ", cmd)
 
         rc = _run_cmd(cmd, t.log_path, env=os.environ.copy())
 
