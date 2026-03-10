@@ -28,8 +28,8 @@ from pathlib import Path
 # ──────────────────────────────────────────────
 DRRUN = "/data/qc/simulator/DynamoRIO-AArch64-Linux-11.3.0-1/bin64/drrun"
 CACHE_CONF = "/data/qc/dlrm/ops_profile/concorde/test/cache_nl.conf"
-OPS_DIR = "/data/qc/dlrm/ORT/dynamorio_tracing/drrio_traces_per_op_multithread"
-OUT_CSV = "/data/qc/dlrm/ORT/dynamorio_tracing/trace_features.csv"
+OPS_DIR = "/data/qc/dlrm/ORT/dynamorio_tracing/drrio_traces_per_op_multithread_64_batch_size"
+OUT_CSV = "/data/qc/dlrm/ORT/dynamorio_tracing/trace_features_64_batch_size.csv"
 # ──────────────────────────────────────────────
 
 # ── 正则 ──────────────────────────────────────
@@ -387,21 +387,25 @@ def extract_one_op(op_dir: Path, cache_conf: str, use_physical: bool = False) ->
 # ── 主流程 ────────────────────────────────────
 
 def main():
+    global DRRUN
     parser = argparse.ArgumentParser()
     parser.add_argument("--ops_dir", default=OPS_DIR)
     parser.add_argument("--out", default=OUT_CSV)
     parser.add_argument("--jobs", type=int, default=4,
                         help="并行 worker 数（每个 worker 串行跑 3 个 drrun 命令）")
     parser.add_argument("--cache_conf", default=CACHE_CONF)
+    parser.add_argument("--drrun", default=DRRUN,
+                        help="DynamoRIO drrun 可执行文件路径")
     parser.add_argument("--use_physical", action="store_true",
                         help="向 drrun/drcachesim 透传 -use_physical，默认关闭")
     args = parser.parse_args()
+    DRRUN = args.drrun
 
     ops_root = Path(args.ops_dir)
     op_dirs = sorted(
         [d for d in ops_root.iterdir() if d.is_dir() and re.match(r"^\d+_", d.name)]
     )
-    print(f"找到 {len(op_dirs)} 个算子目录")
+    print(f"找到 {len(op_dirs)} 个算子目录", flush=True)
 
     records = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
@@ -420,7 +424,8 @@ def main():
             done += 1
             print(f"  [{done}/{len(op_dirs)}] {op_dir.name}  "
                   f"instr={rec.get('total_instructions','?')}  "
-                  f"LLC_miss={rec.get('LLC_miss_rate_pct','?')}%")
+                  f"LLC_miss={rec.get('LLC_miss_rate_pct','?')}%",
+                  flush=True)
 
     # 按 op_idx 排序
     records.sort(key=lambda r: r.get("op_idx", 9999))
@@ -474,19 +479,19 @@ def main():
         for r in records:
             writer.writerow(r)
 
-    print(f"\n写入 {out_path}  ({len(records)} 行, {len(all_cols)} 列)")
+    print(f"\n写入 {out_path}  ({len(records)} 行, {len(all_cols)} 列)", flush=True)
 
     # 打印样例
     if records:
         r0 = records[0]
-        print("\n── 第一行样例(部分字段) ──")
+        print("\n── 第一行样例(部分字段) ──", flush=True)
         for k in key_cols + ["total_L1D_miss_rate_pct", "LLC_miss_rate_pct",
                               "reuse_time_bin_1_pct",
                               "reuse_time_top10_cumulative_pct",
                               "opc_math_ratio", "opc_branch_ratio",
                               "opc_load_ratio", "opc_store_ratio"]:
             if k in r0:
-                print(f"  {k}: {r0[k]}")
+                print(f"  {k}: {r0[k]}", flush=True)
 
 
 if __name__ == "__main__":

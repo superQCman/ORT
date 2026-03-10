@@ -7,10 +7,10 @@ For each CPU operator node, extracts:
   - Aggregated stats per op_name
 """
 
+import argparse
 import json
 import csv
 import sys
-import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -392,9 +392,24 @@ def print_summary(agg_rows: list):
 def main():
     script_dir = Path(__file__).parent
 
+    parser = argparse.ArgumentParser(
+        description="Extract CPU thread usage statistics from an ORT profiling JSON."
+    )
+    parser.add_argument(
+        "json_path",
+        nargs="?",
+        help="Path to ort_cann_profile_*.json. If omitted, auto-select the latest one.",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="Directory to write the derived CSV files into. Defaults to the script directory.",
+    )
+    args = parser.parse_args()
+
     # Accept JSON path as CLI arg or discover the latest in current dir
-    if len(sys.argv) > 1:
-        json_path = sys.argv[1]
+    if args.json_path:
+        json_path = args.json_path
     else:
         candidates = sorted(script_dir.glob("ort_cann_profile_*.json"))
         if not candidates:
@@ -407,11 +422,13 @@ def main():
         print(f"Auto-selected: {json_path}")
 
     stem = Path(json_path).stem  # e.g. ort_cann_profile_2026-03-01_13-13-14
+    out_dir = Path(args.out_dir) if args.out_dir else script_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    out_detail   = script_dir / f"{stem}_cpu_thread_detail.csv"
-    out_agg      = script_dir / f"{stem}_cpu_thread_aggregated.csv"
-    out_par_pair = script_dir / f"{stem}_parallel_pairs.csv"
-    out_par_grp  = script_dir / f"{stem}_parallel_groups.csv"
+    out_detail   = out_dir / f"{stem}_cpu_thread_detail.csv"
+    out_agg      = out_dir / f"{stem}_cpu_thread_aggregated.csv"
+    out_par_pair = out_dir / f"{stem}_parallel_pairs.csv"
+    out_par_grp  = out_dir / f"{stem}_parallel_groups.csv"
 
     # Pipeline
     events   = load_profile(json_path)

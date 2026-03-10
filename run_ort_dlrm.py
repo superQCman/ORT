@@ -852,6 +852,7 @@ def build_session(
     profile_dir: str,
     intra_threads: int,
     inter_threads: int,
+    disable_graph_optimizations: bool = False,
     replace_loop: bool = True,
     force_cpu_ops: Optional[List[str]] = None,
     bag_size: int = 0,
@@ -883,6 +884,8 @@ def build_session(
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = intra_threads
     opts.inter_op_num_threads = inter_threads
+    if disable_graph_optimizations:
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
     # inter_op 并行执行模式：仅当 inter_op_num_threads > 1 时有效
     # ORT_SEQUENTIAL（默认）：算子按拓扑序逐一执行，inter_op 线程池闲置
     # ORT_PARALLEL      ：无数据依赖的算子（如各 emb_l* Gather）可同时调度
@@ -1654,6 +1657,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-dir", type=str,
                         default="./onnx_operator_analysis",
                         help="Profiling JSON 输出目录")
+    parser.add_argument(
+        "--disable-graph-optimizations", action="store_true", default=False,
+        help="禁用 ORT 图优化与融合，便于对齐原始/改写后的 ONNX 节点与 profiling 结果",
+    )
     # 调试
     parser.add_argument("--verbose", action="store_true", default=False,
                         help="打印详细信息")
@@ -1681,6 +1688,7 @@ def main() -> None:
     if args.use_cann:
         print(f"  NPU device_id : {args.device_id}")
     print(f"  Intra threads : {args.intra_threads}")
+    print(f"  Graph Opt     : {'禁用' if args.disable_graph_optimizations else '启用（默认）'}")
     print(f"  Profiling     : {'启用' if args.enable_profiling else '禁用'}")
     if args.enable_profiling:
         print(f"  Profile warmup: {'计入' if args.profile_warmup else '不计入'}")
@@ -1713,6 +1721,7 @@ def main() -> None:
         "profile_dir": args.profile_dir,
         "intra_threads": args.intra_threads,
         "inter_threads": args.inter_threads,
+        "disable_graph_optimizations": args.disable_graph_optimizations,
         "replace_loop": not args.no_replace_loop,
         "force_cpu_ops": force_cpu_ops,
         "bag_size": args.num_indices_per_lookup,
