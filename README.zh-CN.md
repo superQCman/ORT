@@ -1,0 +1,284 @@
+# ORT DLRM Sweep 与训练特征构建
+
+English version: [README.md](./README.md)
+
+该目录包含当前基于 ONNX Runtime 的 DLRM 工作流，用于：
+
+- 运行带 profiling 的整图推理
+- 生成按 batch 变化的 `op_shapes` 元数据
+- 使用 DynamoRIO 构建并追踪单算子二进制
+- 提取单算子 trace 特征
+- 将 ORT CPU 线程 profiling 与 trace 特征合并为训练数据集
+
+## 主入口
+
+使用 [run_ort_sweep.sh](./run_ort_sweep.sh) 作为端到端工作流入口。
+
+对于每个 `(batch_size, num_indices_per_lookup)` 组合，它会：
+
+1. 运行启用 ORT profiling 的 [run_ort_dlrm.py](./run_ort_dlrm.py)
+2. 写出组合专属的 `op_shapes_{batch}_{nip}.csv`
+3. 在 `sweep_runs/onnx_profiles/` 下写出组合专属的 ORT profiling JSON
+4. 从 profiling JSON 解析 CPU 线程使用情况
+5. 基于推理阶段实际使用的改写后 ONNX 构建单算子二进制
+6. 对所有单算子二进制运行 DynamoRIO trace
+7. 提取单算子 trace 特征
+8. 将 `op_shapes + cpu_thread_detail + trace_features` 合并成 `features/` 下的最终训练 CSV
+
+默认 sweep 范围为：
+
+- `batch_size`: `32..2048`，步长 `32`
+- `num_indices_per_lookup`: `100..1000`，步长 `50`
+
+## 关键脚本
+
+- [run_ort_sweep.sh](./run_ort_sweep.sh)
+  端到端 batch sweep 驱动脚本。
+
+- [run_ort_dlrm.py](./run_ort_dlrm.py)
+  使用 ORT 运行 DLRM 推理，导出 `op_shapes.csv`，并写出 ORT profiling JSON。
+
+- [extract_cpu_thread_usage.py](./onnx_operator_analysis/extract_cpu_thread_usage.py)
+  解析 ORT profiling JSON，提取 CPU 线程调度统计。
+
+- [extract_trace_features.py](./dynamorio_tracing/extract_trace_features.py)
+  解析 DynamoRIO trace 输出，生成单算子 trace 特征 CSV。
+
+- [build_training_features.py](./onnx_operator_analysis/build_training_features.py)
+  将 ORT profiling 节点对齐到 `op_shapes`，按节点聚合 CPU 线程指标，并与 trace 特征合并。
+
+## 整体目录结构
+
+```text
+ORT/
+├── README.md
+├── README.zh-CN.md
+├── run_ort_dlrm.py
+├── run_ort.sh
+├── run_ort_sweep.sh
+├── op_shapes.csv
+├── features/
+│   └── bs*_nip*.csv
+├── sweep_runs/
+│   ├── generated_onnx/
+│   │   └── bs*_nip*/
+│   ├── logs/
+│   │   └── bs*_nip*/
+│   ├── onnx_profiles/
+│   │   └── bs*_nip*/
+│   ├── op_shapes/
+│   │   └── op_shapes_<batch>_<num_indices>.csv
+│   └── sweep_summary.csv
+├── onnx_operator_analysis/
+│   ├── build_training_features.py
+│   ├── extract_cpu_thread_usage.py
+│   └── *.md
+└── dynamorio_tracing/
+    ├── extract_trace_features.py
+    ├── run_build_op_binaries.sh
+    ├── run_drrio_all_ops.sh
+    ├── out_per_op_bins_sweep/
+    │   └── bs*_nip*/
+    ├── drrio_traces_sweep/
+    │   └── bs*_nip*/
+    ├── trace_features_sweep/
+    │   └── bs*_nip*.csv
+    └── scripts/
+        ├── generate_op_binaries.py
+        ├── ort_per_op_trace.py
+        ├── ort_with_markers.py
+        └── single_op_runner.py
+```
+
+## 目录布局
+
+- `sweep_runs/op_shapes/`
+  每个组合对应的 `op_shapes_{batch}_{nip}.csv`
+
+- `sweep_runs/onnx_profiles/<combo>/`
+  整图 ORT profiling JSON 及其派生的 CPU 线程 CSV
+
+- `dynamorio_tracing/out_per_op_bins_sweep/<combo>/`
+  生成出的单算子二进制及 manifest
+
+- `dynamorio_tracing/drrio_traces_sweep/<combo>/`
+  原始 DynamoRIO trace 输出
+
+- `dynamorio_tracing/trace_features_sweep/<combo>.csv`
+  从 DynamoRIO trace 提取出的单算子 trace 特征
+
+- `features/<combo>.csv`
+  最终训练数据集，每行对应一个 ONNX 节点
+
+- `sweep_runs/sweep_summary.csv`
+  每个组合一行的汇总表，包含关键输出路径
+
+## 依赖前提
+
+该工作流默认以下环境可用：
+
+- 可用的 Python 环境，包含 `onnxruntime`、`numpy` 和 `onnx`
+- 如果 `USE_CANN=1`，则需要可用的 Ascend CANN 环境
+- 配置路径下可用的 DynamoRIO
+- 位于 `ONNX_PATH` 的 DLRM ONNX 模型
+
+默认值为：
+
+- `ASCEND_ENV_SH=/data/qc/Ascend/ascend-toolkit/set_env.sh`
+- `ONNX_PATH=/data/qc/dlrm/dlrm_onnx/dlrm_s_pytorch.onnx`
+- `DRRUN=/data/qc/simulator/DynamoRIO-AArch64-Linux-11.3.0-1/bin64/drrun`
+
+## 快速开始
+
+运行完整 sweep：
+
+```bash
+cd /data/qc/dlrm/ORT
+bash run_ort_sweep.sh
+```
+
+只跑一个组合做验证：
+
+```bash
+cd /data/qc/dlrm/ORT
+BATCH_START=32 BATCH_END=32 \
+NUM_INDICES_START=100 NUM_INDICES_END=100 \
+MAX_COMBOS=1 \
+bash run_ort_sweep.sh
+```
+
+中断后续跑：
+
+```bash
+cd /data/qc/dlrm/ORT
+RESUME=1 bash run_ort_sweep.sh
+```
+
+## 重要配置
+
+[run_ort_sweep.sh](./run_ort_sweep.sh) 当前支持的常用环境变量：
+
+- `NUM_BATCHES`, `WARMUP_BATCHES`
+- `INTRA_THREADS`, `INTER_THREADS`
+- `USE_CANN`, `DEVICE_ID`
+- `NO_REPLACE_LOOP`
+- `DISABLE_GRAPH_OPTIMIZATIONS`
+- `USE_NUMACTL`, `NUMA_NODE`
+- `RESUME`
+- `EXTRACT_FEATURES`
+- `START_IDX`, `MAX_OPS`
+
+当前工作流中的重要默认值：
+
+- `NO_REPLACE_LOOP=0`
+  保持启用 Loop 替换。
+
+- `DISABLE_GRAPH_OPTIMIZATIONS=1`
+  在整图 profiling 时关闭图优化，使 runtime 节点名尽量贴近 `op_shapes`。
+
+- `EXTRACT_FEATURES=1`
+  最终训练数据集依赖 DynamoRIO trace 特征。
+
+## 单独运行各阶段
+
+运行整图 ORT 推理，并导出 `op_shapes` 和 profiling JSON：
+
+```bash
+cd /data/qc/dlrm/ORT
+python3 run_ort_dlrm.py \
+  --onnx-path /data/qc/dlrm/dlrm_onnx/dlrm_s_pytorch.onnx \
+  --batch-size 32 \
+  --num-batches 3 \
+  --warmup-batches 2 \
+  --num-indices-per-lookup 100 \
+  --shape-csv ./op_shapes.csv \
+  --enable-profiling \
+  --profile-dir ./onnx_operator_analysis \
+  --disable-graph-optimizations
+```
+
+从单个 ORT profile JSON 中解析 CPU 线程统计：
+
+```bash
+cd /data/qc/dlrm/ORT
+PROFILE_DIR=./sweep_runs/onnx_profiles/bs32_nip100
+PROFILE_JSON=$(find "$PROFILE_DIR" -maxdepth 1 -name 'ort_cann_profile*.json' | sort | tail -n 1)
+
+python3 onnx_operator_analysis/extract_cpu_thread_usage.py \
+  "$PROFILE_JSON" \
+  --out-dir "$PROFILE_DIR"
+```
+
+基于已有产物构建最终训练 CSV：
+
+```bash
+cd /data/qc/dlrm/ORT
+BATCH_SIZE=32
+NUM_INDICES=100
+COMBO=bs${BATCH_SIZE}_nip${NUM_INDICES}
+PROFILE_DIR=./sweep_runs/onnx_profiles/$COMBO
+PROFILE_STEM=$(basename "$(find "$PROFILE_DIR" -maxdepth 1 -name 'ort_cann_profile*.json' | sort | tail -n 1)" .json)
+SHAPE_CSV=$(find ./sweep_runs/op_shapes -maxdepth 1 -name "op_shapes_${BATCH_SIZE}_${NUM_INDICES}.csv" | head -n 1)
+TRACE_FEATURES=./dynamorio_tracing/trace_features_sweep/$COMBO.csv
+
+python3 onnx_operator_analysis/build_training_features.py \
+  --op-shapes "$SHAPE_CSV" \
+  --cpu-detail "$PROFILE_DIR/${PROFILE_STEM}_cpu_thread_detail.csv" \
+  --trace-features "$TRACE_FEATURES" \
+  --aligned-cpu-detail-out "$PROFILE_DIR/${PROFILE_STEM}_cpu_thread_detail_aligned.csv" \
+  --cpu-agg-out "$PROFILE_DIR/${PROFILE_STEM}_cpu_thread_node_aggregated.csv" \
+  --unmatched-out "$PROFILE_DIR/${PROFILE_STEM}_cpu_thread_unmatched.csv" \
+  --out ./features/$COMBO.csv \
+  --batch-size "$BATCH_SIZE" \
+  --num-indices-per-lookup "$NUM_INDICES"
+```
+
+## 输出语义
+
+最终的 `features/<combo>.csv` 会保留 `op_shapes` 中每个 ONNX 节点各一行。
+
+每一行可能包含：
+
+- 标准化后的 `node_idx`、`node_name`、`op_type`
+- 来自 DynamoRIO 的 trace 特征
+- 来自 ORT 的按节点聚合 CPU 线程 profiling 特征
+- `has_trace_features`
+- `has_cpu_profile`
+- `cpu_profile_missing_reason`
+
+即使某些节点没有 CPU 线程调度统计，仍会保留在数据集中，尤其是 `Constant` 和其他轻量节点。这类行通常会是：
+
+- `has_trace_features=1`
+- `has_cpu_profile=0`
+- `cpu_profile_missing_reason=constant_or_no_thread_stats`
+
+## 对齐规则
+
+要得到正确结果，下列内容必须针对同一组参数保持一致：
+
+- `batch_size`
+- `num_indices_per_lookup`
+- `op_shapes_{batch}_{nip}.csv`
+- ORT 推理实际使用的改写后 ONNX
+- 基于该改写后 ONNX 构建出的单算子二进制
+
+如果这些内容不一致，流程可能仍然能跑完，但最终数据集将不再严格对应目标模型运行。
+
+## 常见问题
+
+- `extract_features.log` 在运行时一直为空
+  如果不是以非缓冲模式运行，Python 输出可能被缓冲。当前 sweep 已经对特征提取使用 `python3 -u`。
+
+- 整图 profiling 的节点数与单算子二进制数量不一致
+  ORT profiling 反映的是 runtime 执行事件，而单算子二进制来自 ONNX 图节点。`Constant` 节点以及 runtime 融合/优化后的节点都会导致差异。
+
+- 有些行的 `has_cpu_profile=0`
+  这是预期行为，表示该节点在 ORT profiling 中没有产出 `thread_scheduling_stats`，尤其常见于 `Constant` 节点。
+
+- 单算子构建使用了错误的 ONNX
+  当前 sweep 会从推理阶段解析出实际使用的改写后 ONNX，并将该路径传给单算子构建流程。
+
+## 说明
+
+- 推荐使用 `run_ort_sweep.sh` 作为可复现实验的数据集生成入口。
+- sweep 会为每组 `(batch_size, num_indices_per_lookup)` 输出独立产物，避免不同组合之间互相覆盖。

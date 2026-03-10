@@ -1,5 +1,7 @@
 # ORT DLRM Sweep And Training Features
 
+Chinese version: [README.zh-CN.md](./README.zh-CN.md)
+
 This directory contains the current ONNX Runtime based DLRM workflow for:
 
 - running full-model inference with profiling
@@ -10,11 +12,11 @@ This directory contains the current ONNX Runtime based DLRM workflow for:
 
 ## Main Entry Point
 
-Use [run_ort_sweep.sh](/data/qc/dlrm/ORT/run_ort_sweep.sh) for the end-to-end workflow.
+Use [run_ort_sweep.sh](./run_ort_sweep.sh) for the end-to-end workflow.
 
 For each `(batch_size, num_indices_per_lookup)` combination it will:
 
-1. run [run_ort_dlrm.py](/data/qc/dlrm/ORT/run_ort_dlrm.py) with ORT profiling enabled
+1. run [run_ort_dlrm.py](./run_ort_dlrm.py) with ORT profiling enabled
 2. write a combo-specific `op_shapes_{batch}_{nip}.csv`
 3. write a combo-specific ORT profiling JSON under `sweep_runs/onnx_profiles/`
 4. parse CPU thread usage from the profiling JSON
@@ -30,19 +32,19 @@ The default sweep range is:
 
 ## Key Scripts
 
-- [run_ort_sweep.sh](/data/qc/dlrm/ORT/run_ort_sweep.sh)
+- [run_ort_sweep.sh](./run_ort_sweep.sh)
   End-to-end batch sweep driver.
 
-- [run_ort_dlrm.py](/data/qc/dlrm/ORT/run_ort_dlrm.py)
+- [run_ort_dlrm.py](./run_ort_dlrm.py)
   Runs DLRM inference with ORT, exports `op_shapes.csv`, and writes ORT profiling JSON.
 
-- [extract_cpu_thread_usage.py](/data/qc/dlrm/ORT/onnx_operator_analysis/extract_cpu_thread_usage.py)
+- [extract_cpu_thread_usage.py](./onnx_operator_analysis/extract_cpu_thread_usage.py)
   Parses ORT profiling JSON and extracts CPU thread scheduling statistics.
 
-- [extract_trace_features.py](/data/qc/dlrm/ORT/dynamorio_tracing/extract_trace_features.py)
+- [extract_trace_features.py](./dynamorio_tracing/extract_trace_features.py)
   Parses DynamoRIO trace output and produces per-op trace feature CSVs.
 
-- [build_training_features.py](/data/qc/dlrm/ORT/onnx_operator_analysis/build_training_features.py)
+- [build_training_features.py](./onnx_operator_analysis/build_training_features.py)
   Aligns ORT profile nodes to `op_shapes`, aggregates CPU-thread metrics per node, and merges them with trace features.
 
 ## Overall Directory Structure
@@ -153,7 +155,7 @@ RESUME=1 bash run_ort_sweep.sh
 
 ## Important Configuration
 
-Common environment variables supported by [run_ort_sweep.sh](/data/qc/dlrm/ORT/run_ort_sweep.sh):
+Common environment variables supported by [run_ort_sweep.sh](./run_ort_sweep.sh):
 
 - `NUM_BATCHES`, `WARMUP_BATCHES`
 - `INTRA_THREADS`, `INTER_THREADS`
