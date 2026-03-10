@@ -37,6 +37,7 @@ BUILD_ROOT=${BUILD_ROOT:-$TRACE_DIR/out_per_op_bins_sweep}
 TRACE_ROOT=${TRACE_ROOT:-$TRACE_DIR/drrio_traces_sweep}
 FEATURE_ROOT=${FEATURE_ROOT:-$TRACE_DIR/trace_features_sweep}
 FEATURE_DATASET_ROOT=${FEATURE_DATASET_ROOT:-$SCRIPT_DIR/features}
+FEATURE_DATASET_MERGED_CSV=${FEATURE_DATASET_MERGED_CSV:-$FEATURE_DATASET_ROOT/all_features.csv}
 GENERATED_ONNX_ROOT=${GENERATED_ONNX_ROOT:-$OUT_ROOT/generated_onnx}
 SUMMARY_CSV=${SUMMARY_CSV:-$OUT_ROOT/sweep_summary.csv}
 
@@ -364,6 +365,57 @@ run_dataset_stage() {
     --num-indices-per-lookup "$num_indices" > "$log_path" 2>&1
 }
 
+merge_feature_datasets() {
+  local feature_root="$1"
+  local merged_csv="$2"
+
+  python3 - "$feature_root" "$merged_csv" <<'PY'
+import csv
+import sys
+from pathlib import Path
+
+feature_root = Path(sys.argv[1])
+merged_csv = Path(sys.argv[2])
+
+csv_paths = sorted(
+    path for path in feature_root.glob("*.csv")
+    if path.name != merged_csv.name and path.is_file()
+)
+
+if not csv_paths:
+    print(f"[WARN] no feature CSVs found under {feature_root}")
+    sys.exit(0)
+
+header = None
+rows_written = 0
+
+merged_csv.parent.mkdir(parents=True, exist_ok=True)
+with merged_csv.open("w", encoding="utf-8", newline="") as out_f:
+    writer = None
+    for path in csv_paths:
+        with path.open("r", encoding="utf-8", newline="") as in_f:
+            reader = csv.reader(in_f)
+            current_header = next(reader, None)
+            if not current_header:
+                continue
+            if header is None:
+                header = current_header
+                writer = csv.writer(out_f)
+                writer.writerow(header)
+            elif current_header != header:
+                raise SystemExit(
+                    f"ERROR: header mismatch while merging {path}. "
+                    f"expected {header}, got {current_header}"
+                )
+
+            for row in reader:
+                writer.writerow(row)
+                rows_written += 1
+
+print(f"[ OK ] merged {len(csv_paths)} feature CSVs into {merged_csv} ({rows_written} rows)")
+PY
+}
+
 for ((batch_size = BATCH_START; batch_size <= BATCH_END; batch_size += BATCH_STEP)); do
   for ((num_indices = NUM_INDICES_START; num_indices <= NUM_INDICES_END; num_indices += NUM_INDICES_STEP)); do
     ((combo_count += 1))
@@ -520,6 +572,12 @@ echo "Sweep finished"
 echo "  completed : $completed"
 echo "  failed    : $failed"
 echo "  summary   : $SUMMARY_CSV"
+
+if ! merge_feature_datasets "$FEATURE_DATASET_ROOT" "$FEATURE_DATASET_MERGED_CSV"; then
+  echo "ERROR: failed to merge feature datasets"
+  exit 1
+fi
+echo "  merged    : $FEATURE_DATASET_MERGED_CSV"
 
 if (( failed > 0 )); then
   exit 1
