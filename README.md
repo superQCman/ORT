@@ -10,9 +10,9 @@ This directory contains the current ONNX Runtime based DLRM workflow for:
 - extracting per-op trace features
 - merging ORT CPU-thread profiling with trace features into a training dataset
 
-## Main Entry Point
+## Main Entry Points
 
-Use [run_ort_sweep.sh](./run_ort_sweep.sh) for the end-to-end workflow.
+Use [run_ort_sweep.sh](./run_ort_sweep.sh) for the canonical end-to-end workflow.
 
 For each `(batch_size, num_indices_per_lookup)` combination it will:
 
@@ -25,6 +25,13 @@ For each `(batch_size, num_indices_per_lookup)` combination it will:
 7. extract per-op trace features
 8. merge `op_shapes + cpu_thread_detail + trace_features` into a final training CSV under `features/`
 
+Use [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh) when you want the same downstream sweep pipeline but need a different inference frontend such as `branch_parallel`.
+
+Use [run_ort.sh](./run_ort.sh) for ad-hoc local runs. It supports:
+
+- the standard full-model runner [run_ort_dlrm.py](./run_ort_dlrm.py)
+- the manual branch-parallel runner [run_ort_dlrm_branch_parallel.py](./run_ort_dlrm_branch_parallel.py) when `MANUAL_BRANCH_PARALLEL=1`
+
 The default sweep range is:
 
 - `batch_size`: `32..2048`, step `32`
@@ -35,8 +42,14 @@ The default sweep range is:
 - [run_ort_sweep.sh](./run_ort_sweep.sh)
   End-to-end batch sweep driver.
 
+- [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh)
+  Extensible sweep driver with `RUNNER_MODE=standard|branch_parallel`.
+
 - [run_ort_dlrm.py](./run_ort_dlrm.py)
   Runs DLRM inference with ORT, exports `op_shapes.csv`, and writes ORT profiling JSON.
+
+- [run_ort_dlrm_branch_parallel.py](./run_ort_dlrm_branch_parallel.py)
+  Splits the rewritten DLRM graph into `bottom`, `emb_l0..emb_l7`, and `tail`, then runs branch tasks concurrently via separate ORT sessions.
 
 - [extract_cpu_thread_usage.py](./onnx_operator_analysis/extract_cpu_thread_usage.py)
   Parses ORT profiling JSON and extracts CPU thread scheduling statistics.
@@ -47,18 +60,35 @@ The default sweep range is:
 - [build_training_features.py](./onnx_operator_analysis/build_training_features.py)
   Aligns ORT profile nodes to `op_shapes`, aggregates CPU-thread metrics per node, and merges them with trace features.
 
+- [visualize_ort_profile_timeline.py](./onnx_operator_analysis/visualize_ort_profile_timeline.py)
+  Visualizes ORT `Node` events as lane-based timelines and summarizes operator concurrency.
+
 ## Overall Directory Structure
 
 ```text
 ORT/
 ├── README.md
 ├── run_ort_dlrm.py
+├── run_ort_dlrm_branch_parallel.py
 ├── run_ort.sh
 ├── run_ort_sweep.sh
+├── run_ort_sweep_extensible.sh
 ├── op_shapes.csv
 ├── features/
 │   └── bs*_nip*.csv
+├── features_extensible/
+│   └── bs*_nip*.csv
 ├── sweep_runs/
+│   ├── generated_onnx/
+│   │   └── bs*_nip*/
+│   ├── logs/
+│   │   └── bs*_nip*/
+│   ├── onnx_profiles/
+│   │   └── bs*_nip*/
+│   ├── op_shapes/
+│   │   └── op_shapes_<batch>_<num_indices>.csv
+│   └── sweep_summary.csv
+├── sweep_runs_extensible/
 │   ├── generated_onnx/
 │   │   └── bs*_nip*/
 │   ├── logs/
@@ -71,6 +101,7 @@ ORT/
 ├── onnx_operator_analysis/
 │   ├── build_training_features.py
 │   ├── extract_cpu_thread_usage.py
+│   ├── visualize_ort_profile_timeline.py
 │   └── *.md
 └── dynamorio_tracing/
     ├── extract_trace_features.py
@@ -81,6 +112,12 @@ ORT/
     ├── drrio_traces_sweep/
     │   └── bs*_nip*/
     ├── trace_features_sweep/
+    │   └── bs*_nip*.csv
+    ├── out_per_op_bins_sweep_extensible/
+    │   └── bs*_nip*/
+    ├── drrio_traces_sweep_extensible/
+    │   └── bs*_nip*/
+    ├── trace_features_sweep_extensible/
     │   └── bs*_nip*.csv
     └── scripts/
         ├── generate_op_binaries.py
@@ -111,6 +148,15 @@ ORT/
 
 - `sweep_runs/sweep_summary.csv`
   Summary row per combo, including key output paths
+
+- `sweep_runs_extensible/onnx_profiles/<combo>/`
+  Extensible-sweep ORT profiles, including branch-parallel merged `ort_cann_profile_*.json`
+
+- `features_extensible/<combo>.csv`
+  Final training dataset produced by the extensible sweep
+
+- `sweep_runs_extensible/sweep_summary.csv`
+  Extensible-sweep summary row per combo, including `runner_mode`, `profile_json`, and `effective_onnx_path`
 
 ## Prerequisites
 
@@ -153,6 +199,28 @@ cd /data/qc/dlrm/ORT
 RESUME=1 bash run_ort_sweep.sh
 ```
 
+Run one combo through the extensible sweep with the branch-parallel runner:
+
+```bash
+cd /data/qc/dlrm/ORT
+RUNNER_MODE=branch_parallel \
+PYTHON_BIN=/data/qc/anaconda3/envs/ort/bin/python \
+BATCH_START=32 BATCH_END=32 \
+NUM_INDICES_START=100 NUM_INDICES_END=100 \
+MAX_COMBOS=1 \
+INTRA_THREADS=4 \
+INTER_THREADS=4 \
+PARALLEL_BRANCHES=2 \
+bash run_ort_sweep_extensible.sh
+```
+
+Run a single local branch-parallel profile via `run_ort.sh`:
+
+```bash
+cd /data/qc/dlrm/ORT
+MANUAL_BRANCH_PARALLEL=1 bash run_ort.sh
+```
+
 ## Important Configuration
 
 Common environment variables supported by [run_ort_sweep.sh](./run_ort_sweep.sh):
@@ -167,6 +235,16 @@ Common environment variables supported by [run_ort_sweep.sh](./run_ort_sweep.sh)
 - `EXTRACT_FEATURES`
 - `START_IDX`, `MAX_OPS`
 
+Additional environment variables supported by [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh):
+
+- `RUNNER_MODE=standard|branch_parallel`
+- `PARALLEL_BRANCHES`
+- `TAIL_INTRA_THREADS`
+- `VERIFY_FULL_OUTPUT`
+- `BRANCH_SUBMODEL_ROOT`
+- `FORCE_CPU_OPS`
+- `OUT_ROOT`, `PROFILE_ROOT`, `FEATURE_DATASET_ROOT`
+
 Important defaults in the current workflow:
 
 - `NO_REPLACE_LOOP=0`
@@ -177,6 +255,12 @@ Important defaults in the current workflow:
 
 - `EXTRACT_FEATURES=1`
   The final training dataset depends on DynamoRIO trace features.
+
+For `RUNNER_MODE=branch_parallel`:
+
+- `INTER_THREADS` remains the generic sweep-level concurrency knob.
+- `PARALLEL_BRANCHES` is the branch-runner-specific override.
+- Effective branch concurrency is `PARALLEL_BRANCHES > 0 ? PARALLEL_BRANCHES : INTER_THREADS`.
 
 ## Standalone Usage
 
@@ -196,6 +280,25 @@ python3 run_ort_dlrm.py \
   --disable-graph-optimizations
 ```
 
+Run manual branch-parallel inference and export both split profiles and a merged ORT profile:
+
+```bash
+cd /data/qc/dlrm/ORT
+python3 run_ort_dlrm_branch_parallel.py \
+  --onnx-path ./dlrm_onnx/dlrm_s_pytorch.onnx \
+  --batch-size 32 \
+  --num-batches 3 \
+  --warmup-batches 2 \
+  --num-indices-per-lookup 100 \
+  --shape-csv ./op_shapes.csv \
+  --enable-profiling \
+  --profile-dir ./onnx_operator_analysis/branch_parallel \
+  --intra-threads 4 \
+  --inter-threads 4 \
+  --parallel-branches 2 \
+  --disable-graph-optimizations
+```
+
 Parse CPU thread statistics from one ORT profile JSON:
 
 ```bash
@@ -207,6 +310,23 @@ python3 onnx_operator_analysis/extract_cpu_thread_usage.py \
   "$PROFILE_JSON" \
   --out-dir "$PROFILE_DIR"
 ```
+
+Visualize operator overlap from one ORT profile JSON:
+
+```bash
+cd /data/qc/dlrm/ORT
+python3 onnx_operator_analysis/visualize_ort_profile_timeline.py \
+  ./onnx_operator_analysis/ort_cann_profile_2026-03-11_15-32-04.json
+```
+
+For branch-parallel runs, the profile directory can additionally contain:
+
+- split per-submodel JSON files such as `bottom_profile_*.json` and `emb_l*_profile_*.json`
+- a merged `ort_cann_profile_*.json` for compatibility with `extract_cpu_thread_usage.py`
+- `branch_parallel_timeline.csv/html`
+- `branch_parallel_op_timeline.csv/html`
+- `branch_parallel_concurrency_segments.csv`
+- `branch_parallel_op_concurrency_segments.csv`
 
 Build the final merged training CSV from existing artifacts:
 
@@ -280,4 +400,5 @@ If these drift, the pipeline may still finish, but the final dataset will not be
 ## Notes
 
 - `run_ort_sweep.sh` is the preferred entry point for reproducible dataset generation.
+- `run_ort_sweep_extensible.sh` is the preferred place to add new inference frontends without destabilizing active jobs that still use `run_ort_sweep.sh`.
 - The sweep writes combo-specific outputs to avoid overwriting artifacts across different `(batch_size, num_indices_per_lookup)` pairs.

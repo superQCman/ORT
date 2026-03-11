@@ -12,7 +12,7 @@ English version: [README.md](./README.md)
 
 ## 主入口
 
-使用 [run_ort_sweep.sh](./run_ort_sweep.sh) 作为端到端工作流入口。
+使用 [run_ort_sweep.sh](./run_ort_sweep.sh) 作为标准的端到端工作流入口。
 
 对于每个 `(batch_size, num_indices_per_lookup)` 组合，它会：
 
@@ -25,6 +25,13 @@ English version: [README.md](./README.md)
 7. 提取单算子 trace 特征
 8. 将 `op_shapes + cpu_thread_detail + trace_features` 合并成 `features/` 下的最终训练 CSV
 
+当你希望复用同一套下游 sweep 流程，但需要切换不同推理前端时，使用 [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh)，例如切到 `branch_parallel` 模式。
+
+当你只想做本地单次验证时，使用 [run_ort.sh](./run_ort.sh)。它支持：
+
+- 标准整图 runner [run_ort_dlrm.py](./run_ort_dlrm.py)
+- 手工 branch-parallel runner [run_ort_dlrm_branch_parallel.py](./run_ort_dlrm_branch_parallel.py)，通过 `MANUAL_BRANCH_PARALLEL=1` 开启
+
 默认 sweep 范围为：
 
 - `batch_size`: `32..2048`，步长 `32`
@@ -35,8 +42,14 @@ English version: [README.md](./README.md)
 - [run_ort_sweep.sh](./run_ort_sweep.sh)
   端到端 batch sweep 驱动脚本。
 
+- [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh)
+  可扩展 sweep 驱动脚本，支持 `RUNNER_MODE=standard|branch_parallel`。
+
 - [run_ort_dlrm.py](./run_ort_dlrm.py)
   使用 ORT 运行 DLRM 推理，导出 `op_shapes.csv`，并写出 ORT profiling JSON。
+
+- [run_ort_dlrm_branch_parallel.py](./run_ort_dlrm_branch_parallel.py)
+  将改写后的 DLRM 图拆成 `bottom`、`emb_l0..emb_l7` 和 `tail`，再通过多个 ORT session 并发执行 branch task。
 
 - [extract_cpu_thread_usage.py](./onnx_operator_analysis/extract_cpu_thread_usage.py)
   解析 ORT profiling JSON，提取 CPU 线程调度统计。
@@ -47,6 +60,9 @@ English version: [README.md](./README.md)
 - [build_training_features.py](./onnx_operator_analysis/build_training_features.py)
   将 ORT profiling 节点对齐到 `op_shapes`，按节点聚合 CPU 线程指标，并与 trace 特征合并。
 
+- [visualize_ort_profile_timeline.py](./onnx_operator_analysis/visualize_ort_profile_timeline.py)
+  将 ORT `Node` 事件可视化为 lane-based 时间线，并汇总算子并发情况。
+
 ## 整体目录结构
 
 ```text
@@ -54,12 +70,27 @@ ORT/
 ├── README.md
 ├── README.zh-CN.md
 ├── run_ort_dlrm.py
+├── run_ort_dlrm_branch_parallel.py
 ├── run_ort.sh
 ├── run_ort_sweep.sh
+├── run_ort_sweep_extensible.sh
 ├── op_shapes.csv
 ├── features/
+│   ├── README.md
+│   └── bs*_nip*.csv
+├── features_extensible/
 │   └── bs*_nip*.csv
 ├── sweep_runs/
+│   ├── generated_onnx/
+│   │   └── bs*_nip*/
+│   ├── logs/
+│   │   └── bs*_nip*/
+│   ├── onnx_profiles/
+│   │   └── bs*_nip*/
+│   ├── op_shapes/
+│   │   └── op_shapes_<batch>_<num_indices>.csv
+│   └── sweep_summary.csv
+├── sweep_runs_extensible/
 │   ├── generated_onnx/
 │   │   └── bs*_nip*/
 │   ├── logs/
@@ -72,6 +103,7 @@ ORT/
 ├── onnx_operator_analysis/
 │   ├── build_training_features.py
 │   ├── extract_cpu_thread_usage.py
+│   ├── visualize_ort_profile_timeline.py
 │   └── *.md
 └── dynamorio_tracing/
     ├── extract_trace_features.py
@@ -82,6 +114,12 @@ ORT/
     ├── drrio_traces_sweep/
     │   └── bs*_nip*/
     ├── trace_features_sweep/
+    │   └── bs*_nip*.csv
+    ├── out_per_op_bins_sweep_extensible/
+    │   └── bs*_nip*/
+    ├── drrio_traces_sweep_extensible/
+    │   └── bs*_nip*/
+    ├── trace_features_sweep_extensible/
     │   └── bs*_nip*.csv
     └── scripts/
         ├── generate_op_binaries.py
@@ -110,8 +148,20 @@ ORT/
 - `features/<combo>.csv`
   最终训练数据集，每行对应一个 ONNX 节点
 
+- [features/README.md](./features/README.md)
+  `features/*.csv` 的字段字典，说明每类特征及各列含义
+
 - `sweep_runs/sweep_summary.csv`
   每个组合一行的汇总表，包含关键输出路径
+
+- `sweep_runs_extensible/onnx_profiles/<combo>/`
+  extensible sweep 的 ORT profile 输出目录，包含 branch-parallel 合并后的 `ort_cann_profile_*.json`
+
+- `features_extensible/<combo>.csv`
+  extensible sweep 生成的最终训练数据集
+
+- `sweep_runs_extensible/sweep_summary.csv`
+  extensible sweep 的汇总表，每个组合一行，额外记录 `runner_mode`、`profile_json` 和 `effective_onnx_path`
 
 ## 依赖前提
 
@@ -154,6 +204,28 @@ cd /data/qc/dlrm/ORT
 RESUME=1 bash run_ort_sweep.sh
 ```
 
+通过 extensible sweep 跑一个 branch-parallel 组合：
+
+```bash
+cd /data/qc/dlrm/ORT
+RUNNER_MODE=branch_parallel \
+PYTHON_BIN=/data/qc/anaconda3/envs/ort/bin/python \
+BATCH_START=32 BATCH_END=32 \
+NUM_INDICES_START=100 NUM_INDICES_END=100 \
+MAX_COMBOS=1 \
+INTRA_THREADS=4 \
+INTER_THREADS=4 \
+PARALLEL_BRANCHES=2 \
+bash run_ort_sweep_extensible.sh
+```
+
+通过 `run_ort.sh` 本地跑一次 branch-parallel profile：
+
+```bash
+cd /data/qc/dlrm/ORT
+MANUAL_BRANCH_PARALLEL=1 bash run_ort.sh
+```
+
 ## 重要配置
 
 [run_ort_sweep.sh](./run_ort_sweep.sh) 当前支持的常用环境变量：
@@ -168,6 +240,16 @@ RESUME=1 bash run_ort_sweep.sh
 - `EXTRACT_FEATURES`
 - `START_IDX`, `MAX_OPS`
 
+[run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh) 额外支持的环境变量：
+
+- `RUNNER_MODE=standard|branch_parallel`
+- `PARALLEL_BRANCHES`
+- `TAIL_INTRA_THREADS`
+- `VERIFY_FULL_OUTPUT`
+- `BRANCH_SUBMODEL_ROOT`
+- `FORCE_CPU_OPS`
+- `OUT_ROOT`, `PROFILE_ROOT`, `FEATURE_DATASET_ROOT`
+
 当前工作流中的重要默认值：
 
 - `NO_REPLACE_LOOP=0`
@@ -178,6 +260,12 @@ RESUME=1 bash run_ort_sweep.sh
 
 - `EXTRACT_FEATURES=1`
   最终训练数据集依赖 DynamoRIO trace 特征。
+
+对于 `RUNNER_MODE=branch_parallel`：
+
+- `INTER_THREADS` 仍然是通用的 sweep 级并发参数。
+- `PARALLEL_BRANCHES` 是 branch runner 专用的覆盖参数。
+- 实际 branch 并发度为 `PARALLEL_BRANCHES > 0 ? PARALLEL_BRANCHES : INTER_THREADS`。
 
 ## 单独运行各阶段
 
@@ -197,6 +285,25 @@ python3 run_ort_dlrm.py \
   --disable-graph-optimizations
 ```
 
+运行手工 branch-parallel 推理，同时导出拆分 profile 和合并后的 ORT profile：
+
+```bash
+cd /data/qc/dlrm/ORT
+python3 run_ort_dlrm_branch_parallel.py \
+  --onnx-path ./dlrm_onnx/dlrm_s_pytorch.onnx \
+  --batch-size 32 \
+  --num-batches 3 \
+  --warmup-batches 2 \
+  --num-indices-per-lookup 100 \
+  --shape-csv ./op_shapes.csv \
+  --enable-profiling \
+  --profile-dir ./onnx_operator_analysis/branch_parallel \
+  --intra-threads 4 \
+  --inter-threads 4 \
+  --parallel-branches 2 \
+  --disable-graph-optimizations
+```
+
 从单个 ORT profile JSON 中解析 CPU 线程统计：
 
 ```bash
@@ -208,6 +315,23 @@ python3 onnx_operator_analysis/extract_cpu_thread_usage.py \
   "$PROFILE_JSON" \
   --out-dir "$PROFILE_DIR"
 ```
+
+对单个 ORT profile JSON 做算子并发时间线可视化：
+
+```bash
+cd /data/qc/dlrm/ORT
+python3 onnx_operator_analysis/visualize_ort_profile_timeline.py \
+  ./onnx_operator_analysis/ort_cann_profile_2026-03-11_15-32-04.json
+```
+
+对于 branch-parallel 运行，profile 目录中还可能包含：
+
+- 拆分后的子图 profile JSON，例如 `bottom_profile_*.json`、`emb_l*_profile_*.json`
+- 供 `extract_cpu_thread_usage.py` 兼容处理的合并 `ort_cann_profile_*.json`
+- `branch_parallel_timeline.csv/html`
+- `branch_parallel_op_timeline.csv/html`
+- `branch_parallel_concurrency_segments.csv`
+- `branch_parallel_op_concurrency_segments.csv`
 
 基于已有产物构建最终训练 CSV：
 
@@ -281,4 +405,5 @@ python3 onnx_operator_analysis/build_training_features.py \
 ## 说明
 
 - 推荐使用 `run_ort_sweep.sh` 作为可复现实验的数据集生成入口。
+- 如果要接入新的推理前端而又不想影响后台还在运行的 `run_ort_sweep.sh`，优先在 `run_ort_sweep_extensible.sh` 中扩展。
 - sweep 会为每组 `(batch_size, num_indices_per_lookup)` 输出独立产物，避免不同组合之间互相覆盖。
