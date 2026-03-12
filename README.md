@@ -9,6 +9,7 @@ This directory contains the current ONNX Runtime based DLRM workflow for:
 - building and tracing per-op binaries with DynamoRIO
 - extracting per-op trace features
 - merging ORT CPU-thread profiling with trace features into a training dataset
+- extracting a compact selected-feature dataset for downstream modeling
 
 ## Main Entry Points
 
@@ -24,6 +25,7 @@ For each `(batch_size, num_indices_per_lookup)` combination it will:
 6. run DynamoRIO tracing on all per-op binaries
 7. extract per-op trace features
 8. merge `op_shapes + cpu_thread_detail + trace_features` into a final training CSV under `features/`
+9. extract a compact selected-feature CSV under `features_selected/`
 
 Use [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh) when you want the same downstream sweep pipeline but need a different inference frontend such as `branch_parallel`.
 
@@ -60,6 +62,9 @@ The default sweep range is:
 - [build_training_features.py](./onnx_operator_analysis/build_training_features.py)
   Aligns ORT profile nodes to `op_shapes`, aggregates CPU-thread metrics per node, and merges them with trace features.
 
+- [select_feature_subset.py](./onnx_operator_analysis/select_feature_subset.py)
+  Extracts a compact selected-feature CSV from the merged training dataset and backfills shape fields from aligned CPU profiling CSVs when needed.
+
 - [visualize_ort_profile_timeline.py](./onnx_operator_analysis/visualize_ort_profile_timeline.py)
   Visualizes ORT `Node` events as lane-based timelines and summarizes operator concurrency.
 
@@ -76,7 +81,11 @@ ORT/
 ├── op_shapes.csv
 ├── features/
 │   └── bs*_nip*.csv
+├── features_selected/
+│   └── bs*_nip*.csv
 ├── features_extensible/
+│   └── bs*_nip*.csv
+├── features_extensible_selected/
 │   └── bs*_nip*.csv
 ├── sweep_runs/
 │   ├── generated_onnx/
@@ -146,6 +155,9 @@ ORT/
 - `features/<combo>.csv`
   Final training dataset, one row per ONNX node
 
+- `features_selected/<combo>.csv`
+  Compact selected-feature dataset extracted from `features/<combo>.csv`
+
 - `sweep_runs/sweep_summary.csv`
   Summary row per combo, including key output paths
 
@@ -154,6 +166,9 @@ ORT/
 
 - `features_extensible/<combo>.csv`
   Final training dataset produced by the extensible sweep
+
+- `features_extensible_selected/<combo>.csv`
+  Compact selected-feature dataset produced from the extensible sweep outputs
 
 - `sweep_runs_extensible/sweep_summary.csv`
   Extensible-sweep summary row per combo, including `runner_mode`, `profile_json`, and `effective_onnx_path`
@@ -233,6 +248,8 @@ Common environment variables supported by [run_ort_sweep.sh](./run_ort_sweep.sh)
 - `USE_NUMACTL`, `NUMA_NODE`
 - `RESUME`
 - `EXTRACT_FEATURES`
+- `SELECT_FEATURE_SUBSET`
+- `SELECT_FEATURE_SUBSET_DUR_SOURCE=avg|min|max|sum`
 - `START_IDX`, `MAX_OPS`
 
 Additional environment variables supported by [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh):
@@ -244,6 +261,7 @@ Additional environment variables supported by [run_ort_sweep_extensible.sh](./ru
 - `BRANCH_SUBMODEL_ROOT`
 - `FORCE_CPU_OPS`
 - `OUT_ROOT`, `PROFILE_ROOT`, `FEATURE_DATASET_ROOT`
+- `FEATURE_SUBSET_ROOT`
 
 Important defaults in the current workflow:
 
@@ -255,6 +273,9 @@ Important defaults in the current workflow:
 
 - `EXTRACT_FEATURES=1`
   The final training dataset depends on DynamoRIO trace features.
+
+- `SELECT_FEATURE_SUBSET=1`
+  After merging `features/*.csv`, the sweep also writes compact selected-feature CSVs under `features_selected/` or `features_extensible_selected/`.
 
 For `RUNNER_MODE=branch_parallel`:
 
@@ -352,9 +373,48 @@ python3 onnx_operator_analysis/build_training_features.py \
   --num-indices-per-lookup "$NUM_INDICES"
 ```
 
+Extract the compact selected-feature CSV from an existing merged training CSV:
+
+```bash
+cd /data/qc/dlrm/ORT
+python3 onnx_operator_analysis/select_feature_subset.py \
+  --input ./features/$COMBO.csv \
+  --output ./features_selected/$COMBO.csv
+```
+
 ## Output Semantics
 
 The final `features/<combo>.csv` keeps one row per ONNX node from `op_shapes`.
+
+The final `features_selected/<combo>.csv` keeps one row per ONNX node as well, but only retains the compact feature subset used for downstream experiments. By default `dur_us` is sourced from `cpu_dur_us_avg`, and `input_type_shape` / `output_type_shape` are backfilled from `*_cpu_thread_detail_aligned.csv` when they are not already present in the merged dataset.
+
+## Compact Selected Features
+
+The sweep can additionally produce a compact dataset under `features_selected/` and `features_extensible_selected/` via [select_feature_subset.py](./onnx_operator_analysis/select_feature_subset.py).
+
+For each combo, the sweep writes:
+
+- `features_selected/<combo>.csv`
+- `features_selected/all_features.csv`
+- `features_extensible_selected/<combo>.csv`
+- `features_extensible_selected/all_features.csv`
+
+The selected dataset keeps one row per ONNX node and currently includes:
+
+- metadata: `batch_size`, `num_indices_per_lookup`, `node_name`, `op_type`, `trace_op_name`
+- operator shape and size fields: `input_type_shape`, `output_type_shape`, `output_size`, `activation_size`, `parameter_size`
+- trace instruction and memory counts: `total_instructions`, `total_loads`, `total_stores`, `load_store_ratio`, `num_threads`
+- reuse-time summary: `reuse_time_mean` and all available `reuse_time_bin_<n>_pct` columns
+- reuse-distance summary: `reuse_distance_mean`, `reuse_distance_median`, `reuse_distance_std`, `reuse_distance_unique_cache_lines_per_k_accesses`, `reuse_distance_instruction_accesses`, `reuse_distance_data_accesses`
+- opcode-mix features: `opc_branch_ratio`, `opc_fp_convert`, `opc_fp_load_simd`, `opc_fp_math`, `opc_fp_move`, `opc_fp_store_simd`, `opc_math`, `opc_simd`
+- duration: `dur_us`
+
+Field mapping rules:
+
+- `dur_us` defaults to `cpu_dur_us_avg`; change it with `SELECT_FEATURE_SUBSET_DUR_SOURCE=avg|min|max|sum`
+- `output_size`, `activation_size`, and `parameter_size` are taken from the merged dataset's CPU-aggregated size columns
+- `input_type_shape` and `output_type_shape` are backfilled from `*_cpu_thread_detail_aligned.csv` when needed
+- reuse-time bins are discovered dynamically from the merged feature header, so the exact number of `reuse_time_bin_<n>_pct` columns can expand if the upstream extractor adds more bins
 
 Each row may include:
 

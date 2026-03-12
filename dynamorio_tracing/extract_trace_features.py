@@ -13,7 +13,8 @@ extract_trace_features.py
 
 用法:
     python3 extract_trace_features.py [--ops_dir DIR] [--out CSV] [--jobs N]
-                                      [--cache_conf FILE] [--use_physical]
+                                      [--cache_conf FILE] [--tool-timeout SEC]
+                                      [--use_physical]
 """
 
 import os
@@ -332,7 +333,12 @@ def parse_opcode_mix(text: str) -> dict:
 
 # ── 单算子完整提取 ────────────────────────────
 
-def extract_one_op(op_dir: Path, cache_conf: str, use_physical: bool = False) -> dict:
+def extract_one_op(
+    op_dir: Path,
+    cache_conf: str,
+    tool_timeout: int,
+    use_physical: bool = False,
+) -> dict:
     record = {
         "op_name": op_dir.name,
         "op_idx": int(op_dir.name.split("_")[0]),
@@ -347,35 +353,50 @@ def extract_one_op(op_dir: Path, cache_conf: str, use_physical: bool = False) ->
     record["drmem_dir"] = str(drmem_dir)
 
     # 1. basic_counts
-    out = run_tool(build_drrun_args("basic_counts", drmem_dir, use_physical))
+    out = run_tool(
+        build_drrun_args("basic_counts", drmem_dir, use_physical),
+        timeout=tool_timeout,
+    )
     if out.startswith("__"):
         record["error"] = f"basic_counts:{out}"
     else:
         record.update(parse_basic_counts(out))
 
     # 2. drcachesim
-    out = run_tool(build_drcachesim_args(drmem_dir, cache_conf, use_physical))
+    out = run_tool(
+        build_drcachesim_args(drmem_dir, cache_conf, use_physical),
+        timeout=tool_timeout,
+    )
     if out.startswith("__"):
         record["error"] = record.get("error", "") + f"|drcachesim:{out}"
     else:
         record.update(parse_cache_sim(out))
 
     # 3. opcode_mix
-    out = run_tool(build_drrun_args("opcode_mix", drmem_dir, use_physical))
+    out = run_tool(
+        build_drrun_args("opcode_mix", drmem_dir, use_physical),
+        timeout=tool_timeout,
+    )
     if out.startswith("__"):
         record["error"] = record.get("error", "") + f"|opcode_mix:{out}"
     else:
         record.update(parse_opcode_mix(out))
 
     # 4. reuse_time
-    out = run_tool(build_drrun_args("reuse_time", drmem_dir, use_physical))
+    out = run_tool(
+        build_drrun_args("reuse_time", drmem_dir, use_physical),
+        timeout=tool_timeout,
+    )
     if out.startswith("__"):
         record["error"] = record.get("error", "") + f"|reuse_time:{out}"
     else:
         record.update(parse_reuse_time(out))
 
     # 5. reuse_distance
-    out = run_tool(build_drrun_args("reuse_distance", drmem_dir, use_physical))
+    out = run_tool(
+        build_drrun_args("reuse_distance", drmem_dir, use_physical),
+        timeout=tool_timeout,
+    )
     if out.startswith("__"):
         record["error"] = record.get("error", "") + f"|reuse_distance:{out}"
     else:
@@ -394,6 +415,8 @@ def main():
     parser.add_argument("--jobs", type=int, default=4,
                         help="并行 worker 数（每个 worker 串行跑 3 个 drrun 命令）")
     parser.add_argument("--cache_conf", default=CACHE_CONF)
+    parser.add_argument("--tool-timeout", type=int, default=300,
+                        help="单个离线分析工具的超时时间（秒）")
     parser.add_argument("--drrun", default=DRRUN,
                         help="DynamoRIO drrun 可执行文件路径")
     parser.add_argument("--use_physical", action="store_true",
@@ -410,7 +433,13 @@ def main():
     records = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         futures = {
-            pool.submit(extract_one_op, op_dir, args.cache_conf, args.use_physical): op_dir
+            pool.submit(
+                extract_one_op,
+                op_dir,
+                args.cache_conf,
+                args.tool_timeout,
+                args.use_physical,
+            ): op_dir
             for op_dir in op_dirs
         }
         done = 0

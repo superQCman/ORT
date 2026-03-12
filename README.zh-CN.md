@@ -9,6 +9,7 @@ English version: [README.md](./README.md)
 - 使用 DynamoRIO 构建并追踪单算子二进制
 - 提取单算子 trace 特征
 - 将 ORT CPU 线程 profiling 与 trace 特征合并为训练数据集
+- 提取供下游建模使用的精简特征子集
 
 ## 主入口
 
@@ -24,6 +25,7 @@ English version: [README.md](./README.md)
 6. 对所有单算子二进制运行 DynamoRIO trace
 7. 提取单算子 trace 特征
 8. 将 `op_shapes + cpu_thread_detail + trace_features` 合并成 `features/` 下的最终训练 CSV
+9. 从最终训练 CSV 中提取 `features_selected/` 下的精简特征 CSV
 
 当你希望复用同一套下游 sweep 流程，但需要切换不同推理前端时，使用 [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh)，例如切到 `branch_parallel` 模式。
 
@@ -60,6 +62,9 @@ English version: [README.md](./README.md)
 - [build_training_features.py](./onnx_operator_analysis/build_training_features.py)
   将 ORT profiling 节点对齐到 `op_shapes`，按节点聚合 CPU 线程指标，并与 trace 特征合并。
 
+- [select_feature_subset.py](./onnx_operator_analysis/select_feature_subset.py)
+  从合并后的训练数据集中提取精简特征 CSV，并在需要时从对齐后的 CPU profiling CSV 回填 shape 字段。
+
 - [visualize_ort_profile_timeline.py](./onnx_operator_analysis/visualize_ort_profile_timeline.py)
   将 ORT `Node` 事件可视化为 lane-based 时间线，并汇总算子并发情况。
 
@@ -78,7 +83,11 @@ ORT/
 ├── features/
 │   ├── README.md
 │   └── bs*_nip*.csv
+├── features_selected/
+│   └── bs*_nip*.csv
 ├── features_extensible/
+│   └── bs*_nip*.csv
+├── features_extensible_selected/
 │   └── bs*_nip*.csv
 ├── sweep_runs/
 │   ├── generated_onnx/
@@ -148,6 +157,9 @@ ORT/
 - `features/<combo>.csv`
   最终训练数据集，每行对应一个 ONNX 节点
 
+- `features_selected/<combo>.csv`
+  从 `features/<combo>.csv` 提取出的精简特征数据集
+
 - [features/README.md](./features/README.md)
   `features/*.csv` 的字段字典，说明每类特征及各列含义
 
@@ -159,6 +171,9 @@ ORT/
 
 - `features_extensible/<combo>.csv`
   extensible sweep 生成的最终训练数据集
+
+- `features_extensible_selected/<combo>.csv`
+  基于 extensible sweep 输出再提取出的精简特征数据集
 
 - `sweep_runs_extensible/sweep_summary.csv`
   extensible sweep 的汇总表，每个组合一行，额外记录 `runner_mode`、`profile_json` 和 `effective_onnx_path`
@@ -238,6 +253,8 @@ MANUAL_BRANCH_PARALLEL=1 bash run_ort.sh
 - `USE_NUMACTL`, `NUMA_NODE`
 - `RESUME`
 - `EXTRACT_FEATURES`
+- `SELECT_FEATURE_SUBSET`
+- `SELECT_FEATURE_SUBSET_DUR_SOURCE=avg|min|max|sum`
 - `START_IDX`, `MAX_OPS`
 
 [run_ort_sweep_extensible.sh](./run_ort_sweep_extensible.sh) 额外支持的环境变量：
@@ -249,6 +266,7 @@ MANUAL_BRANCH_PARALLEL=1 bash run_ort.sh
 - `BRANCH_SUBMODEL_ROOT`
 - `FORCE_CPU_OPS`
 - `OUT_ROOT`, `PROFILE_ROOT`, `FEATURE_DATASET_ROOT`
+- `FEATURE_SUBSET_ROOT`
 
 当前工作流中的重要默认值：
 
@@ -260,6 +278,9 @@ MANUAL_BRANCH_PARALLEL=1 bash run_ort.sh
 
 - `EXTRACT_FEATURES=1`
   最终训练数据集依赖 DynamoRIO trace 特征。
+
+- `SELECT_FEATURE_SUBSET=1`
+  在生成 `features/*.csv` 后，sweep 还会继续输出 `features_selected/` 或 `features_extensible_selected/` 下的精简特征 CSV。
 
 对于 `RUNNER_MODE=branch_parallel`：
 
@@ -357,9 +378,48 @@ python3 onnx_operator_analysis/build_training_features.py \
   --num-indices-per-lookup "$NUM_INDICES"
 ```
 
+基于已有 merged training CSV 提取精简特征 CSV：
+
+```bash
+cd /data/qc/dlrm/ORT
+python3 onnx_operator_analysis/select_feature_subset.py \
+  --input ./features/$COMBO.csv \
+  --output ./features_selected/$COMBO.csv
+```
+
 ## 输出语义
 
 最终的 `features/<combo>.csv` 会保留 `op_shapes` 中每个 ONNX 节点各一行。
+
+最终的 `features_selected/<combo>.csv` 也保持每个 ONNX 节点一行，但只保留供下游实验使用的精简特征子集。默认情况下，`dur_us` 来自 `cpu_dur_us_avg`，而 `input_type_shape` / `output_type_shape` 会在 merged dataset 中缺失时，从 `*_cpu_thread_detail_aligned.csv` 自动回填。
+
+## 精简特征说明
+
+sweep 还可以通过 [select_feature_subset.py](./onnx_operator_analysis/select_feature_subset.py) 额外生成 `features_selected/` 和 `features_extensible_selected/` 下的精简特征数据集。
+
+对于每个组合，sweep 会额外写出：
+
+- `features_selected/<combo>.csv`
+- `features_selected/all_features.csv`
+- `features_extensible_selected/<combo>.csv`
+- `features_extensible_selected/all_features.csv`
+
+精简特征数据集仍然保持每个 ONNX 节点一行，目前包含：
+
+- 元数据：`batch_size`、`num_indices_per_lookup`、`node_name`、`op_type`、`trace_op_name`
+- 算子 shape / size 字段：`input_type_shape`、`output_type_shape`、`output_size`、`activation_size`、`parameter_size`
+- 指令与访存统计：`total_instructions`、`total_loads`、`total_stores`、`load_store_ratio`、`num_threads`
+- reuse time 摘要：`reuse_time_mean` 以及所有已存在的 `reuse_time_bin_<n>_pct`
+- reuse distance 摘要：`reuse_distance_mean`、`reuse_distance_median`、`reuse_distance_std`、`reuse_distance_unique_cache_lines_per_k_accesses`、`reuse_distance_instruction_accesses`、`reuse_distance_data_accesses`
+- opcode mix 特征：`opc_branch_ratio`、`opc_fp_convert`、`opc_fp_load_simd`、`opc_fp_math`、`opc_fp_move`、`opc_fp_store_simd`、`opc_math`、`opc_simd`
+- 耗时特征：`dur_us`
+
+字段映射规则：
+
+- `dur_us` 默认映射自 `cpu_dur_us_avg`；可以通过 `SELECT_FEATURE_SUBSET_DUR_SOURCE=avg|min|max|sum` 切换
+- `output_size`、`activation_size`、`parameter_size` 来自 merged dataset 中 CPU 聚合后的 size 列
+- `input_type_shape` 和 `output_type_shape` 会在需要时从 `*_cpu_thread_detail_aligned.csv` 回填
+- `reuse_time_bin_<n>_pct` 会根据 merged feature 表头动态发现，因此如果上游提取器新增了更多 bin，这里的列数也会随之扩展
 
 每一行可能包含：
 

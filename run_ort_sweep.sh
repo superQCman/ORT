@@ -38,6 +38,10 @@ TRACE_ROOT=${TRACE_ROOT:-$TRACE_DIR/drrio_traces_sweep}
 FEATURE_ROOT=${FEATURE_ROOT:-$TRACE_DIR/trace_features_sweep}
 FEATURE_DATASET_ROOT=${FEATURE_DATASET_ROOT:-$SCRIPT_DIR/features}
 FEATURE_DATASET_MERGED_CSV=${FEATURE_DATASET_MERGED_CSV:-$FEATURE_DATASET_ROOT/all_features.csv}
+FEATURE_SUBSET_ROOT=${FEATURE_SUBSET_ROOT:-$SCRIPT_DIR/features_selected}
+FEATURE_SUBSET_MERGED_CSV=${FEATURE_SUBSET_MERGED_CSV:-$FEATURE_SUBSET_ROOT/all_features.csv}
+SELECT_FEATURE_SUBSET=${SELECT_FEATURE_SUBSET:-1}
+SELECT_FEATURE_SUBSET_DUR_SOURCE=${SELECT_FEATURE_SUBSET_DUR_SOURCE:-avg}
 GENERATED_ONNX_ROOT=${GENERATED_ONNX_ROOT:-$OUT_ROOT/generated_onnx}
 SUMMARY_CSV=${SUMMARY_CSV:-$OUT_ROOT/sweep_summary.csv}
 
@@ -52,9 +56,10 @@ MAX_COMBOS=${MAX_COMBOS:-0}
 RESUME=${RESUME:-1}
 EXTRACT_FEATURES=${EXTRACT_FEATURES:-1}
 FEATURE_JOBS=${FEATURE_JOBS:-64}
+FEATURE_TOOL_TIMEOUT=${FEATURE_TOOL_TIMEOUT:-300}
 CACHE_CONF=${CACHE_CONF:-/data/qc/dlrm/ops_profile/concorde/test/cache_nl.conf}
 
-mkdir -p "$OUT_ROOT" "$OP_SHAPES_DIR" "$PROFILE_ROOT" "$LOG_ROOT" "$BUILD_ROOT" "$TRACE_ROOT" "$FEATURE_ROOT" "$FEATURE_DATASET_ROOT" "$GENERATED_ONNX_ROOT"
+mkdir -p "$OUT_ROOT" "$OP_SHAPES_DIR" "$PROFILE_ROOT" "$LOG_ROOT" "$BUILD_ROOT" "$TRACE_ROOT" "$FEATURE_ROOT" "$FEATURE_DATASET_ROOT" "$FEATURE_SUBSET_ROOT" "$GENERATED_ONNX_ROOT"
 
 if [[ -f "$ASCEND_ENV_SH" ]]; then
   # shellcheck disable=SC1090
@@ -309,6 +314,7 @@ run_feature_stage() {
     --ops_dir "$trace_dir"
     --out "$feature_csv"
     --jobs "$FEATURE_JOBS"
+    --tool-timeout "$FEATURE_TOOL_TIMEOUT"
     --cache_conf "$CACHE_CONF"
     --drrun "$DRRUN"
   )
@@ -414,6 +420,16 @@ with merged_csv.open("w", encoding="utf-8", newline="") as out_f:
 
 print(f"[ OK ] merged {len(csv_paths)} feature CSVs into {merged_csv} ({rows_written} rows)")
 PY
+}
+
+select_feature_subset_stage() {
+  local input_root="$1"
+  local output_root="$2"
+
+  python3 -u "$ANALYSIS_DIR/select_feature_subset.py" \
+    --input "$input_root" \
+    --output "$output_root" \
+    --dur-source "$SELECT_FEATURE_SUBSET_DUR_SOURCE"
 }
 
 for ((batch_size = BATCH_START; batch_size <= BATCH_END; batch_size += BATCH_STEP)); do
@@ -578,6 +594,19 @@ if ! merge_feature_datasets "$FEATURE_DATASET_ROOT" "$FEATURE_DATASET_MERGED_CSV
   exit 1
 fi
 echo "  merged    : $FEATURE_DATASET_MERGED_CSV"
+
+if [[ "$SELECT_FEATURE_SUBSET" == "1" ]]; then
+  if ! select_feature_subset_stage "$FEATURE_DATASET_ROOT" "$FEATURE_SUBSET_ROOT"; then
+    echo "ERROR: failed to extract selected feature subset"
+    exit 1
+  fi
+  if ! merge_feature_datasets "$FEATURE_SUBSET_ROOT" "$FEATURE_SUBSET_MERGED_CSV"; then
+    echo "ERROR: failed to merge selected feature datasets"
+    exit 1
+  fi
+  echo "  selected  : $FEATURE_SUBSET_ROOT"
+  echo "  sel_merge : $FEATURE_SUBSET_MERGED_CSV"
+fi
 
 if (( failed > 0 )); then
   exit 1
