@@ -1,0 +1,65 @@
+profile_name: kunpeng920_gem5
+source_config: /data/qc/dlrm/ops_profile/concorde/simulatoin/kunpeng920.py
+source_paper: /data/qc/dlrm/ORT/鲲鹏920.pdf
+notes:
+  - Values are extracted from the current gem5 configuration, not from marketing SKU sheets.
+  - The Huawei Research paper is kept as a cross-check reference because published silicon and the gem5 approximation are not identical.
+core:
+  total_cores: 48
+  cores_per_die: 24
+  cpu_clock: 3GHz
+  rob_entries: 128
+  lq_entries: 64
+  sq_entries: 48
+  fetch_width: 4
+  decode_width: 4
+  rename_width: 4
+  dispatch_width: 4
+  issue_width: 4
+  wb_width: 4
+  commit_width: 4
+cache:
+  l1i:
+    size: 64KiB
+    assoc: 4
+    tag_latency_cycles: 1
+    data_latency_cycles: 1
+    response_latency_cycles: 1
+    mshrs: 16
+  l1d:
+    size: 64KiB
+    assoc: 4
+    tag_latency_cycles: 1
+    data_latency_cycles: 1
+    response_latency_cycles: 1
+    mshrs: 32
+  l2:
+    size: 512KiB
+    assoc: 8
+    tag_latency_cycles: 10
+    data_latency_cycles: 10
+    response_latency_cycles: 10
+    mshrs: 64
+  l3_per_die:
+    size: 32MB
+    assoc: 16
+    tag_latency_cycles: 20
+    data_latency_cycles: 20
+    response_latency_cycles: 20
+    mshrs: 128
+  cacheline_bytes: 64
+memory:
+  numa_nodes: 2
+  mem_size0: 32GiB
+  mem_size1: 32GiB
+  local_mem_delay: 20ns
+  remote_mem_delay: 40ns
+  dram_model: DDR4_2400_16x4
+paper_cross_check:
+  paper_core_l1i_kib: 64
+  paper_core_l1d_kib: 64
+  paper_core_l2_kib: 512
+  paper_total_l3_mib: 64
+  paper_ddr_channels: 8
+  paper_max_ddr_mtps: 2933
+  paper_pipeline_width: 4

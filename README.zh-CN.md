@@ -410,8 +410,8 @@ sweep 还可以通过 [select_feature_subset.py](./onnx_operator_analysis/select
 - 算子 shape / size 字段：`input_type_shape`、`output_type_shape`、`output_size`、`activation_size`、`parameter_size`
 - 指令与访存统计：`total_instructions`、`total_loads`、`total_stores`、`load_store_ratio`、`num_threads`
 - reuse time 摘要：`reuse_time_mean` 以及所有已存在的 `reuse_time_bin_<n>_pct`
-- reuse distance 摘要：`reuse_distance_mean`、`reuse_distance_median`、`reuse_distance_std`、`reuse_distance_unique_cache_lines_per_k_accesses`、`reuse_distance_instruction_accesses`、`reuse_distance_data_accesses`
-- opcode mix 特征：`opc_branch_ratio`、`opc_fp_convert`、`opc_fp_load_simd`、`opc_fp_math`、`opc_fp_move`、`opc_fp_store_simd`、`opc_math`、`opc_simd`
+- reuse distance 摘要：`reuse_distance_mean`、`reuse_distance_std`、`reuse_distance_unique_cache_lines_per_k_accesses`
+- opcode mix 比例特征：`opc_branch_ratio`、`opc_fp_convert_ratio`、`opc_fp_load_simd_ratio`、`opc_fp_math_ratio`、`opc_fp_move_ratio`、`opc_fp_store_simd_ratio`、`opc_load_ratio`、`opc_math_ratio`、`opc_simd_ratio`、`opc_store_ratio`
 - 耗时特征：`dur_us`
 
 字段映射规则：
@@ -420,6 +420,8 @@ sweep 还可以通过 [select_feature_subset.py](./onnx_operator_analysis/select
 - `output_size`、`activation_size`、`parameter_size` 来自 merged dataset 中 CPU 聚合后的 size 列
 - `input_type_shape` 和 `output_type_shape` 会在需要时从 `*_cpu_thread_detail_aligned.csv` 回填
 - `reuse_time_bin_<n>_pct` 会根据 merged feature 表头动态发现，因此如果上游提取器新增了更多 bin，这里的列数也会随之扩展
+- 原始 opcode 总数没有继续保留在精简数据集中，因为 `total_instructions` 已经表达了规模信息；这里改为保留 opcode ratio，让模型同时看到指令构成
+- `reuse_distance_median`、`reuse_distance_instruction_accesses` 和 `reuse_distance_data_accesses` 被移除，因为它们在当前数据里要么接近常量，要么与已保留的指令 / 访存统计高度重复
 
 每一行可能包含：
 

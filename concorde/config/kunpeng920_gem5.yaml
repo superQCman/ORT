@@ -1,0 +1,90 @@
+# Concorde-oriented configuration for the current Kunpeng920 gem5 profile.
+#
+# Fields that map directly from ORT/model/hardware_profiles/kunpeng920_gem5.yaml
+# are kept aligned with the current gem5 model.
+#
+# A few Concorde-specific knobs are not exposed in the ORT hardware profile today
+# (for example load-store pipe counts and fetch buffer entries). Those retain the
+# reference defaults used in the existing Concorde implementation.
+
+rob:
+  entries: 128
+  window_size: 400
+
+pipeline:
+  fetch_width: 4
+  decode_width: 4
+  rename_width: 4
+  commit_width: 4
+  issue_widths:
+    alu: 3
+    fp: 2
+    ls: 2
+
+load_store_pipes:
+  load_store_pipes: 2
+  load_only_pipes: 10
+
+icache:
+  size_bytes: 65536
+  line_size: 64
+  max_fills: 16
+  fill_latency: 40
+  fetch_width: 4
+
+fetch_buffer:
+  entries: 64
+
+cache_hierarchy:
+  line_size: 64
+  l1:
+    size_bytes: 65536
+    associativity: 4
+    hit_latency: 1
+  l2:
+    size_bytes: 524288
+    associativity: 8
+    hit_latency: 10
+  l3:
+    size_bytes: 32000000
+    associativity: 16
+    hit_latency: 20
+  memory:
+    latency: 60
+
+shared_llc:
+  enabled: false
+  size_bytes: 32000000
+  associativity: 16
+  line_size: 64
+  hit_latency: 20
+  num_banks: 16
+  mshr_entries: 128
+  memory:
+    latency: 60
+    bandwidth_gbps: 37.0
+    num_channels: 8
+
+branch_prediction:
+  simple:
+    misprediction_rate: 0.05
+    seed: 1
+  tage:
+    num_tables: 8
+    table_size: 2048
+    tag_bits: 10
+    ghr_bits: 200
+    base_size: 4096
+    counter_bits: 3
+    usefulness_bits: 2
+    seed: 1
+
+analysis:
+  top_n: 50
+  cdf:
+    quantile_step: 0.02
+    tail_quantile: 0.9
+    separate_figs: false
+    output:
+      png_dpi: 200
+      dir: ./result

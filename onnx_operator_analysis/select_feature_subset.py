@@ -24,6 +24,7 @@ from typing import Dict, Iterable, List, Sequence, Tuple
 
 REUSE_TIME_BIN_PATTERN = re.compile(r"^reuse_time_bin_(\d+)_pct$")
 
+# Keep operator identity, working-set scale, reuse summaries, and normalized opcode mix.
 FIXED_BEFORE_BINS: List[Tuple[str, str]] = [
     ("batch_size", "batch_size"),
     ("num_indices_per_lookup", "num_indices_per_lookup"),
@@ -45,22 +46,21 @@ FIXED_BEFORE_BINS: List[Tuple[str, str]] = [
 
 FIXED_AFTER_BINS: List[Tuple[str, str]] = [
     ("reuse_distance_mean", "reuse_distance_mean"),
-    ("reuse_distance_median", "reuse_distance_median"),
     ("reuse_distance_std", "reuse_distance_std"),
     (
         "reuse_distance_unique_cache_lines_per_k_accesses",
         "reuse_distance_unique_cache_lines_per_k_accesses",
     ),
-    ("reuse_distance_instruction_accesses", "reuse_distance_instruction_accesses"),
-    ("reuse_distance_data_accesses", "reuse_distance_data_accesses"),
     ("opc_branch_ratio", "opc_branch_ratio"),
-    ("opc_fp_convert", "opc_fp_convert"),
-    ("opc_fp_load_simd", "opc_fp_load_simd"),
-    ("opc_fp_math", "opc_fp_math"),
-    ("opc_fp_move", "opc_fp_move"),
-    ("opc_fp_store_simd", "opc_fp_store_simd"),
-    ("opc_math", "opc_math"),
-    ("opc_simd", "opc_simd"),
+    ("opc_fp_convert_ratio", "opc_fp_convert_ratio"),
+    ("opc_fp_load_simd_ratio", "opc_fp_load_simd_ratio"),
+    ("opc_fp_math_ratio", "opc_fp_math_ratio"),
+    ("opc_fp_move_ratio", "opc_fp_move_ratio"),
+    ("opc_fp_store_simd_ratio", "opc_fp_store_simd_ratio"),
+    ("opc_load_ratio", "opc_load_ratio"),
+    ("opc_math_ratio", "opc_math_ratio"),
+    ("opc_simd_ratio", "opc_simd_ratio"),
+    ("opc_store_ratio", "opc_store_ratio"),
 ]
 
 DUR_SOURCE_BY_MODE = {

@@ -405,8 +405,8 @@ The selected dataset keeps one row per ONNX node and currently includes:
 - operator shape and size fields: `input_type_shape`, `output_type_shape`, `output_size`, `activation_size`, `parameter_size`
 - trace instruction and memory counts: `total_instructions`, `total_loads`, `total_stores`, `load_store_ratio`, `num_threads`
 - reuse-time summary: `reuse_time_mean` and all available `reuse_time_bin_<n>_pct` columns
-- reuse-distance summary: `reuse_distance_mean`, `reuse_distance_median`, `reuse_distance_std`, `reuse_distance_unique_cache_lines_per_k_accesses`, `reuse_distance_instruction_accesses`, `reuse_distance_data_accesses`
-- opcode-mix features: `opc_branch_ratio`, `opc_fp_convert`, `opc_fp_load_simd`, `opc_fp_math`, `opc_fp_move`, `opc_fp_store_simd`, `opc_math`, `opc_simd`
+- reuse-distance summary: `reuse_distance_mean`, `reuse_distance_std`, `reuse_distance_unique_cache_lines_per_k_accesses`
+- opcode-mix ratios: `opc_branch_ratio`, `opc_fp_convert_ratio`, `opc_fp_load_simd_ratio`, `opc_fp_math_ratio`, `opc_fp_move_ratio`, `opc_fp_store_simd_ratio`, `opc_load_ratio`, `opc_math_ratio`, `opc_simd_ratio`, `opc_store_ratio`
 - duration: `dur_us`
 
 Field mapping rules:
@@ -415,6 +415,8 @@ Field mapping rules:
 - `output_size`, `activation_size`, and `parameter_size` are taken from the merged dataset's CPU-aggregated size columns
 - `input_type_shape` and `output_type_shape` are backfilled from `*_cpu_thread_detail_aligned.csv` when needed
 - reuse-time bins are discovered dynamically from the merged feature header, so the exact number of `reuse_time_bin_<n>_pct` columns can expand if the upstream extractor adds more bins
+- raw opcode totals are intentionally excluded from the compact dataset because `total_instructions` already captures scale; the selected dataset keeps opcode ratios instead so the model also sees instruction composition
+- `reuse_distance_median`, `reuse_distance_instruction_accesses`, and `reuse_distance_data_accesses` are omitted because they were either constant in current data or highly redundant with the retained instruction/load-store counts
 
 Each row may include:
 
