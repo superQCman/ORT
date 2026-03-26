@@ -11,8 +11,10 @@ import numpy as np
 import pandas as pd
 
 from feature_contract import (
+    ANALYSIS_NUMERIC_FEATURES,
     BASELINE_CATEGORICAL_FEATURES,
     BASELINE_NUMERIC_FEATURES,
+    DATASET_NUMERIC_COLUMNS,
     DEFAULT_SPLIT_RATIOS,
     FEATURE_COLUMNS,
     GROUP_COLUMN,
@@ -22,6 +24,7 @@ from feature_contract import (
 )
 from feature_engineering import (
     add_engineered_features,
+    build_stage2_candidate_feature_frame,
     extract_node_scope,
     load_op_shapes_for_combo,
     merge_op_shapes_into_feature_rows,
@@ -409,6 +412,10 @@ def build_rows_for_feature_csv(
     op_shapes_df = load_op_shapes_for_combo(op_shapes_path_for_combo(case_meta, combo))
     df = merge_op_shapes_into_feature_rows(df, op_shapes_df)
     df = add_engineered_features(df)
+    df = build_stage2_candidate_feature_frame(
+        df,
+        combo_profile_dir=case_meta["sweep_dir"] / "onnx_profiles" / combo,
+    )
     profile_stats_df = load_profile_label_stats(
         case_meta,
         combo,
@@ -429,7 +436,7 @@ def build_rows_for_feature_csv(
 def normalize_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
 
-    for column in BASELINE_NUMERIC_FEATURES:
+    for column in DATASET_NUMERIC_COLUMNS:
         if column not in out.columns:
             out[column] = 0.0
         out[column] = pd.to_numeric(out[column], errors="coerce")
@@ -471,6 +478,9 @@ def ordered_output_columns(df: pd.DataFrame) -> list[str]:
         if column in df.columns:
             columns.append(column)
     for column in FEATURE_COLUMNS:
+        if column in df.columns and column not in columns:
+            columns.append(column)
+    for column in ANALYSIS_NUMERIC_FEATURES:
         if column in df.columns and column not in columns:
             columns.append(column)
     if TARGET_COLUMN in df.columns:
@@ -586,6 +596,7 @@ def build_dataset(
     feature_manifest = {
         "categorical_features": list(BASELINE_CATEGORICAL_FEATURES),
         "numeric_features": list(BASELINE_NUMERIC_FEATURES),
+        "analysis_numeric_features": list(ANALYSIS_NUMERIC_FEATURES),
         "all_features": list(FEATURE_COLUMNS),
         "target_column": TARGET_COLUMN,
         "group_column": group_column,

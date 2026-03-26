@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import yaml
+from pandas.errors import EmptyDataError
 
 
 COMBO_RE = re.compile(r"bs(?P<batch>\d+)_nip(?P<nip>\d+)")
@@ -29,6 +32,8 @@ DTYPE_SIZES = {
     "uint64": 8,
     "int64": 8,
 }
+
+HARDWARE_PROFILE_PATH = Path(__file__).resolve().parent.parent / "model" / "hardware_profiles" / "kunpeng920_gem5.yaml"
 
 
 def normalize_node_name(node_name: str | float | int | None) -> str:
@@ -535,3 +540,342 @@ def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.concat([out.reset_index(drop=True), engineered_df.reset_index(drop=True)], axis=1)
     return out
 
+
+def _flatten_dict(data: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in (data or {}).items():
+        full_key = f"{prefix}_{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            out.update(_flatten_dict(value, full_key))
+        else:
+            out[full_key] = value
+    return out
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or (isinstance(value, float) and np.isnan(value)):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_profile_value(value: Any) -> Any:
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, (int, float)):
+        return value
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    size_match = re.fullmatch(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>KiB|MiB|GiB|KB|MB|GB)", text)
+    if size_match:
+        scale = {
+            "KB": 1000.0,
+            "MB": 1000.0**2,
+            "GB": 1000.0**3,
+            "KiB": 1024.0,
+            "MiB": 1024.0**2,
+            "GiB": 1024.0**3,
+        }[size_match.group("unit")]
+        return float(size_match.group("value")) * scale
+
+    freq_match = re.fullmatch(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>GHz|MHz|kHz|Hz)", text)
+    if freq_match:
+        scale = {
+            "Hz": 1e-9,
+            "kHz": 1e-6,
+            "MHz": 1e-3,
+            "GHz": 1.0,
+        }[freq_match.group("unit")]
+        return float(freq_match.group("value")) * scale
+
+    numeric = _safe_float(text, default=np.nan)
+    if np.isfinite(numeric):
+        return numeric
+    return text
+
+
+def load_hardware_features(profile_path: Path | None = None) -> dict[str, float]:
+    resolved_path = profile_path or HARDWARE_PROFILE_PATH
+    if not resolved_path.exists():
+        raise FileNotFoundError(f"Hardware profile was not found: {resolved_path}")
+    with resolved_path.open("r", encoding="utf-8") as handle:
+        profile = yaml.safe_load(handle) or {}
+
+    flat = _flatten_dict(profile)
+    out: dict[str, float] = {}
+    for key, value in flat.items():
+        if key.startswith("paper_cross_check") or key in {"profile_name", "source_config", "source_paper", "notes"}:
+            continue
+        normalized = _normalize_profile_value(value)
+        if isinstance(normalized, (int, float)) and normalized is not None and np.isfinite(float(normalized)):
+            out[f"hw_{key}"] = float(normalized)
+    return out
+
+
+def add_operator_hardware_context(
+    df: pd.DataFrame,
+    hardware_features: dict[str, float] | None = None,
+) -> pd.DataFrame:
+    out = df.copy()
+    hw = hardware_features or load_hardware_features()
+    for key, value in hw.items():
+        if key not in out.columns:
+            out[key] = float(value)
+
+    threads = pd.to_numeric(
+        out["feat_threads_effective"] if "feat_threads_effective" in out.columns else out.get("num_threads", 1.0),
+        errors="coerce",
+    ).fillna(1.0).clip(lower=1.0)
+    total_cores = pd.to_numeric(out.get("hw_core_total_cores", threads), errors="coerce").fillna(threads).clip(lower=1.0)
+    active_cores = np.minimum(threads.to_numpy(dtype=float), total_cores.to_numpy(dtype=float))
+    out["hw_core_active_cores"] = active_cores
+    out["hw_core_active_core_fraction"] = active_cores / total_cores.clip(lower=1.0)
+
+    for cache_column, out_column in [
+        ("hw_cache_l1d_size", "hw_cache_l1d_active_bytes"),
+        ("hw_cache_l2_size", "hw_cache_l2_active_bytes"),
+    ]:
+        if cache_column in out.columns:
+            cache_size = pd.to_numeric(out[cache_column], errors="coerce").fillna(0.0)
+            out[out_column] = cache_size * active_cores
+
+    if "hw_cache_l3_per_die_size" in out.columns:
+        l3_size = pd.to_numeric(out["hw_cache_l3_per_die_size"], errors="coerce").fillna(0.0)
+        cores_per_die = pd.to_numeric(out.get("hw_core_cores_per_die", total_cores), errors="coerce").fillna(total_cores).clip(lower=1.0)
+        total_dies = np.ceil(total_cores.to_numpy(dtype=float) / cores_per_die.to_numpy(dtype=float))
+        active_dies = np.ceil(active_cores / cores_per_die.to_numpy(dtype=float))
+        active_dies = np.minimum(active_dies, total_dies)
+        out["hw_cache_l3_active_dies"] = active_dies
+        out["hw_cache_l3_active_bytes"] = l3_size * active_dies
+    return out
+
+
+def _robust_mean(series: pd.Series) -> float:
+    clean = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
+    if clean.empty:
+        return 0.0
+    return float(clean.mean())
+
+
+def aggregate_branch_op_timeline(op_timeline_df: pd.DataFrame) -> pd.DataFrame:
+    if op_timeline_df.empty:
+        return pd.DataFrame()
+
+    df = op_timeline_df.copy()
+    df["node_name_normalized"] = df["node_name"].map(normalize_node_name)
+    df["op_type"] = df["op_name"].fillna("Unknown").astype(str)
+    df["task_name"] = df["task_name"].fillna("unknown").astype(str)
+    df["lane"] = pd.to_numeric(df.get("lane"), errors="coerce").fillna(0.0)
+    df["start_us"] = pd.to_numeric(df.get("start_us"), errors="coerce")
+    df["end_us"] = pd.to_numeric(df.get("end_us"), errors="coerce")
+    df["dur_us"] = pd.to_numeric(df.get("dur_us"), errors="coerce").fillna(0.0).clip(lower=0.0)
+    df = df[
+        (df["node_name_normalized"] != "")
+        & df["start_us"].notna()
+        & df["end_us"].notna()
+        & (df["dur_us"] > 0.0)
+    ].copy()
+    if df.empty:
+        return pd.DataFrame()
+
+    events = df.to_dict(orient="records")
+    overlap_us = [0.0] * len(events)
+    weighted_other_active = [0.0] * len(events)
+    weighted_other_tasks = [0.0] * len(events)
+    cross_task_overlap_us = [0.0] * len(events)
+    same_op_overlap_us = [0.0] * len(events)
+
+    boundaries: list[tuple[float, int, int]] = []
+    for idx, event in enumerate(events):
+        boundaries.append((float(event["start_us"]), 1, idx))
+        boundaries.append((float(event["end_us"]), 0, idx))
+    boundaries.sort()
+
+    active: set[int] = set()
+    active_task_counts: Counter[str] = Counter()
+    active_op_counts: Counter[str] = Counter()
+    prev_time: float | None = None
+
+    for time_us, event_type, idx in boundaries:
+        if prev_time is not None and time_us > prev_time and active:
+            interval = time_us - prev_time
+            active_count = len(active)
+            active_task_total = len(active_task_counts)
+            if active_count > 1:
+                for active_idx in active:
+                    event = events[active_idx]
+                    other_active = active_count - 1
+                    overlap_us[active_idx] += interval
+                    weighted_other_active[active_idx] += other_active * interval
+
+                    other_tasks = active_task_total - 1
+                    weighted_other_tasks[active_idx] += max(other_tasks, 0) * interval
+                    if other_tasks > 0:
+                        cross_task_overlap_us[active_idx] += interval
+
+                    same_op_other = active_op_counts[str(event["op_type"])] - 1
+                    if same_op_other > 0:
+                        same_op_overlap_us[active_idx] += interval
+
+        prev_time = time_us
+        event = events[idx]
+        if event_type == 1:
+            active.add(idx)
+            active_task_counts[str(event["task_name"])] += 1
+            active_op_counts[str(event["op_type"])] += 1
+        else:
+            active.discard(idx)
+            active_task_counts[str(event["task_name"])] -= 1
+            if active_task_counts[str(event["task_name"])] <= 0:
+                active_task_counts.pop(str(event["task_name"]), None)
+            active_op_counts[str(event["op_type"])] -= 1
+            if active_op_counts[str(event["op_type"])] <= 0:
+                active_op_counts.pop(str(event["op_type"]), None)
+
+    per_node_samples: dict[tuple[str, str], list[dict[str, float]]] = defaultdict(list)
+    for idx, event in enumerate(events):
+        dur = max(float(event["dur_us"]), 1e-9)
+        per_node_samples[(str(event["node_name_normalized"]), str(event["op_type"]))].append(
+            {
+                "overlap_ratio": overlap_us[idx] / dur,
+                "cross_task_overlap_ratio": cross_task_overlap_us[idx] / dur,
+                "same_op_overlap_ratio": same_op_overlap_us[idx] / dur,
+                "mean_other_active": weighted_other_active[idx] / dur,
+                "mean_other_tasks": weighted_other_tasks[idx] / dur,
+            }
+        )
+
+    rows: list[dict[str, Any]] = []
+    for (node_name_normalized, op_type), samples in sorted(per_node_samples.items()):
+        row = {
+            "node_name_normalized": node_name_normalized,
+            "op_type": op_type,
+            "local_ctx_overlap_ratio_mean": _robust_mean(pd.Series([sample["overlap_ratio"] for sample in samples])),
+            "local_ctx_cross_task_overlap_ratio_mean": _robust_mean(
+                pd.Series([sample["cross_task_overlap_ratio"] for sample in samples])
+            ),
+            "local_ctx_same_op_overlap_ratio_mean": _robust_mean(
+                pd.Series([sample["same_op_overlap_ratio"] for sample in samples])
+            ),
+            "local_ctx_mean_other_active_mean": _robust_mean(
+                pd.Series([sample["mean_other_active"] for sample in samples])
+            ),
+            "local_ctx_mean_other_tasks_mean": _robust_mean(
+                pd.Series([sample["mean_other_tasks"] for sample in samples])
+            ),
+        }
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def weighted_concurrency_summary(segments_df: pd.DataFrame, prefix: str) -> dict[str, float]:
+    if segments_df.empty or "dur_us" not in segments_df.columns or "concurrency" not in segments_df.columns:
+        return {
+            f"{prefix}_parallel_fraction": 0.0,
+            f"{prefix}_weighted_mean_parallel_concurrency": 1.0,
+        }
+
+    df = segments_df.copy()
+    df["dur_us"] = pd.to_numeric(df["dur_us"], errors="coerce").fillna(0.0)
+    df["concurrency"] = pd.to_numeric(df["concurrency"], errors="coerce").fillna(0.0)
+    df["start_us"] = pd.to_numeric(df.get("start_us"), errors="coerce")
+    df["end_us"] = pd.to_numeric(df.get("end_us"), errors="coerce")
+    df = df[df["dur_us"] > 0].copy()
+    if df.empty:
+        return {
+            f"{prefix}_parallel_fraction": 0.0,
+            f"{prefix}_weighted_mean_parallel_concurrency": 1.0,
+        }
+
+    parallel_only = df[df["concurrency"] >= 2]
+    parallel_us = float(parallel_only["dur_us"].sum()) if not parallel_only.empty else 0.0
+    if {"start_us", "end_us"}.issubset(df.columns):
+        makespan = float(df["end_us"].max() - df["start_us"].min())
+    else:
+        makespan = float(df["dur_us"].sum())
+    parallel_weighted_mean = (
+        float(np.average(parallel_only["concurrency"], weights=parallel_only["dur_us"]))
+        if not parallel_only.empty
+        else 1.0
+    )
+    return {
+        f"{prefix}_parallel_fraction": 0.0 if makespan <= 0 else parallel_us / makespan,
+        f"{prefix}_weighted_mean_parallel_concurrency": parallel_weighted_mean,
+    }
+
+
+def safe_read_csv(path: Path) -> pd.DataFrame:
+    if not path.exists() or path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path, low_memory=False)
+    except EmptyDataError:
+        return pd.DataFrame()
+
+
+def build_stage2_candidate_feature_frame(
+    df: pd.DataFrame,
+    combo_profile_dir: Path,
+    hardware_profile_path: Path | None = None,
+) -> pd.DataFrame:
+    out = add_operator_hardware_context(df, load_hardware_features(hardware_profile_path))
+
+    op_timeline_path = combo_profile_dir / "branch_parallel_op_timeline.csv"
+    task_segments_path = combo_profile_dir / "branch_parallel_concurrency_segments.csv"
+    op_segments_path = combo_profile_dir / "branch_parallel_op_concurrency_segments.csv"
+
+    if op_timeline_path.exists():
+        local_ctx_df = aggregate_branch_op_timeline(pd.read_csv(op_timeline_path, low_memory=False))
+        out = out.merge(local_ctx_df, on=["node_name_normalized", "op_type"], how="left")
+    else:
+        for column in [
+            "local_ctx_overlap_ratio_mean",
+            "local_ctx_cross_task_overlap_ratio_mean",
+            "local_ctx_same_op_overlap_ratio_mean",
+            "local_ctx_mean_other_active_mean",
+            "local_ctx_mean_other_tasks_mean",
+        ]:
+            out[column] = np.nan
+
+    combo_features: dict[str, float] = {}
+    if task_segments_path.exists():
+        combo_features.update(weighted_concurrency_summary(safe_read_csv(task_segments_path), "combo_task"))
+    if op_segments_path.exists():
+        combo_features.update(weighted_concurrency_summary(safe_read_csv(op_segments_path), "combo_op"))
+    for key, value in combo_features.items():
+        out[key] = float(value)
+
+    feat_threads_effective = pd.to_numeric(out.get("feat_threads_effective", out.get("num_threads", 1.0)), errors="coerce").fillna(1.0).clip(lower=1.0)
+    feat_working_set_bytes = pd.to_numeric(out.get("feat_working_set_bytes", out.get("feat_io_bytes_sum", 0.0)), errors="coerce").fillna(0.0).clip(lower=0.0)
+    total_cores = pd.to_numeric(out.get("hw_core_total_cores", 1.0), errors="coerce").fillna(1.0).clip(lower=1.0)
+    local_active_ops = 1.0 + pd.to_numeric(out.get("local_ctx_mean_other_active_mean", 0.0), errors="coerce").fillna(0.0)
+
+    out["hw_ratio_threads_to_total_cores"] = feat_threads_effective / total_cores
+    out["hw_ratio_working_set_to_l1d_active_bytes"] = _safe_ratio_series(
+        feat_working_set_bytes,
+        pd.to_numeric(out.get("hw_cache_l1d_active_bytes", 0.0), errors="coerce").fillna(0.0),
+    )
+    out["hw_ratio_working_set_to_l2_active_bytes"] = _safe_ratio_series(
+        feat_working_set_bytes,
+        pd.to_numeric(out.get("hw_cache_l2_active_bytes", 0.0), errors="coerce").fillna(0.0),
+    )
+    out["hw_ratio_working_set_to_l3_active_bytes"] = _safe_ratio_series(
+        feat_working_set_bytes,
+        pd.to_numeric(out.get("hw_cache_l3_active_bytes", 0.0), errors="coerce").fillna(0.0),
+    )
+    out["comp_feat_pressure_threads"] = feat_threads_effective * local_active_ops
+    out["comp_feat_pressure_ws_to_l2_ratio"] = _safe_ratio_series(
+        feat_working_set_bytes * local_active_ops,
+        pd.to_numeric(out.get("hw_cache_l2_active_bytes", 0.0), errors="coerce").fillna(0.0),
+    )
+    out["comp_feat_pressure_ws_to_l3_ratio"] = _safe_ratio_series(
+        feat_working_set_bytes * local_active_ops,
+        pd.to_numeric(out.get("hw_cache_l3_active_bytes", 0.0), errors="coerce").fillna(0.0),
+    )
+    return out

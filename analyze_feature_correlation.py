@@ -9,8 +9,10 @@ import numpy as np
 import pandas as pd
 
 from feature_contract import (
+    ANALYSIS_NUMERIC_FEATURES,
     BASELINE_CATEGORICAL_FEATURES,
     BASELINE_NUMERIC_FEATURES,
+    STAGE2_CANDIDATE_NUMERIC_FEATURES,
     TARGET_COLUMN,
 )
 from train_mlp import fit_preprocessor_state, transform_features
@@ -74,7 +76,7 @@ def load_dataset(input_csv: Path) -> pd.DataFrame:
 
 
 def available_feature_lists(df: pd.DataFrame) -> tuple[list[str], list[str]]:
-    numeric_features = [column for column in BASELINE_NUMERIC_FEATURES if column in df.columns]
+    numeric_features = [column for column in ANALYSIS_NUMERIC_FEATURES if column in df.columns]
     categorical_features = [column for column in BASELINE_CATEGORICAL_FEATURES if column in df.columns]
     return numeric_features, categorical_features
 
@@ -220,6 +222,18 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
+def candidate_feature_target_corr(
+    numeric_target_corr: pd.Series,
+    threshold: float = 0.1,
+) -> tuple[pd.Series, list[str], list[str]]:
+    candidate_series = numeric_target_corr[
+        [feature for feature in numeric_target_corr.index if feature in STAGE2_CANDIDATE_NUMERIC_FEATURES]
+    ].copy()
+    keep = candidate_series[abs(candidate_series) >= threshold].index.tolist()
+    review = candidate_series[abs(candidate_series) < threshold].index.tolist()
+    return candidate_series, keep, review
+
+
 def main() -> None:
     args = parse_args()
     input_csv = Path(args.input_csv)
@@ -250,6 +264,12 @@ def main() -> None:
     numeric_target_corr_path = output_dir / "numeric_feature_target_correlation.csv"
     numeric_target_corr.rename("correlation_to_target").rename_axis("feature").to_csv(
         numeric_target_corr_path,
+        header=True,
+    )
+    candidate_target_corr, candidate_keep, candidate_review = candidate_feature_target_corr(numeric_target_corr)
+    candidate_target_corr_path = output_dir / "stage2_candidate_feature_target_correlation.csv"
+    candidate_target_corr.rename("correlation_to_target").rename_axis("feature").to_csv(
+        candidate_target_corr_path,
         header=True,
     )
     encoded_target_corr_path = output_dir / "encoded_feature_target_correlation.csv"
@@ -308,14 +328,20 @@ def main() -> None:
         "row_count": int(len(dataset)),
         "method": args.method,
         "numeric_feature_count": len(numeric_features),
+        "active_numeric_feature_count": len([column for column in BASELINE_NUMERIC_FEATURES if column in dataset.columns]),
+        "stage2_candidate_feature_count": len([column for column in STAGE2_CANDIDATE_NUMERIC_FEATURES if column in dataset.columns]),
         "categorical_feature_count": len(categorical_features),
         "encoded_input_dim": int(preprocessor_state["input_dim"]),
         "max_heatmap_features": int(args.max_heatmap_features),
         "top_target_features": int(args.top_target_features),
+        "stage2_candidate_correlation_threshold": 0.1,
+        "stage2_candidate_keep": candidate_keep,
+        "stage2_candidate_review": candidate_review,
         "artifacts": {
             "numeric_feature_correlation_csv": str(numeric_corr_path),
             "encoded_feature_correlation_csv": str(encoded_corr_path),
             "numeric_feature_target_correlation_csv": str(numeric_target_corr_path),
+            "stage2_candidate_feature_target_correlation_csv": str(candidate_target_corr_path),
             "encoded_feature_target_correlation_csv": str(encoded_target_corr_path),
             "numeric_feature_correlation_heatmap_png": str(numeric_heatmap_path),
             "encoded_feature_correlation_heatmap_png": str(encoded_heatmap_path),

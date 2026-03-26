@@ -61,6 +61,12 @@
 | `opc_math_ratio` | 数学运算类指令占比。 |
 | `opc_simd_ratio` | SIMD/向量指令占比。 |
 | `opc_store_ratio` | store 类指令占比。 |
+| `hw_ratio_working_set_to_l1d_active_bytes` | 算子工作集字节数与当前活跃 L1D 容量的比值，用软件工作集和硬件容量比值来表达压力。 |
+| `hw_ratio_working_set_to_l2_active_bytes` | 算子工作集字节数与当前活跃 L2 容量的比值。 |
+| `hw_ratio_working_set_to_l3_active_bytes` | 算子工作集字节数与当前活跃 L3 容量的比值。 |
+| `local_ctx_same_op_overlap_ratio_mean` | 该算子与同类型算子在 branch-parallel 时间线上发生重叠的平均比例。 |
+| `comp_feat_pressure_ws_to_l2_ratio` | 考虑本地并发活跃算子数放大后的工作集压力，再除以活跃 L2 容量。 |
+| `comp_feat_pressure_ws_to_l3_ratio` | 考虑本地并发活跃算子数放大后的工作集压力，再除以活跃 L3 容量。 |
 
 目标列：
 
@@ -75,6 +81,14 @@
 - `feat_reduction_*` 只对 `ReduceSum` 类算子有意义，其他算子会补 `0`。
 - `dataset_full.csv` 里还会保留一些 metadata，例如 `row_uid`、`case_id`、`combo`、`op_idx`、`input_type_shape`、`output_type_shape`，这些列主要用于追溯样本，不参与训练。
 - 当前数值特征列表已经按 [numeric_feature_target_correlation.csv](/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/correlation_analysis/numeric_feature_target_correlation.csv) 做过一次裁剪，去掉了和目标绝对相关性小于 `0.1` 的数值列。
+- 另外补了一轮 stage-2 风格候选特征分析。当前已经正式保留到训练合同里的新增列是：
+  - `hw_ratio_working_set_to_l1d_active_bytes`
+  - `hw_ratio_working_set_to_l2_active_bytes`
+  - `hw_ratio_working_set_to_l3_active_bytes`
+  - `local_ctx_same_op_overlap_ratio_mean`
+  - `comp_feat_pressure_ws_to_l2_ratio`
+  - `comp_feat_pressure_ws_to_l3_ratio`
+- 其余 stage-2 候选列仍会保留在数据和相关性分析输出里，但默认不进入训练，等人工判断后再决定是否纳入。
 - 标签默认不是 3 个 batch 的原始均值，而是先丢掉最早的 profile batch，再对剩余 batch 的单算子 `dur_us` 取均值。
 - 样本波动过滤默认使用 `last2_range_ratio = abs(batch2 - batch3) / mean(batch2, batch3)`。
 - 当前推荐阈值是 `0.20`。这个值和 E2E 稳定性审计里常见的 `cv > 0.20` 不稳定口径相近，而且在当前全 case 数据上，去掉第一个 batch 后大约会过滤掉 `17%` 的单算子样本。

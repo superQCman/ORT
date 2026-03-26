@@ -46,9 +46,30 @@ BASELINE_NUMERIC_FEATURES = (
     "opc_math_ratio",
     "opc_simd_ratio",
     "opc_store_ratio",
+    "hw_ratio_working_set_to_l1d_active_bytes",
+    "hw_ratio_working_set_to_l2_active_bytes",
+    "hw_ratio_working_set_to_l3_active_bytes",
+    "local_ctx_same_op_overlap_ratio_mean",
+    "comp_feat_pressure_ws_to_l2_ratio",
+    "comp_feat_pressure_ws_to_l3_ratio",
+)
+
+STAGE2_CANDIDATE_NUMERIC_FEATURES = (
+    "hw_ratio_threads_to_total_cores",
+    "local_ctx_overlap_ratio_mean",
+    "local_ctx_cross_task_overlap_ratio_mean",
+    "local_ctx_mean_other_active_mean",
+    "local_ctx_mean_other_tasks_mean",
+    "combo_task_parallel_fraction",
+    "combo_task_weighted_mean_parallel_concurrency",
+    "combo_op_parallel_fraction",
+    "combo_op_weighted_mean_parallel_concurrency",
+    "comp_feat_pressure_threads",
 )
 
 FEATURE_COLUMNS = list(BASELINE_CATEGORICAL_FEATURES + BASELINE_NUMERIC_FEATURES)
+ANALYSIS_NUMERIC_FEATURES = list(BASELINE_NUMERIC_FEATURES + STAGE2_CANDIDATE_NUMERIC_FEATURES)
+DATASET_NUMERIC_COLUMNS = list(BASELINE_NUMERIC_FEATURES + STAGE2_CANDIDATE_NUMERIC_FEATURES)
 
 METADATA_COLUMNS = (
     "row_uid",

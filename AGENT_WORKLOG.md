@@ -53,6 +53,15 @@ This project is a self-contained single-operator latency modeling pipeline for O
   - `arch_mlp_top`
 - Numeric features were pruned using `artifacts/latest/correlation_analysis/numeric_feature_target_correlation.csv`.
 - Any numeric feature with absolute target correlation below `0.1` was removed from the active training contract.
+- A first batch of stage-2-style candidate features is now supported.
+- Promoted into the active contract after candidate correlation screening:
+  - `hw_ratio_working_set_to_l1d_active_bytes`
+  - `hw_ratio_working_set_to_l2_active_bytes`
+  - `hw_ratio_working_set_to_l3_active_bytes`
+  - `local_ctx_same_op_overlap_ratio_mean`
+  - `comp_feat_pressure_ws_to_l2_ratio`
+  - `comp_feat_pressure_ws_to_l3_ratio`
+- Lower-correlation stage-2 candidates remain analysis-only until explicitly approved.
 
 ### Training Conventions
 
@@ -121,6 +130,56 @@ Validation run:
 
 Open risks:
 - This independent repository currently starts from an empty history, so the first commit should be treated as the initial project snapshot.
+
+### 2026-03-26 - Add stage-2-style candidate feature screening
+
+Request summary:
+- Evaluate whether hardware-ratio features and stage-2 concurrency/context features can help the single-op MLP.
+- First run target-correlation analysis, then automatically keep the higher-correlation candidates and leave weaker ones for manual review.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_contract.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_feature_correlation.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+
+Behavior changes:
+- The dataset builder can now reconstruct stage-2-style candidate columns locally from:
+  - hardware profile YAML
+  - `branch_parallel_op_timeline.csv`
+  - `branch_parallel_concurrency_segments.csv`
+  - `branch_parallel_op_concurrency_segments.csv`
+- Candidate hardware/context/concurrency features are exported in the dataset even when they are not active training inputs.
+- Correlation analysis now emits `stage2_candidate_feature_target_correlation.csv` and a keep/review split using `|corr| >= 0.1`.
+- Promoted into the active training contract:
+  - `hw_ratio_working_set_to_l1d_active_bytes`
+  - `hw_ratio_working_set_to_l2_active_bytes`
+  - `hw_ratio_working_set_to_l3_active_bytes`
+  - `local_ctx_same_op_overlap_ratio_mean`
+  - `comp_feat_pressure_ws_to_l2_ratio`
+  - `comp_feat_pressure_ws_to_l3_ratio`
+- Left in analysis-only review:
+  - `hw_ratio_threads_to_total_cores`
+  - `local_ctx_overlap_ratio_mean`
+  - `local_ctx_cross_task_overlap_ratio_mean`
+  - `local_ctx_mean_other_active_mean`
+  - `local_ctx_mean_other_tasks_mean`
+  - `combo_task_parallel_fraction`
+  - `combo_task_weighted_mean_parallel_concurrency`
+  - `combo_op_parallel_fraction`
+  - `combo_op_weighted_mean_parallel_concurrency`
+  - `comp_feat_pressure_threads`
+
+Validation run:
+- `python3 -m py_compile ORT/single_op_stage1_mlp/*.py`
+- `python3 ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_stage1_stage2_candidate_smoke --selected-cases case_1_1_1 --max-files-per-case 2`
+- `python3 ORT/single_op_stage1_mlp/dataset_builder.py --output-dir ORT/single_op_stage1_mlp/artifacts/latest/dataset_stage2_candidates_sample --max-files-per-case 20`
+- `python3 ORT/single_op_stage1_mlp/analyze_feature_correlation.py --input-csv ORT/single_op_stage1_mlp/artifacts/latest/dataset_stage2_candidates_sample/dataset_full.csv --output-dir ORT/single_op_stage1_mlp/artifacts/latest/correlation_analysis_stage2_candidates_sample`
+
+Open risks:
+- The keep/review decision is currently based on a representative all-case sample (`max-files-per-case=20`) rather than the full dataset, because the full rebuild with the new stage-2 candidate extraction path was too slow for this turn.
+- The promoted hardware ratio features are partially collinear with existing working-set / size features, so downstream retraining should confirm whether they provide incremental gain.
 
 ### Entry Template
 
