@@ -38,7 +38,12 @@ CPU_NUMERIC_FIELDS = [
 ]
 
 
-def read_csv(path: Path) -> List[Dict[str, str]]:
+def read_csv(path: Path, *, required: bool = True) -> List[Dict[str, str]]:
+    if not path.exists():
+        if required:
+            raise FileNotFoundError(path)
+        print(f"[WARN] optional CSV not found, continuing without it: {path}")
+        return []
     with path.open("r", encoding="utf-8", newline="") as f:
         return list(csv.DictReader(f))
 
@@ -46,7 +51,9 @@ def read_csv(path: Path) -> List[Dict[str, str]]:
 def write_csv(rows: List[Dict[str, str]], path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
-        path.write_text("", encoding="utf-8")
+        # Keep placeholder files non-empty so sweep resume checks do not
+        # rerun the merge stage forever when CPU profiling is unavailable.
+        path.write_text("\n", encoding="utf-8")
         return
 
     fieldnames: List[str] = []
@@ -272,6 +279,9 @@ def build_final_rows(
     cpu_lookup: Dict[str, Dict[str, str]],
     batch_size: int | None,
     num_indices: int | None,
+    arch_embedding_size: str,
+    arch_mlp_bot: str,
+    arch_mlp_top: str,
 ) -> List[Dict[str, str]]:
     rows: List[Dict[str, str]] = []
 
@@ -283,6 +293,9 @@ def build_final_rows(
         row: Dict[str, str] = {
             "batch_size": "" if batch_size is None else str(batch_size),
             "num_indices_per_lookup": "" if num_indices is None else str(num_indices),
+            "arch_embedding_size": arch_embedding_size,
+            "arch_mlp_bot": arch_mlp_bot,
+            "arch_mlp_top": arch_mlp_top,
             "node_idx": node_idx,
             "node_name": node["node_name"],
             "op_type": node["op_type"],
@@ -325,6 +338,9 @@ def main() -> None:
     parser.add_argument("--unmatched-out", required=True, help="Path to write unmatched CPU rows CSV")
     parser.add_argument("--batch-size", type=int, default=None, help="Optional batch size metadata")
     parser.add_argument("--num-indices-per-lookup", type=int, default=None, help="Optional num-indices metadata")
+    parser.add_argument("--arch-embedding-size", default="", help="Optional DLRM arch_embedding_size metadata")
+    parser.add_argument("--arch-mlp-bot", default="", help="Optional DLRM arch_mlp_bot metadata")
+    parser.add_argument("--arch-mlp-top", default="", help="Optional DLRM arch_mlp_top metadata")
     args = parser.parse_args()
 
     op_shapes_path = Path(args.op_shapes)
@@ -334,7 +350,7 @@ def main() -> None:
     nodes = load_op_shape_nodes(op_shapes_path)
     by_idx, by_name_op, by_name = build_op_shape_lookup(nodes)
 
-    cpu_rows = read_csv(cpu_detail_path)
+    cpu_rows = read_csv(cpu_detail_path, required=False)
     aligned_rows, unmatched_rows = align_cpu_detail(cpu_rows, by_idx, by_name_op, by_name)
     cpu_agg_rows = aggregate_cpu_rows(aligned_rows)
 
@@ -346,6 +362,9 @@ def main() -> None:
         cpu_lookup,
         batch_size=args.batch_size,
         num_indices=args.num_indices_per_lookup,
+        arch_embedding_size=args.arch_embedding_size,
+        arch_mlp_bot=args.arch_mlp_bot,
+        arch_mlp_top=args.arch_mlp_top,
     )
 
     write_csv(aligned_rows, Path(args.aligned_cpu_detail_out))

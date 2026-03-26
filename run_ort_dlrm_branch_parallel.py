@@ -43,11 +43,6 @@ from run_ort_dlrm import (
 )
 
 
-BOTTOM_OUT = "/bot_l/bot_l.7/Relu_output_0"
-EMB_OUTS = [f"/emb_l.{i}/Loop_output_0" for i in range(8)]
-TAIL_OUT = "pred"
-
-
 @dataclass
 class TaskSpec:
     name: str
@@ -88,6 +83,15 @@ class ProfileMergeRecord:
     task_name: str
     lane: int
     event: dict
+
+
+@dataclass(frozen=True)
+class SplitLayout:
+    bottom_input_name: str
+    bottom_output_name: str
+    emb_input_names: List[str]
+    emb_output_names: List[str]
+    tail_output_name: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -200,16 +204,144 @@ def extract_submodel(src: Path, dst: Path, input_names: List[str], output_names:
     onnx_utils.extract_model(str(src), str(dst), input_names, output_names)
 
 
-def prepare_submodels(rewritten_onnx: Path, submodel_dir: Path) -> Tuple[Path, List[Path], Path]:
+def _dedupe_keep_order(names: Sequence[str]) -> List[str]:
+    seen: set[str] = set()
+    out: List[str] = []
+    for name in names:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        out.append(name)
+    return out
+
+
+def _sorted_embedding_inputs(runtime_inputs: Sequence[str]) -> List[str]:
+    emb_inputs = [name for name in runtime_inputs if name.startswith("indices_")]
+
+    def sort_key(name: str) -> Tuple[int, str]:
+        try:
+            return (int(name.split("_", 1)[1]), name)
+        except (IndexError, ValueError):
+            return (10**9, name)
+
+    return sorted(emb_inputs, key=sort_key)
+
+
+def _preferred_boundary_marker(group_name: str) -> str | None:
+    if group_name == "bottom":
+        return "/bot_l/"
+    if group_name.startswith("indices_"):
+        try:
+            idx = int(group_name.split("_", 1)[1])
+        except (IndexError, ValueError):
+            return None
+        return f"/emb_l.{idx}/"
+    return None
+
+
+def _require_single_boundary(group_name: str, tensors: Sequence[str]) -> str:
+    unique = _dedupe_keep_order(tensors)
+    preferred_marker = _preferred_boundary_marker(group_name)
+    if preferred_marker:
+        preferred = [name for name in unique if preferred_marker in name]
+        if preferred:
+            unique = preferred
+    if len(unique) != 1:
+        raise ValueError(f"Expected exactly one boundary tensor for {group_name}, got {unique}")
+    return unique[0]
+
+
+def infer_split_layout(onnx_path: Path) -> SplitLayout:
+    model = onnx_load(str(onnx_path))
+    graph = model.graph
+    initializer_names = {init.name for init in graph.initializer}
+    static_tensors: set[str] = set(initializer_names)
+    runtime_inputs = [value.name for value in graph.input if value.name not in initializer_names]
+
+    if "dense_x" not in runtime_inputs:
+        raise ValueError(f"Could not find dense_x among runtime graph inputs: {runtime_inputs}")
+
+    emb_input_names = _sorted_embedding_inputs(runtime_inputs)
+    if not emb_input_names:
+        raise ValueError(f"Could not find embedding index inputs in runtime graph inputs: {runtime_inputs}")
+
+    tensor_groups: Dict[str, str] = {"dense_x": "bottom"}
+    for name in emb_input_names:
+        tensor_groups[name] = name
+
+    node_groups: List[str | None] = []
+    consumers: Dict[str, List[int]] = defaultdict(list)
+    for idx, node in enumerate(graph.node):
+        for inp in node.input:
+            if inp:
+                consumers[inp].append(idx)
+
+    for node in graph.node:
+        dynamic_inputs = [inp for inp in node.input if inp and inp not in static_tensors]
+        source_groups = {tensor_groups[inp] for inp in dynamic_inputs if inp in tensor_groups}
+        has_unknown_dynamic_input = any(inp not in tensor_groups for inp in dynamic_inputs)
+        node_group = next(iter(source_groups)) if len(source_groups) == 1 and not has_unknown_dynamic_input else None
+        node_groups.append(node_group)
+
+        if not dynamic_inputs:
+            for out in node.output:
+                if out:
+                    static_tensors.add(out)
+
+        for out in node.output:
+            if out:
+                if node_group is not None:
+                    tensor_groups[out] = node_group
+                elif out in tensor_groups:
+                    del tensor_groups[out]
+
+    graph_outputs = {value.name for value in graph.output}
+    boundary_tensors: Dict[str, List[str]] = defaultdict(list)
+    for idx, node in enumerate(graph.node):
+        node_group = node_groups[idx]
+        if node_group is None:
+            continue
+        for out in node.output:
+            if not out:
+                continue
+            crosses_group = out in graph_outputs or any(node_groups[consumer_idx] != node_group for consumer_idx in consumers.get(out, []))
+            if crosses_group:
+                boundary_tensors[node_group].append(out)
+
+    bottom_output_name = _require_single_boundary("bottom", boundary_tensors.get("bottom", []))
+    emb_output_names = [
+        _require_single_boundary(emb_input_name, boundary_tensors.get(emb_input_name, []))
+        for emb_input_name in emb_input_names
+    ]
+
+    graph_output_names = [value.name for value in graph.output]
+    if len(graph_output_names) != 1:
+        raise ValueError(f"Expected exactly one graph output for tail extraction, got {graph_output_names}")
+
+    return SplitLayout(
+        bottom_input_name="dense_x",
+        bottom_output_name=bottom_output_name,
+        emb_input_names=emb_input_names,
+        emb_output_names=emb_output_names,
+        tail_output_name=graph_output_names[0],
+    )
+
+
+def prepare_submodels(rewritten_onnx: Path, submodel_dir: Path, layout: SplitLayout) -> Tuple[Path, List[Path], Path]:
     stem = rewritten_onnx.stem
     bottom_path = submodel_dir / f"{stem}_bottom.onnx"
-    emb_paths = [submodel_dir / f"{stem}_emb_l{i}.onnx" for i in range(8)]
+    emb_paths = [submodel_dir / f"{stem}_{emb_input_name}.onnx" for emb_input_name in layout.emb_input_names]
     tail_path = submodel_dir / f"{stem}_tail.onnx"
 
-    extract_submodel(rewritten_onnx, bottom_path, ["dense_x"], [BOTTOM_OUT])
-    for idx, emb_path in enumerate(emb_paths):
-        extract_submodel(rewritten_onnx, emb_path, [f"indices_{idx}"], [EMB_OUTS[idx]])
-    extract_submodel(rewritten_onnx, tail_path, [BOTTOM_OUT] + EMB_OUTS, [TAIL_OUT])
+    extract_submodel(rewritten_onnx, bottom_path, [layout.bottom_input_name], [layout.bottom_output_name])
+    for emb_input_name, emb_output_name, emb_path in zip(layout.emb_input_names, layout.emb_output_names, emb_paths):
+        extract_submodel(rewritten_onnx, emb_path, [emb_input_name], [emb_output_name])
+    extract_submodel(
+        rewritten_onnx,
+        tail_path,
+        [layout.bottom_output_name] + layout.emb_output_names,
+        [layout.tail_output_name],
+    )
     return bottom_path, emb_paths, tail_path
 
 
@@ -217,6 +349,7 @@ def create_task_specs(
     bottom_path: Path,
     emb_paths: List[Path],
     tail_path: Path,
+    layout: SplitLayout,
     args: argparse.Namespace,
     providers: List[object],
     profile_enabled: bool,
@@ -243,13 +376,13 @@ def create_task_specs(
             name="bottom",
             model_path=bottom_path,
             session=bottom_sess,
-            output_name=BOTTOM_OUT,
+            output_name=layout.bottom_output_name,
             input_names=[inp.name for inp in bottom_sess.get_inputs()],
             lane=0,
         )
     )
 
-    for idx, emb_path in enumerate(emb_paths):
+    for idx, (emb_path, emb_output_name) in enumerate(zip(emb_paths, layout.emb_output_names)):
         sess = build_session(
             emb_path,
             intra_threads=args.intra_threads,
@@ -263,7 +396,7 @@ def create_task_specs(
                 name=f"emb_l{idx}",
                 model_path=emb_path,
                 session=sess,
-                output_name=EMB_OUTS[idx],
+                output_name=emb_output_name,
                 input_names=[inp.name for inp in sess.get_inputs()],
                 lane=idx + 1,
             )
@@ -282,7 +415,7 @@ def create_task_specs(
         name="tail",
         model_path=tail_path,
         session=tail_sess,
-        output_name=TAIL_OUT,
+        output_name=layout.tail_output_name,
         input_names=[inp.name for inp in tail_sess.get_inputs()],
         lane=len(branch_specs),
     )
@@ -969,7 +1102,14 @@ def op_rows(records: Sequence[OpRecord]) -> List[dict]:
     ]
 
 
-def maybe_verify_output(rewritten_path: Path, providers: List[object], args: argparse.Namespace, feed: Dict[str, np.ndarray], ref_output: np.ndarray) -> None:
+def maybe_verify_output(
+    rewritten_path: Path,
+    tail_output_name: str,
+    providers: List[object],
+    args: argparse.Namespace,
+    feed: Dict[str, np.ndarray],
+    ref_output: np.ndarray,
+) -> None:
     sess = build_session(
         rewritten_path,
         intra_threads=args.intra_threads,
@@ -978,7 +1118,7 @@ def maybe_verify_output(rewritten_path: Path, providers: List[object], args: arg
         enable_profiling=False,
         profile_prefix=None,
     )
-    outputs = sess.run([TAIL_OUT], feed)
+    outputs = sess.run([tail_output_name], feed)
     np.testing.assert_allclose(outputs[0], ref_output, rtol=1e-5, atol=1e-5)
     print("[VERIFY] branch-parallel output matches the full rewritten model output.")
 
@@ -989,12 +1129,14 @@ def maybe_profiled_task_specs(
     bottom_path: Path,
     emb_paths: List[Path],
     tail_path: Path,
+    layout: SplitLayout,
     providers: List[object],
 ) -> Tuple[List[TaskSpec], TaskSpec]:
     return create_task_specs(
         bottom_path=bottom_path,
         emb_paths=emb_paths,
         tail_path=tail_path,
+        layout=layout,
         args=args,
         providers=providers,
         profile_enabled=args.enable_profiling,
@@ -1007,15 +1149,17 @@ def recreate_without_profiling_if_needed(
     bottom_path: Path,
     emb_paths: List[Path],
     tail_path: Path,
+    layout: SplitLayout,
     providers: List[object],
 ) -> Tuple[List[TaskSpec], TaskSpec]:
     if not args.enable_profiling or args.profile_warmup or args.warmup_batches <= 0:
-        return maybe_profiled_task_specs(args, rewritten_path, bottom_path, emb_paths, tail_path, providers)
+        return maybe_profiled_task_specs(args, rewritten_path, bottom_path, emb_paths, tail_path, layout, providers)
 
     warmup_branch_specs, warmup_tail_spec = create_task_specs(
         bottom_path=bottom_path,
         emb_paths=emb_paths,
         tail_path=tail_path,
+        layout=layout,
         args=args,
         providers=providers,
         profile_enabled=False,
@@ -1030,7 +1174,7 @@ def recreate_without_profiling_if_needed(
         start_batch_idx=-args.warmup_batches,
         run_batches=args.warmup_batches,
     )
-    return maybe_profiled_task_specs(args, rewritten_path, bottom_path, emb_paths, tail_path, providers)
+    return maybe_profiled_task_specs(args, rewritten_path, bottom_path, emb_paths, tail_path, layout, providers)
 
 
 def run_parallel_workload(
@@ -1177,13 +1321,19 @@ def main() -> None:
             bag_size=args.num_indices_per_lookup,
         )
 
-    bottom_path, emb_paths, tail_path = prepare_submodels(effective_path, submodel_dir)
+    layout = infer_split_layout(effective_path)
+    print(f"[PAR] inferred bottom split: {layout.bottom_input_name} -> {layout.bottom_output_name}")
+    print(f"[PAR] inferred emb splits   : {', '.join(f'{name}->{out}' for name, out in zip(layout.emb_input_names, layout.emb_output_names))}")
+    print(f"[PAR] inferred tail output : {layout.tail_output_name}")
+
+    bottom_path, emb_paths, tail_path = prepare_submodels(effective_path, submodel_dir, layout)
     branch_specs, tail_spec = recreate_without_profiling_if_needed(
         args=args,
         rewritten_path=effective_path,
         bottom_path=bottom_path,
         emb_paths=emb_paths,
         tail_path=tail_path,
+        layout=layout,
         providers=providers,
     )
 
@@ -1215,7 +1365,7 @@ def main() -> None:
     print_statistics(latencies_ms)
 
     if args.verify_full_output and last_output is not None and last_feed is not None:
-        maybe_verify_output(effective_path, providers, args, last_feed, last_output)
+        maybe_verify_output(effective_path, layout.tail_output_name, providers, args, last_feed, last_output)
 
     task_timeline_csv = out_dir / "branch_parallel_timeline.csv"
     task_timeline_html = out_dir / "branch_parallel_timeline.html"

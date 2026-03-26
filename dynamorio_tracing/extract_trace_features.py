@@ -14,7 +14,7 @@ extract_trace_features.py
 用法:
     python3 extract_trace_features.py [--ops_dir DIR] [--out CSV] [--jobs N]
                                       [--cache_conf FILE] [--tool-timeout SEC]
-                                      [--use_physical]
+                                      [--use_physical] [--keep-traces]
 """
 
 import os
@@ -24,6 +24,7 @@ import csv
 import json
 import argparse
 import concurrent.futures
+import shutil
 from pathlib import Path
 
 # ──────────────────────────────────────────────
@@ -338,6 +339,7 @@ def extract_one_op(
     cache_conf: str,
     tool_timeout: int,
     use_physical: bool = False,
+    keep_traces: bool = False,
 ) -> dict:
     record = {
         "op_name": op_dir.name,
@@ -402,6 +404,16 @@ def extract_one_op(
     else:
         record.update(parse_reuse_distance(out))
 
+    if not keep_traces and "error" not in record:
+        try:
+            shutil.rmtree(op_dir)
+            record["trace_deleted"] = 1
+        except Exception as e:
+            record["cleanup_error"] = str(e)
+            record["trace_deleted"] = 0
+    else:
+        record["trace_deleted"] = 0
+
     return record
 
 
@@ -421,6 +433,8 @@ def main():
                         help="DynamoRIO drrun 可执行文件路径")
     parser.add_argument("--use_physical", action="store_true",
                         help="向 drrun/drcachesim 透传 -use_physical，默认关闭")
+    parser.add_argument("--keep-traces", action="store_true",
+                        help="保留提取完成后的 trace 目录；默认成功后自动删除")
     args = parser.parse_args()
     DRRUN = args.drrun
 
@@ -439,6 +453,7 @@ def main():
                 args.cache_conf,
                 args.tool_timeout,
                 args.use_physical,
+                args.keep_traces,
             ): op_dir
             for op_dir in op_dirs
         }
@@ -453,7 +468,8 @@ def main():
             done += 1
             print(f"  [{done}/{len(op_dirs)}] {op_dir.name}  "
                   f"instr={rec.get('total_instructions','?')}  "
-                  f"LLC_miss={rec.get('LLC_miss_rate_pct','?')}%",
+                  f"LLC_miss={rec.get('LLC_miss_rate_pct','?')}%  "
+                  f"deleted={rec.get('trace_deleted', 0)}",
                   flush=True)
 
     # 按 op_idx 排序

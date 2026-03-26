@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -28,6 +29,9 @@ REUSE_TIME_BIN_PATTERN = re.compile(r"^reuse_time_bin_(\d+)_pct$")
 FIXED_BEFORE_BINS: List[Tuple[str, str]] = [
     ("batch_size", "batch_size"),
     ("num_indices_per_lookup", "num_indices_per_lookup"),
+    ("arch_embedding_size", "arch_embedding_size"),
+    ("arch_mlp_bot", "arch_mlp_bot"),
+    ("arch_mlp_top", "arch_mlp_top"),
     ("node_name", "node_name"),
     ("op_type", "op_type"),
     ("input_type_shape", "input_type_shape"),
@@ -151,14 +155,54 @@ def get_repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def dedupe_paths(paths: Iterable[Path]) -> List[Path]:
+    ordered: List[Path] = []
+    seen = set()
+    for path in paths:
+        normalized = path.resolve()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(path)
+    return ordered
+
+
 def choose_profile_roots(input_path: Path) -> List[Path]:
     ort_root = get_repo_root() / "ORT"
-    regular = ort_root / "sweep_runs" / "onnx_profiles"
-    extensible = ort_root / "sweep_runs_extensible" / "onnx_profiles"
+    env_candidates = []
+    for env_name in ("SELECT_FEATURE_SUBSET_PROFILE_ROOT", "PROFILE_ROOT"):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            env_candidates.append(Path(value))
 
-    if "features_extensible" in input_path.parts:
-        return [extensible, regular]
-    return [regular, extensible]
+    dataset_part = next(
+        (
+            part
+            for part in input_path.parts
+            if part.startswith("features_extensible") or part.startswith("features")
+        ),
+        "",
+    )
+
+    candidates: List[Path] = []
+    if dataset_part.startswith("features_extensible"):
+        suffix = dataset_part[len("features_extensible"):]
+        if suffix:
+            candidates.append(ort_root / f"sweep_runs_extensible{suffix}" / "onnx_profiles")
+        candidates.append(ort_root / "sweep_runs_extensible" / "onnx_profiles")
+        if suffix:
+            candidates.append(ort_root / f"sweep_runs{suffix}" / "onnx_profiles")
+        candidates.append(ort_root / "sweep_runs" / "onnx_profiles")
+    else:
+        suffix = dataset_part[len("features"):] if dataset_part.startswith("features") else ""
+        if suffix:
+            candidates.append(ort_root / f"sweep_runs{suffix}" / "onnx_profiles")
+        candidates.append(ort_root / "sweep_runs" / "onnx_profiles")
+        if suffix:
+            candidates.append(ort_root / f"sweep_runs_extensible{suffix}" / "onnx_profiles")
+        candidates.append(ort_root / "sweep_runs_extensible" / "onnx_profiles")
+
+    return dedupe_paths([*env_candidates, *candidates])
 
 
 def find_aux_detail_csv(input_path: Path) -> Path | None:

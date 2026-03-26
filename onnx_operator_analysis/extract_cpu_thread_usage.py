@@ -33,9 +33,14 @@ def parse_cpu_nodes(events: list) -> list:
     """
     Filter Node events whose provider == CPUExecutionProvider
     and extract thread scheduling stats.
+
+    Some single-thread ORT profiles emit `thread_scheduling_stats` as an empty
+    string instead of a populated dict. In that case we still keep the node so
+    downstream datasets retain `dur_us` and shape/size metadata.
     """
     records = []
     skipped = 0
+    fallback_without_stats = 0
 
     for ev in events:
         if ev.get("cat") != "Node":
@@ -46,40 +51,63 @@ def parse_cpu_nodes(events: list) -> list:
         if provider != "CPUExecutionProvider":
             continue
 
-        stats = args.get("thread_scheduling_stats", {})
-        if not stats:
-            skipped += 1
-            continue
+        raw_stats = args.get("thread_scheduling_stats", {})
+        if isinstance(raw_stats, dict):
+            stats = raw_stats
+        else:
+            stats = {}
 
-        main = stats.get("main_thread", {})
-        sub_threads_raw = stats.get("sub_threads", {})
+        if stats:
+            main = stats.get("main_thread", {})
+            sub_threads_raw = stats.get("sub_threads", {})
 
-        # ── main thread fields ──
-        main_thread_id    = main.get("thread_id", "")
-        main_pool_name    = main.get("thread_pool_name", "")
-        main_core         = main.get("core", -1)
-        main_block_size   = main.get("block_size", [])
-        main_dist         = main.get("Distribution", 0)
-        main_dist_enqueue = main.get("DistributionEnqueue", 0)
-        main_run          = main.get("Run", 0)
-        main_wait         = main.get("Wait", 0)
-        main_wait_revoke  = main.get("WaitRevoke", 0)
-        main_used         = main_run > 0  # main thread actually computed
+            # ── main thread fields ──
+            main_thread_id    = main.get("thread_id", "")
+            main_pool_name    = main.get("thread_pool_name", "")
+            main_core         = main.get("core", -1)
+            main_block_size   = main.get("block_size", [])
+            main_dist         = main.get("Distribution", 0)
+            main_dist_enqueue = main.get("DistributionEnqueue", 0)
+            main_run          = main.get("Run", 0)
+            main_wait         = main.get("Wait", 0)
+            main_wait_revoke  = main.get("WaitRevoke", 0)
+            main_used         = main_run > 0  # main thread actually computed
 
-        # ── sub-thread fields ──
-        num_sub_threads   = len(sub_threads_raw)
-        total_sub_runs    = sum(v.get("num_run", 0) for v in sub_threads_raw.values())
-        sub_cores         = sorted({v.get("core", -1) for v in sub_threads_raw.values() if v.get("core", -1) >= 0})
-        sub_thread_ids    = list(sub_threads_raw.keys())
+            # ── sub-thread fields ──
+            num_sub_threads   = len(sub_threads_raw)
+            total_sub_runs    = sum(v.get("num_run", 0) for v in sub_threads_raw.values())
+            sub_cores         = sorted({v.get("core", -1) for v in sub_threads_raw.values() if v.get("core", -1) >= 0})
+            sub_thread_ids    = list(sub_threads_raw.keys())
 
-        # compute per-sub-thread max num_run (useful for utilisation analysis)
-        sub_max_runs = max((v.get("num_run", 0) for v in sub_threads_raw.values()), default=0)
+            # compute per-sub-thread max num_run (useful for utilisation analysis)
+            sub_max_runs = max((v.get("num_run", 0) for v in sub_threads_raw.values()), default=0)
 
-        # ── actual active threads ──
-        # sub-threads that actually ran at least one task
-        active_sub_threads = sum(1 for v in sub_threads_raw.values() if v.get("num_run", 0) > 0)
-        # total: active sub-threads + main thread (if it ran)
-        actual_threads_used = active_sub_threads + (1 if main_run > 0 else 0)
+            # ── actual active threads ──
+            # sub-threads that actually ran at least one task
+            active_sub_threads = sum(1 for v in sub_threads_raw.values() if v.get("num_run", 0) > 0)
+            # total: active sub-threads + main thread (if it ran)
+            actual_threads_used = active_sub_threads + (1 if main_run > 0 else 0)
+        else:
+            fallback_without_stats += 1
+            main_thread_id = ""
+            main_pool_name = ""
+            main_core = -1
+            main_block_size = []
+            main_dist = 0
+            main_dist_enqueue = 0
+            main_run = 0
+            main_wait = 0
+            main_wait_revoke = 0
+            num_sub_threads = 0
+            total_sub_runs = 0
+            sub_cores = []
+            sub_thread_ids = []
+            sub_max_runs = 0
+            active_sub_threads = 0
+            # Keep single-thread runs observable in downstream features even
+            # when ORT omitted the scheduling payload.
+            main_used = ev.get("dur", 0) > 0
+            actual_threads_used = 1 if main_used else 0
 
         records.append({
             # identification
@@ -118,7 +146,8 @@ def parse_cpu_nodes(events: list) -> list:
         })
 
     print(f"  CPU Node events extracted : {len(records)}")
-    print(f"  Skipped (no thread stats) : {skipped}")
+    print(f"  Fallback (empty thread stats) : {fallback_without_stats}")
+    print(f"  Skipped (no usable data)      : {skipped}")
     return records
 
 
@@ -358,10 +387,15 @@ def summarize_parallel(pair_rows: list, group_rows: list):
 # 5. Write CSVs
 # ──────────────────────────────────────────────
 def write_csv(rows: list, path: str):
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     if not rows:
-        print(f"  [WARN] No data to write for {path}")
+        # Write a non-empty placeholder so sweep resume checks can treat the
+        # stage as completed even when ORT emitted no thread scheduling stats.
+        out_path.write_text("\n", encoding="utf-8")
+        print(f"  [WARN] No data rows for {path}; wrote placeholder CSV")
         return
-    with open(path, "w", newline="", encoding="utf-8") as f:
+    with out_path.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)

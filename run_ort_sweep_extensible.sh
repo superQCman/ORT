@@ -6,8 +6,21 @@ TRACE_DIR="$SCRIPT_DIR/dynamorio_tracing"
 ANALYSIS_DIR="$SCRIPT_DIR/onnx_operator_analysis"
 
 ASCEND_ENV_SH=${ASCEND_ENV_SH:-/data/qc/Ascend/ascend-toolkit/set_env.sh}
-ONNX_PATH=${ONNX_PATH:-/data/qc/dlrm/dlrm_onnx/dlrm_s_pytorch.onnx}
-PYTHON_BIN=${PYTHON_BIN:-python3}
+ONNX_ROOT=${ONNX_ROOT:-$SCRIPT_DIR/dlrm_onnx_dyn}
+ONNX_VARIANT=${ONNX_VARIANT:-}
+ONNX_FILENAME=${ONNX_FILENAME:-dlrm_s_pytorch.onnx}
+ONNX_MANIFEST_CSV=${ONNX_MANIFEST_CSV:-$ONNX_ROOT/manifest.csv}
+DEFAULT_ONNX_PATH="$SCRIPT_DIR/../dlrm_onnx/dlrm_s_pytorch.onnx"
+if [[ -z "${ONNX_PATH:-}" ]]; then
+  if [[ -n "$ONNX_VARIANT" ]]; then
+    ONNX_PATH="$ONNX_ROOT/$ONNX_VARIANT/$ONNX_FILENAME"
+  elif [[ -f "$ONNX_ROOT/$ONNX_FILENAME" ]]; then
+    ONNX_PATH="$ONNX_ROOT/$ONNX_FILENAME"
+  else
+    ONNX_PATH="$DEFAULT_ONNX_PATH"
+  fi
+fi
+PYTHON_BIN=${PYTHON_BIN:-/data/qc/anaconda3/envs/ort/bin/python}
 
 BATCH_START=${BATCH_START:-32}
 BATCH_END=${BATCH_END:-2048}
@@ -34,6 +47,7 @@ TAIL_INTRA_THREADS=${TAIL_INTRA_THREADS:-0}
 VERIFY_FULL_OUTPUT=${VERIFY_FULL_OUTPUT:-0}
 BRANCH_SUBMODEL_ROOT=${BRANCH_SUBMODEL_ROOT:-}
 FORCE_CPU_OPS=${FORCE_CPU_OPS:-}
+STOP_AFTER_INFER=${STOP_AFTER_INFER:-0}
 
 USE_NUMACTL=${USE_NUMACTL:-1}
 NUMA_NODE=${NUMA_NODE:-1}
@@ -85,6 +99,60 @@ if [[ ! -f "$ONNX_PATH" ]]; then
   exit 1
 fi
 
+echo "[CONFIG] ONNX_PATH=$ONNX_PATH"
+echo "[CONFIG] ONNX_ROOT=$ONNX_ROOT"
+echo "[CONFIG] ONNX_VARIANT=${ONNX_VARIANT:-<unset>}"
+echo "[CONFIG] ONNX_MANIFEST_CSV=$ONNX_MANIFEST_CSV"
+
+MODEL_ARCH_EMBEDDING_SIZE=""
+MODEL_ARCH_MLP_BOT=""
+MODEL_ARCH_MLP_TOP=""
+
+resolve_realpath() {
+  local path="$1"
+  if command -v readlink > /dev/null 2>&1; then
+    readlink -f "$path" 2>/dev/null || printf '%s\n' "$path"
+  else
+    printf '%s\n' "$path"
+  fi
+}
+
+load_onnx_arch_metadata() {
+  local manifest_csv="$1"
+  local target_path="$2"
+  local target_real=""
+  local variant=""
+  local arch_embedding_size=""
+  local arch_mlp_bot=""
+  local arch_mlp_top=""
+  local manifest_onnx_path=""
+  local manifest_real=""
+
+  if [[ ! -f "$manifest_csv" ]]; then
+    echo "[WARN] ONNX manifest not found, skipping arch metadata: $manifest_csv"
+    return 0
+  fi
+
+  target_real=$(resolve_realpath "$target_path")
+  while IFS=',' read -r variant arch_embedding_size arch_mlp_bot arch_mlp_top manifest_onnx_path; do
+    [[ "$variant" == "variant" ]] && continue
+    manifest_real=$(resolve_realpath "$manifest_onnx_path")
+    if [[ -n "$ONNX_VARIANT" && "$variant" == "$ONNX_VARIANT" ]] || [[ "$manifest_onnx_path" == "$target_path" ]] || [[ "$manifest_real" == "$target_real" ]]; then
+      MODEL_ARCH_EMBEDDING_SIZE="$arch_embedding_size"
+      MODEL_ARCH_MLP_BOT="$arch_mlp_bot"
+      MODEL_ARCH_MLP_TOP="$arch_mlp_top"
+      echo "[CONFIG] arch_embedding_size=$MODEL_ARCH_EMBEDDING_SIZE"
+      echo "[CONFIG] arch_mlp_bot=$MODEL_ARCH_MLP_BOT"
+      echo "[CONFIG] arch_mlp_top=$MODEL_ARCH_MLP_TOP"
+      return 0
+    fi
+  done < "$manifest_csv"
+
+  echo "[WARN] no manifest row matched ONNX_PATH=$target_path"
+}
+
+load_onnx_arch_metadata "$ONNX_MANIFEST_CSV" "$ONNX_PATH"
+
 case "$RUNNER_MODE" in
   standard)
     : "${RUNNER_SCRIPT:=$SCRIPT_DIR/run_ort_dlrm.py}"
@@ -103,7 +171,7 @@ if [[ ! -f "$RUNNER_SCRIPT" ]]; then
   exit 1
 fi
 
-echo "timestamp,batch_size,num_indices_per_lookup,runner_mode,status,failed_stage,shape_csv,profile_dir,profile_json,effective_onnx_path,build_dir,trace_dir,trace_feature_csv,cpu_thread_detail_csv,training_feature_csv,log_dir" > "$SUMMARY_CSV"
+echo "timestamp,batch_size,num_indices_per_lookup,arch_embedding_size,arch_mlp_bot,arch_mlp_top,runner_mode,status,failed_stage,shape_csv,profile_dir,profile_json,effective_onnx_path,build_dir,trace_dir,trace_feature_csv,cpu_thread_detail_csv,training_feature_csv,log_dir" > "$SUMMARY_CSV"
 
 completed=0
 failed=0
@@ -112,6 +180,27 @@ combo_count=0
 has_profile_json() {
   local dir="$1"
   compgen -G "$dir/ort_cann_profile*.json" > /dev/null
+}
+
+csv_has_header() {
+  local path="$1"
+  local first_line=""
+  [[ -s "$path" ]] || return 1
+  IFS= read -r first_line < "$path" || true
+  [[ -n "${first_line//[[:space:]]/}" ]]
+}
+
+csv_has_columns() {
+  local path="$1"
+  shift
+  local first_line=""
+  local required_col=""
+  [[ -s "$path" ]] || return 1
+  IFS= read -r first_line < "$path" || true
+  [[ -n "$first_line" ]] || return 1
+  for required_col in "$@"; do
+    [[ ",$first_line," == *",$required_col,"* ]] || return 1
+  done
 }
 
 find_latest_profile_json() {
@@ -179,10 +268,13 @@ append_summary() {
   local training_feature_csv="${13}"
   local log_dir="${14}"
 
-  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf '%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(date '+%F %T')" \
     "$batch_size" \
     "$num_indices" \
+    "$MODEL_ARCH_EMBEDDING_SIZE" \
+    "$MODEL_ARCH_MLP_BOT" \
+    "$MODEL_ARCH_MLP_TOP" \
     "$RUNNER_MODE" \
     "$status" \
     "$failed_stage" \
@@ -242,13 +334,29 @@ build_log_matches_onnx() {
 cpu_parse_completed() {
   local cpu_detail_csv="$1"
   local cpu_agg_csv="$2"
-  [[ -s "$cpu_detail_csv" ]] && [[ -s "$cpu_agg_csv" ]]
+  csv_has_header "$cpu_detail_csv" && csv_has_header "$cpu_agg_csv"
 }
 
 dataset_completed() {
   local final_feature_csv="$1"
   local aligned_cpu_detail_csv="$2"
-  [[ -s "$final_feature_csv" ]] && [[ -s "$aligned_cpu_detail_csv" ]]
+  local required_columns=()
+
+  if [[ -n "$MODEL_ARCH_EMBEDDING_SIZE" ]]; then
+    required_columns+=(arch_embedding_size)
+  fi
+  if [[ -n "$MODEL_ARCH_MLP_BOT" ]]; then
+    required_columns+=(arch_mlp_bot)
+  fi
+  if [[ -n "$MODEL_ARCH_MLP_TOP" ]]; then
+    required_columns+=(arch_mlp_top)
+  fi
+
+  csv_has_header "$final_feature_csv" || return 1
+  if (( ${#required_columns[@]} > 0 )); then
+    csv_has_columns "$final_feature_csv" "${required_columns[@]}" || return 1
+  fi
+  csv_has_header "$aligned_cpu_detail_csv"
 }
 
 build_inference_command() {
@@ -428,16 +536,30 @@ run_dataset_stage() {
   local final_feature_csv="$9"
   local log_path="${10}"
 
-  "$PYTHON_BIN" -u "$ANALYSIS_DIR/build_training_features.py" \
-    --op-shapes "$shape_csv" \
-    --cpu-detail "$cpu_detail_csv" \
-    --trace-features "$trace_feature_csv" \
-    --aligned-cpu-detail-out "$aligned_cpu_detail_csv" \
-    --cpu-agg-out "$cpu_node_agg_csv" \
-    --unmatched-out "$cpu_unmatched_csv" \
-    --out "$final_feature_csv" \
-    --batch-size "$batch_size" \
-    --num-indices-per-lookup "$num_indices" > "$log_path" 2>&1
+  local cmd=(
+    "$PYTHON_BIN" -u "$ANALYSIS_DIR/build_training_features.py"
+    --op-shapes "$shape_csv"
+    --cpu-detail "$cpu_detail_csv"
+    --trace-features "$trace_feature_csv"
+    --aligned-cpu-detail-out "$aligned_cpu_detail_csv"
+    --cpu-agg-out "$cpu_node_agg_csv"
+    --unmatched-out "$cpu_unmatched_csv"
+    --out "$final_feature_csv"
+    --batch-size "$batch_size"
+    --num-indices-per-lookup "$num_indices"
+  )
+
+  if [[ -n "$MODEL_ARCH_EMBEDDING_SIZE" ]]; then
+    cmd+=(--arch-embedding-size "$MODEL_ARCH_EMBEDDING_SIZE")
+  fi
+  if [[ -n "$MODEL_ARCH_MLP_BOT" ]]; then
+    cmd+=(--arch-mlp-bot "$MODEL_ARCH_MLP_BOT")
+  fi
+  if [[ -n "$MODEL_ARCH_MLP_TOP" ]]; then
+    cmd+=(--arch-mlp-top "$MODEL_ARCH_MLP_TOP")
+  fi
+
+  "${cmd[@]}" > "$log_path" 2>&1
 }
 
 merge_feature_datasets() {
@@ -461,30 +583,33 @@ if not csv_paths:
     print(f"[WARN] no feature CSVs found under {feature_root}")
     sys.exit(0)
 
-header = None
+header = []
 rows_written = 0
+
+for path in csv_paths:
+    with path.open("r", encoding="utf-8", newline="") as in_f:
+        reader = csv.DictReader(in_f)
+        if not reader.fieldnames:
+            continue
+        for field in reader.fieldnames:
+            if field not in header:
+                header.append(field)
+
+if not header:
+    print(f"[WARN] feature CSVs under {feature_root} are empty")
+    sys.exit(0)
 
 merged_csv.parent.mkdir(parents=True, exist_ok=True)
 with merged_csv.open("w", encoding="utf-8", newline="") as out_f:
-    writer = None
+    writer = csv.DictWriter(out_f, fieldnames=header)
+    writer.writeheader()
     for path in csv_paths:
         with path.open("r", encoding="utf-8", newline="") as in_f:
-            reader = csv.reader(in_f)
-            current_header = next(reader, None)
-            if not current_header:
+            reader = csv.DictReader(in_f)
+            if not reader.fieldnames:
                 continue
-            if header is None:
-                header = current_header
-                writer = csv.writer(out_f)
-                writer.writerow(header)
-            elif current_header != header:
-                raise SystemExit(
-                    f"ERROR: header mismatch while merging {path}. "
-                    f"expected {header}, got {current_header}"
-                )
-
             for row in reader:
-                writer.writerow(row)
+                writer.writerow({field: row.get(field, "") for field in header})
                 rows_written += 1
 
 print(f"[ OK ] merged {len(csv_paths)} feature CSVs into {merged_csv} ({rows_written} rows)")
@@ -495,6 +620,7 @@ select_feature_subset_stage() {
   local input_root="$1"
   local output_root="$2"
 
+  SELECT_FEATURE_SUBSET_PROFILE_ROOT="$PROFILE_ROOT" \
   "$PYTHON_BIN" -u "$ANALYSIS_DIR/select_feature_subset.py" \
     --input "$input_root" \
     --output "$output_root" \
@@ -599,6 +725,13 @@ for ((batch_size = BATCH_START; batch_size <= BATCH_END; batch_size += BATCH_STE
       continue
     fi
 
+    if [[ "$STOP_AFTER_INFER" == "1" ]]; then
+      echo "[SMOKE] stop after inference requested; skipping build/trace/features"
+      append_summary "$batch_size" "$num_indices" "OK" "smoke_only" "$shape_csv" "$profile_dir" "$profile_json" "$effective_onnx_path" "$build_dir" "$trace_dir" "$feature_csv" "$cpu_detail_csv" "$final_feature_csv" "$log_dir"
+      ((completed += 1))
+      continue
+    fi
+
     build_ran=0
     if [[ "$RESUME" != "1" ]] || ! stage_completed build "$shape_csv" "$profile_dir" "$build_dir" "$trace_dir" "$feature_csv" || ! build_log_matches_onnx "$build_log" "$effective_onnx_path"; then
       echo "[RUN ] build per-op binaries"
@@ -671,23 +804,25 @@ echo "  completed : $completed"
 echo "  failed    : $failed"
 echo "  summary   : $SUMMARY_CSV"
 
-if ! merge_feature_datasets "$FEATURE_DATASET_ROOT" "$FEATURE_DATASET_MERGED_CSV"; then
-  echo "ERROR: failed to merge feature datasets"
-  exit 1
-fi
-echo "  merged    : $FEATURE_DATASET_MERGED_CSV"
+if [[ "$STOP_AFTER_INFER" != "1" ]]; then
+  if ! merge_feature_datasets "$FEATURE_DATASET_ROOT" "$FEATURE_DATASET_MERGED_CSV"; then
+    echo "ERROR: failed to merge feature datasets"
+    exit 1
+  fi
+  echo "  merged    : $FEATURE_DATASET_MERGED_CSV"
 
-if [[ "$SELECT_FEATURE_SUBSET" == "1" ]]; then
-  if ! select_feature_subset_stage "$FEATURE_DATASET_ROOT" "$FEATURE_SUBSET_ROOT"; then
-    echo "ERROR: failed to extract selected feature subset"
-    exit 1
+  if [[ "$SELECT_FEATURE_SUBSET" == "1" ]]; then
+    if ! select_feature_subset_stage "$FEATURE_DATASET_ROOT" "$FEATURE_SUBSET_ROOT"; then
+      echo "ERROR: failed to extract selected feature subset"
+      exit 1
+    fi
+    if ! merge_feature_datasets "$FEATURE_SUBSET_ROOT" "$FEATURE_SUBSET_MERGED_CSV"; then
+      echo "ERROR: failed to merge selected feature datasets"
+      exit 1
+    fi
+    echo "  selected  : $FEATURE_SUBSET_ROOT"
+    echo "  sel_merge : $FEATURE_SUBSET_MERGED_CSV"
   fi
-  if ! merge_feature_datasets "$FEATURE_SUBSET_ROOT" "$FEATURE_SUBSET_MERGED_CSV"; then
-    echo "ERROR: failed to merge selected feature datasets"
-    exit 1
-  fi
-  echo "  selected  : $FEATURE_SUBSET_ROOT"
-  echo "  sel_merge : $FEATURE_SUBSET_MERGED_CSV"
 fi
 
 if (( failed > 0 )); then
