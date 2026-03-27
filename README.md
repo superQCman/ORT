@@ -2,6 +2,11 @@
 
 这个目录是一个独立的小流水线，直接从 `ORT/features_extensible_case_*/*.csv` 和对应的 `ORT/sweep_runs_extensible_case_*/op_shapes/*.csv` 提取全量 case 数据，不依赖其他目录下的脚本。
 
+现在已经同时支持两种输入口径：
+
+- `trace`：保留 DynamoRIO trace 派生特征
+- `no_trace`：不要求源 CSV 带 trace 列，训练合同里会自动移除 trace 相关特征
+
 功能包括：
 
 - 抽取全部 16 个 case 的单算子样本
@@ -34,7 +39,7 @@
 | --- | --- |
 | `batch_size` | 当前样本对应的 batch size。 |
 | `num_indices_per_lookup` | 每次 embedding lookup 使用的 index 个数。 |
-| `num_threads` | 该算子执行时使用到的线程数。 |
+| `num_threads` | 该 combo 的显式 intra-op 线程配置。优先读源 CSV；如果是 no-trace CSV 且未提供，就从对应 `sweep_runs_extensible_case_*/logs/<combo>/run_ort.log` 里的 `Intra threads` 回填。 |
 | `output_size` | 算子输出张量总字节数。 |
 | `activation_size` | 算子 activation 相关内存规模，通常可理解为输入/中间激活占用的总字节数。 |
 | `parameter_size` | 算子参数或权重占用的总字节数。 |
@@ -80,6 +85,7 @@
 - `feat_*elements*` 这类特征是用字节数除以 `4` 近似得到元素个数，因此默认按 `float32` 大小估算。
 - `feat_reduction_*` 只对 `ReduceSum` 类算子有意义，其他算子会补 `0`。
 - `dataset_full.csv` 里还会保留一些 metadata，例如 `row_uid`、`case_id`、`combo`、`op_idx`、`input_type_shape`、`output_type_shape`，这些列主要用于追溯样本，不参与训练。
+- 如果输入是 no-trace CSV，`load_store_ratio`、`feat_memops_per_inst`、`feat_insts_per_thread`、`reuse_*`、`opc_*` 这批 trace 特征不会进入主 MLP 的训练合同，也不会再被静默补成全 0 后参与训练。
 - 当前数值特征列表已经按 [numeric_feature_target_correlation.csv](/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/correlation_analysis/numeric_feature_target_correlation.csv) 做过一次裁剪，去掉了和目标绝对相关性小于 `0.1` 的数值列。
 - 另外补了一轮 stage-2 风格候选特征分析。当前已经正式保留到训练合同里的新增列是：
   - `hw_ratio_working_set_to_l1d_active_bytes`
@@ -139,6 +145,21 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py \
 - 丢掉每个 combo 的最早 profile batch
 - 用剩余 batch 的均值作为 `label_operator_actual_dur_us`
 - 对 `last2_range_ratio > 0.20` 的样本做剔除
+
+默认 `--feature-dialect auto`，会根据源 CSV 自动识别 `trace` / `no_trace`。如果需要强制指定，也可以显式传参：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py \
+  --output-dir /tmp/single_op_stage1_dataset_no_trace \
+  --feature-dialect no_trace \
+  --selected-cases case_9_4_4
+```
+
+构建完成后可以在 `feature_columns.json` 和 `dataset_summary.json` 里看到：
+
+- `feature_dialect_requested`
+- `feature_dialect`
+- `observed_feature_dialects`
 
 手动指定 case：
 
@@ -219,6 +240,7 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py \
 - `--npu-device-id` 用于指定训练时使用的 Ascend 卡号。
 - 默认会额外导出 `mlp_model.onnx`。如果你只想训练 PyTorch 模型，不导出 ONNX，可以加 `--disable-onnx-export`。
 - 训练前会把类别特征做 one-hot、数值特征做 median impute + standardize，并把这套状态保存到 `preprocessor_state.json`，供部署推理复用。
+- 训练时不再硬编码 trace 版本特征列表，而是优先读取数据集目录里的 `feature_columns.json`，所以 trace/no-trace 两种数据口径都会按各自 manifest 训练。
 
 ## Smoke 示例
 

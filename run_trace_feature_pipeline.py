@@ -37,6 +37,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-files-per-case", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--feature-dialect",
+        choices=["auto", "trace", "no_trace"],
+        default="auto",
+        help="Input dataset dialect: auto, trace, or no_trace.",
+    )
     parser.add_argument("--train-ratio", type=float, default=0.7)
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--test-ratio", type=float, default=0.1)
@@ -85,6 +91,7 @@ def main() -> None:
             "val": args.val_ratio,
             "test": args.test_ratio,
         },
+        feature_dialect=args.feature_dialect,
         drop_first_profile_batch=args.drop_first_profile_batch.strip().lower() not in {"0", "false", "no", "off"},
         profile_instability_metric=args.profile_instability_metric,
         profile_instability_threshold=args.profile_instability_threshold,

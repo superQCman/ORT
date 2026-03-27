@@ -13,7 +13,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from feature_contract import (
     BASELINE_CATEGORICAL_FEATURES,
     BASELINE_NUMERIC_FEATURES,
-    FEATURE_COLUMNS,
+    DEFAULT_FEATURE_DIALECT,
     METADATA_COLUMNS,
     TARGET_COLUMN,
 )
@@ -122,6 +122,22 @@ def load_split_tables(data_dir: Path) -> dict[str, pd.DataFrame]:
             raise FileNotFoundError(path)
         tables[split_name] = pd.read_csv(path)
     return tables
+
+
+def load_feature_manifest(data_dir: Path) -> dict[str, Any]:
+    manifest_path = data_dir / "feature_columns.json"
+    if not manifest_path.exists():
+        return {
+            "feature_dialect": DEFAULT_FEATURE_DIALECT,
+            "numeric_features": list(BASELINE_NUMERIC_FEATURES),
+            "categorical_features": list(BASELINE_CATEGORICAL_FEATURES),
+        }
+    with manifest_path.open("r", encoding="utf-8") as handle:
+        payload = json.load(handle)
+    payload.setdefault("feature_dialect", DEFAULT_FEATURE_DIALECT)
+    payload.setdefault("numeric_features", list(BASELINE_NUMERIC_FEATURES))
+    payload.setdefault("categorical_features", list(BASELINE_CATEGORICAL_FEATURES))
+    return payload
 
 
 def sanitize_categorical_series(series: pd.Series) -> pd.Series:
@@ -492,8 +508,17 @@ def train_model(
     np.random.seed(seed)
 
     tables = load_split_tables(data_dir)
-    numeric_features = [column for column in BASELINE_NUMERIC_FEATURES if column in tables["train"].columns]
-    categorical_features = [column for column in BASELINE_CATEGORICAL_FEATURES if column in tables["train"].columns]
+    feature_manifest = load_feature_manifest(data_dir)
+    numeric_features = [
+        column
+        for column in feature_manifest["numeric_features"]
+        if column in tables["train"].columns
+    ]
+    categorical_features = [
+        column
+        for column in feature_manifest["categorical_features"]
+        if column in tables["train"].columns
+    ]
     if not numeric_features and not categorical_features:
         raise RuntimeError("No feature columns were found in the training table")
 
@@ -633,6 +658,7 @@ def train_model(
         "data_dir": str(data_dir),
         "output_dir": str(output_dir),
         "model_type": "pytorch_mlp",
+        "feature_dialect": feature_manifest.get("feature_dialect", DEFAULT_FEATURE_DIALECT),
         "target_column": TARGET_COLUMN,
         "feature_count": len(numeric_features) + len(categorical_features),
         "input_dim_after_encoding": int(preprocessor_state["input_dim"]),

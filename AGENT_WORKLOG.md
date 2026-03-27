@@ -243,6 +243,49 @@ Open risks:
 - This environment currently does not have `torch` installed, so the new trace-feature proxy MLP could not be run end-to-end in this turn.
 - The current prepared dataset export does not include raw DynamoRIO count columns such as `total_instructions`, `total_loads`, and `total_stores`, so those are only supported as optional user-selected targets for future dataset variants that include them.
 
+### 2026-03-27 - Support both trace and no-trace dataset dialects
+
+Request summary:
+- Make `single_op_stage1_mlp` properly support both trace and no-trace feature CSV dialects.
+- For no-trace inputs, do not silently keep trace-only features in the training contract.
+- Recover `num_threads` explicitly from the sweep configuration logs when the source CSV does not provide it.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_contract.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_trace_feature_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added explicit dataset dialect support with `trace`, `no_trace`, and `auto`.
+- `feature_contract.py` now separates shared numeric features from trace-only numeric features and can build the active training contract per dialect.
+- `dataset_builder.py` now:
+  - detects each source CSV's observed dialect from its columns
+  - resolves a dataset-wide dialect and writes it into `feature_columns.json` and `dataset_summary.json`
+  - removes trace-only features from the active export contract when the resolved dialect is `no_trace`
+  - recovers missing `num_threads` from `sweep_runs_extensible_case_*/logs/<combo>/run_ort.log` by parsing the configured `Intra threads`
+  - skips non-canonical `features_extensible_case_*` directories such as suffix variants instead of failing discovery
+- `train_mlp.py` now reads `feature_columns.json` and trains on the dataset's emitted feature contract instead of always assuming the trace feature list.
+- `run_pipeline.py` and `run_trace_feature_pipeline.py` now pass through `--feature-dialect`.
+- README now documents both dialects, the explicit `num_threads` recovery path, and the dataset manifest fields that record dialect resolution.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/*.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_stage1_case9_no_trace_smoke --selected-cases case_9_4_4 --max-files-per-case 2 --feature-dialect auto`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_stage1_case2_trace_smoke --selected-cases case_2_4_4 --max-files-per-case 2 --feature-dialect auto`
+- Verified from the generated manifests and CSVs that:
+  - `case_9_4_4` resolves to `feature_dialect=no_trace`
+  - `case_2_4_4` resolves to `feature_dialect=trace`
+  - `num_threads` is recovered as `4` for the no-trace smoke dataset
+  - `load_store_ratio` is present only in the trace dialect manifest
+
+Open risks:
+- The separate trace-feature proxy training path still requires trace-derived target columns to exist in the prepared dataset; using `--feature-dialect no_trace` there will not produce trainable trace targets by itself.
+- Mixed trace and no-trace source sets currently resolve to `no_trace` in `auto` mode so the shared contract stays safe, which is conservative but may hide available trace columns when users intentionally mix both sources.
+
 ### Entry Template
 
 Use this format for future updates:

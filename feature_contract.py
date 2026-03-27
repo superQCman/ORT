@@ -7,6 +7,9 @@ PROFILE_INSTABILITY_METRICS = (
     "last2_cv",
 )
 
+DEFAULT_FEATURE_DIALECT = "trace"
+FEATURE_DIALECTS = ("trace", "no_trace")
+
 BASELINE_CATEGORICAL_FEATURES = (
     "op_type",
     "node_scope",
@@ -16,18 +19,15 @@ BASELINE_CATEGORICAL_FEATURES = (
     "arch_mlp_top",
 )
 
-BASELINE_NUMERIC_FEATURES = (
+SHARED_BASELINE_NUMERIC_FEATURES = (
     "batch_size",
     "num_indices_per_lookup",
     "num_threads",
     "output_size",
     "activation_size",
     "parameter_size",
-    "load_store_ratio",
     "feat_io_bytes_sum",
     "feat_output_input_bytes_ratio",
-    "feat_memops_per_inst",
-    "feat_insts_per_thread",
     "feat_lookup_count",
     "feat_output_elements_per_lookup",
     "feat_output_elements_per_batch",
@@ -37,6 +37,18 @@ BASELINE_NUMERIC_FEATURES = (
     "feat_reduction_input_rank",
     "feat_reduction_output_rank",
     "feat_reduction_work_items",
+    "hw_ratio_working_set_to_l1d_active_bytes",
+    "hw_ratio_working_set_to_l2_active_bytes",
+    "hw_ratio_working_set_to_l3_active_bytes",
+    "local_ctx_same_op_overlap_ratio_mean",
+    "comp_feat_pressure_ws_to_l2_ratio",
+    "comp_feat_pressure_ws_to_l3_ratio",
+)
+
+TRACE_ONLY_NUMERIC_FEATURES = (
+    "load_store_ratio",
+    "feat_memops_per_inst",
+    "feat_insts_per_thread",
     "reuse_time_mean",
     "reuse_distance_mean",
     "reuse_distance_unique_cache_lines_per_k_accesses",
@@ -46,12 +58,6 @@ BASELINE_NUMERIC_FEATURES = (
     "opc_math_ratio",
     "opc_simd_ratio",
     "opc_store_ratio",
-    "hw_ratio_working_set_to_l1d_active_bytes",
-    "hw_ratio_working_set_to_l2_active_bytes",
-    "hw_ratio_working_set_to_l3_active_bytes",
-    "local_ctx_same_op_overlap_ratio_mean",
-    "comp_feat_pressure_ws_to_l2_ratio",
-    "comp_feat_pressure_ws_to_l3_ratio",
 )
 
 STAGE2_CANDIDATE_NUMERIC_FEATURES = (
@@ -67,9 +73,50 @@ STAGE2_CANDIDATE_NUMERIC_FEATURES = (
     "comp_feat_pressure_threads",
 )
 
-FEATURE_COLUMNS = list(BASELINE_CATEGORICAL_FEATURES + BASELINE_NUMERIC_FEATURES)
-ANALYSIS_NUMERIC_FEATURES = list(BASELINE_NUMERIC_FEATURES + STAGE2_CANDIDATE_NUMERIC_FEATURES)
-DATASET_NUMERIC_COLUMNS = list(BASELINE_NUMERIC_FEATURES + STAGE2_CANDIDATE_NUMERIC_FEATURES)
+TRACE_FEATURE_SOURCE_COLUMNS = (
+    "trace_op_name",
+    "total_instructions",
+    "total_loads",
+    "total_stores",
+    "load_store_ratio",
+    "reuse_time_mean",
+    "reuse_distance_mean",
+    "reuse_distance_unique_cache_lines_per_k_accesses",
+    "opc_branch_ratio",
+    "opc_fp_math_ratio",
+    "opc_load_ratio",
+    "opc_math_ratio",
+    "opc_simd_ratio",
+    "opc_store_ratio",
+)
+
+
+def baseline_numeric_features_for_dialect(feature_dialect: str) -> tuple[str, ...]:
+    if feature_dialect == "trace":
+        return SHARED_BASELINE_NUMERIC_FEATURES + TRACE_ONLY_NUMERIC_FEATURES
+    if feature_dialect == "no_trace":
+        return SHARED_BASELINE_NUMERIC_FEATURES
+    raise ValueError(
+        f"Unsupported feature dialect {feature_dialect!r}; expected one of {FEATURE_DIALECTS}"
+    )
+
+
+def analysis_numeric_features_for_dialect(feature_dialect: str) -> list[str]:
+    return list(baseline_numeric_features_for_dialect(feature_dialect) + STAGE2_CANDIDATE_NUMERIC_FEATURES)
+
+
+def feature_columns_for_dialect(feature_dialect: str) -> list[str]:
+    return list(BASELINE_CATEGORICAL_FEATURES + baseline_numeric_features_for_dialect(feature_dialect))
+
+
+def dataset_numeric_columns_for_dialect(feature_dialect: str) -> list[str]:
+    return analysis_numeric_features_for_dialect(feature_dialect)
+
+
+BASELINE_NUMERIC_FEATURES = baseline_numeric_features_for_dialect(DEFAULT_FEATURE_DIALECT)
+FEATURE_COLUMNS = feature_columns_for_dialect(DEFAULT_FEATURE_DIALECT)
+ANALYSIS_NUMERIC_FEATURES = analysis_numeric_features_for_dialect(DEFAULT_FEATURE_DIALECT)
+DATASET_NUMERIC_COLUMNS = dataset_numeric_columns_for_dialect(DEFAULT_FEATURE_DIALECT)
 
 METADATA_COLUMNS = (
     "row_uid",
@@ -82,6 +129,7 @@ METADATA_COLUMNS = (
     "op_idx",
     "node_name",
     "trace_op_name",
+    "feature_dialect_observed",
     "has_cpu_profile",
     "input_type_shape",
     "output_type_shape",

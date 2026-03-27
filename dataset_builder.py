@@ -11,16 +11,18 @@ import numpy as np
 import pandas as pd
 
 from feature_contract import (
-    ANALYSIS_NUMERIC_FEATURES,
     BASELINE_CATEGORICAL_FEATURES,
-    BASELINE_NUMERIC_FEATURES,
-    DATASET_NUMERIC_COLUMNS,
     DEFAULT_SPLIT_RATIOS,
-    FEATURE_COLUMNS,
+    FEATURE_DIALECTS,
     GROUP_COLUMN,
     METADATA_COLUMNS,
     PROFILE_INSTABILITY_METRICS,
     TARGET_COLUMN,
+    TRACE_FEATURE_SOURCE_COLUMNS,
+    analysis_numeric_features_for_dialect,
+    baseline_numeric_features_for_dialect,
+    dataset_numeric_columns_for_dialect,
+    feature_columns_for_dialect,
 )
 from feature_engineering import (
     add_engineered_features,
@@ -40,6 +42,7 @@ CASE_DIR_RE = re.compile(r"^features_extensible_case_(?P<case>\d+)_(?P<run>\d+)_
 CASE_ID_RE = re.compile(r"^case_(?P<case>\d+)_(?P<run>\d+)_(?P<tag>\d+)$")
 SOURCE_NAME_RE = re.compile(r"^case_(?P<case>\d+)_run_(?P<run>\d+)_(?P<tag>\d+)$")
 CASE_TRIPLE_RE = re.compile(r"^(?P<case>\d+)_(?P<run>\d+)_(?P<tag>\d+)$")
+INTRA_THREADS_RE = re.compile(r"^\s*Intra threads\s*:\s*(?P<value>\d+)\s*$")
 
 RAW_COLUMNS = {
     "batch_size",
@@ -130,6 +133,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-ratio", type=float, default=DEFAULT_SPLIT_RATIOS["val"])
     parser.add_argument("--test-ratio", type=float, default=DEFAULT_SPLIT_RATIOS["test"])
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument(
+        "--feature-dialect",
+        choices=["auto", *FEATURE_DIALECTS],
+        default="auto",
+        help=(
+            "Input dataset dialect. "
+            "'trace' keeps trace-derived features, 'no_trace' drops them from the training contract, "
+            "and 'auto' infers the dialect from the source CSV columns."
+        ),
+    )
     parser.add_argument(
         "--drop-first-profile-batch",
         type=str2bool,
@@ -241,6 +254,8 @@ def discover_case_entries() -> list[dict[str, Any]]:
     for path in sorted(ORT_ROOT.glob("features_extensible_case_*")):
         if not path.is_dir() or path.name.endswith("_selected"):
             continue
+        if CASE_DIR_RE.fullmatch(path.name) is None:
+            continue
         case_meta = infer_case_metadata(path)
         case_entries.append(
             {
@@ -269,8 +284,58 @@ def load_raw_feature_csv(feature_csv: Path) -> pd.DataFrame:
     return pd.read_csv(feature_csv, usecols=lambda column: column in RAW_COLUMNS)
 
 
+def detect_feature_dialect(columns: list[str] | pd.Index | set[str]) -> str:
+    observed = {str(column) for column in columns}
+    return "trace" if any(column in observed for column in TRACE_FEATURE_SOURCE_COLUMNS) else "no_trace"
+
+
+def resolve_dataset_feature_dialect(
+    observed_feature_dialects: list[str],
+    requested_feature_dialect: str,
+) -> str:
+    unique = sorted({dialect for dialect in observed_feature_dialects if dialect})
+    if requested_feature_dialect != "auto":
+        if not unique:
+            return requested_feature_dialect
+        incompatible = [dialect for dialect in unique if dialect != requested_feature_dialect]
+        if incompatible:
+            raise ValueError(
+                "Requested feature dialect does not match the observed source CSV dialects: "
+                f"requested={requested_feature_dialect!r}, observed={unique}"
+            )
+        return requested_feature_dialect
+
+    if not unique:
+        return "no_trace"
+    if len(unique) == 1:
+        return unique[0]
+    if "no_trace" in unique:
+        return "no_trace"
+    return unique[0]
+
+
 def profile_timeline_path_for_combo(case_meta: dict[str, Any], combo: str) -> Path:
     return case_meta["sweep_dir"] / "onnx_profiles" / combo / "branch_parallel_op_timeline.csv"
+
+
+def run_log_path_for_combo(case_meta: dict[str, Any], combo: str) -> Path:
+    return case_meta["sweep_dir"] / "logs" / combo / "run_ort.log"
+
+
+def resolve_sweep_config_num_threads(case_meta: dict[str, Any], combo: str) -> int | None:
+    run_log_path = run_log_path_for_combo(case_meta, combo)
+    if not run_log_path.exists():
+        return None
+
+    try:
+        with run_log_path.open("r", encoding="utf-8", errors="ignore") as handle:
+            for line in handle:
+                match = INTRA_THREADS_RE.match(line)
+                if match is not None:
+                    return int(match.group("value"))
+    except OSError:
+        return None
+    return None
 
 
 def _safe_ratio(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
@@ -379,6 +444,7 @@ def build_rows_for_feature_csv(
     df = load_raw_feature_csv(feature_csv)
     if df.empty:
         return pd.DataFrame()
+    feature_dialect_observed = detect_feature_dialect(df.columns)
 
     if "batch_size" not in df.columns or df["batch_size"].isna().all():
         batch_size, _ = split_combo(combo)
@@ -386,6 +452,10 @@ def build_rows_for_feature_csv(
     if "num_indices_per_lookup" not in df.columns or df["num_indices_per_lookup"].isna().all():
         _, num_indices = split_combo(combo)
         df["num_indices_per_lookup"] = num_indices
+    if "num_threads" not in df.columns or pd.to_numeric(df["num_threads"], errors="coerce").isna().all():
+        resolved_num_threads = resolve_sweep_config_num_threads(case_meta, combo)
+        if resolved_num_threads is not None:
+            df["num_threads"] = resolved_num_threads
 
     node_name = df.get("node_name", pd.Series("", index=df.index)).fillna("").astype(str)
     trace_op_name = df.get("trace_op_name", pd.Series("", index=df.index)).fillna("").astype(str)
@@ -407,6 +477,7 @@ def build_rows_for_feature_csv(
     df["source_name"] = case_meta["source_name"]
     df["source_mode"] = case_meta["source_mode"]
     df["sample_group"] = combo
+    df["feature_dialect_observed"] = feature_dialect_observed
     df["has_cpu_profile"] = pd.to_numeric(df.get("has_cpu_profile", 0), errors="coerce").fillna(0).astype(int)
 
     op_shapes_df = load_op_shapes_for_combo(op_shapes_path_for_combo(case_meta, combo))
@@ -434,14 +505,27 @@ def build_rows_for_feature_csv(
 
 
 def normalize_feature_columns(df: pd.DataFrame) -> pd.DataFrame:
+    return normalize_feature_columns_for_contract(
+        df=df,
+        dataset_numeric_columns=dataset_numeric_columns_for_dialect("trace"),
+        categorical_features=list(BASELINE_CATEGORICAL_FEATURES),
+    )
+
+
+def normalize_feature_columns_for_contract(
+    df: pd.DataFrame,
+    *,
+    dataset_numeric_columns: list[str],
+    categorical_features: list[str],
+) -> pd.DataFrame:
     out = df.copy()
 
-    for column in DATASET_NUMERIC_COLUMNS:
+    for column in dataset_numeric_columns:
         if column not in out.columns:
             out[column] = 0.0
         out[column] = pd.to_numeric(out[column], errors="coerce")
 
-    for column in BASELINE_CATEGORICAL_FEATURES:
+    for column in categorical_features:
         if column not in out.columns:
             out[column] = "unknown"
         out[column] = out[column].fillna("unknown").astype(str)
@@ -472,15 +556,20 @@ def assign_group_splits(groups: pd.Series, seed: int, ratios: dict[str, float]) 
     return split_map
 
 
-def ordered_output_columns(df: pd.DataFrame) -> list[str]:
+def ordered_output_columns(
+    df: pd.DataFrame,
+    *,
+    feature_columns: list[str],
+    analysis_numeric_features: list[str],
+) -> list[str]:
     columns: list[str] = []
     for column in METADATA_COLUMNS:
         if column in df.columns:
             columns.append(column)
-    for column in FEATURE_COLUMNS:
+    for column in feature_columns:
         if column in df.columns and column not in columns:
             columns.append(column)
-    for column in ANALYSIS_NUMERIC_FEATURES:
+    for column in analysis_numeric_features:
         if column in df.columns and column not in columns:
             columns.append(column)
     if TARGET_COLUMN in df.columns:
@@ -496,6 +585,7 @@ def build_dataset(
     group_column: str,
     seed: int,
     ratios: dict[str, float],
+    feature_dialect: str,
     drop_first_profile_batch: bool,
     profile_instability_metric: str,
     profile_instability_threshold: float,
@@ -547,8 +637,37 @@ def build_dataset(
     if not frames:
         raise RuntimeError("No rows were built from the selected case directories")
 
+    observed_feature_dialects = sorted(
+        {
+            str(value)
+            for value in pd.concat(frames, ignore_index=True)
+            .get("feature_dialect_observed", pd.Series(dtype=str))
+            .dropna()
+            .astype(str)
+            .tolist()
+        }
+    )
+    resolved_feature_dialect = resolve_dataset_feature_dialect(
+        observed_feature_dialects=observed_feature_dialects,
+        requested_feature_dialect=feature_dialect,
+    )
+    baseline_numeric_features = list(
+        baseline_numeric_features_for_dialect(resolved_feature_dialect)
+    )
+    analysis_numeric_features = list(
+        analysis_numeric_features_for_dialect(resolved_feature_dialect)
+    )
+    dataset_numeric_columns = list(
+        dataset_numeric_columns_for_dialect(resolved_feature_dialect)
+    )
+    feature_columns = list(feature_columns_for_dialect(resolved_feature_dialect))
+
     dataset = pd.concat(frames, ignore_index=True)
-    dataset = normalize_feature_columns(dataset)
+    dataset = normalize_feature_columns_for_contract(
+        dataset,
+        dataset_numeric_columns=dataset_numeric_columns,
+        categorical_features=list(BASELINE_CATEGORICAL_FEATURES),
+    )
     dataset[TARGET_COLUMN] = pd.to_numeric(dataset[TARGET_COLUMN], errors="coerce")
     dataset = dataset[dataset[TARGET_COLUMN].notna() & (dataset[TARGET_COLUMN] > 0)].copy()
     instability_column = f"profile_{profile_instability_metric}"
@@ -578,7 +697,11 @@ def build_dataset(
     dataset = dataset.sort_values(["split", "source_name", "combo", "op_idx", "trace_op_name"], kind="stable").reset_index(drop=True)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    ordered_columns = ordered_output_columns(dataset)
+    ordered_columns = ordered_output_columns(
+        dataset,
+        feature_columns=feature_columns,
+        analysis_numeric_features=analysis_numeric_features,
+    )
     dataset = dataset[ordered_columns].copy()
     dataset.to_csv(output_dir / "dataset_full.csv", index=False)
 
@@ -594,10 +717,13 @@ def build_dataset(
         split_group_counts[split_name] = int(split_df[group_column].nunique())
 
     feature_manifest = {
+        "feature_dialect_requested": feature_dialect,
+        "feature_dialect": resolved_feature_dialect,
+        "observed_feature_dialects": observed_feature_dialects,
         "categorical_features": list(BASELINE_CATEGORICAL_FEATURES),
-        "numeric_features": list(BASELINE_NUMERIC_FEATURES),
-        "analysis_numeric_features": list(ANALYSIS_NUMERIC_FEATURES),
-        "all_features": list(FEATURE_COLUMNS),
+        "numeric_features": baseline_numeric_features,
+        "analysis_numeric_features": analysis_numeric_features,
+        "all_features": feature_columns,
         "target_column": TARGET_COLUMN,
         "group_column": group_column,
     }
@@ -620,9 +746,12 @@ def build_dataset(
         "ort_root": str(ORT_ROOT),
         "case_pattern": case_pattern,
         "selected_cases": selected_case_ids,
+        "feature_dialect_requested": feature_dialect,
+        "feature_dialect": resolved_feature_dialect,
+        "observed_feature_dialects": observed_feature_dialects,
         "case_count": len(case_entries),
         "case_file_counts": case_file_counts,
-        "feature_count": len(FEATURE_COLUMNS),
+        "feature_count": len(feature_columns),
         "total_rows": post_filter_row_count,
         "pre_filter_rows": pre_filter_row_count,
         "rows_dropped_by_profile_filter": pre_filter_row_count - post_filter_row_count,
@@ -678,6 +807,7 @@ def main() -> None:
         group_column=args.group_column,
         seed=args.seed,
         ratios=ratios,
+        feature_dialect=args.feature_dialect,
         drop_first_profile_batch=args.drop_first_profile_batch,
         profile_instability_metric=args.profile_instability_metric,
         profile_instability_threshold=args.profile_instability_threshold,
