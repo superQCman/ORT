@@ -286,6 +286,34 @@ Open risks:
 - The separate trace-feature proxy training path still requires trace-derived target columns to exist in the prepared dataset; using `--feature-dialect no_trace` there will not produce trainable trace targets by itself.
 - Mixed trace and no-trace source sets currently resolve to `no_trace` in `auto` mode so the shared contract stays safe, which is conservative but may hide available trace columns when users intentionally mix both sources.
 
+### 2026-03-27 - Add configurable hardware profile selection
+
+Request summary:
+- Add a `--hardware-profile` parameter so the single-op dataset pipeline can switch hardware architecture profiles without editing source code.
+- Confirm whether the current built-in Kunpeng hardware profile already contains the requested cache, memory, frequency, instruction-width, and pipeline parameters.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_trace_feature_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `dataset_builder.py` now accepts `--hardware-profile /path/to/profile.yaml` and forwards it to the local hardware-aware feature reconstruction path.
+- `run_pipeline.py` and `run_trace_feature_pipeline.py` now pass the same parameter through to dataset building.
+- `dataset_summary.json` now records the resolved `hardware_profile_path` used to build the dataset.
+- README now documents how to switch hardware architectures with a custom profile YAML instead of editing the default path in code.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/*.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_stage1_hw_profile_smoke --selected-cases case_9_4_4 --max-files-per-case 1 --feature-dialect auto --hardware-profile /data/qc/dlrm/ORT/model/hardware_profiles/kunpeng920_gem5.yaml`
+- Verified that `/tmp/single_op_stage1_hw_profile_smoke/dataset_summary.json` records `/data/qc/dlrm/ORT/model/hardware_profiles/kunpeng920_gem5.yaml` under `hardware_profile_path`
+
+Open risks:
+- The hardware profile parameter currently only affects the stage-2-style hardware/context features derived during dataset building; it does not automatically validate that a custom YAML contains every field needed for all downstream derived ratios.
+- The built-in YAML still lacks explicit instruction bit-width and memory bandwidth fields, so switching profiles currently changes cache/core topology more directly than ISA throughput assumptions.
+
 ### Entry Template
 
 Use this format for future updates:

@@ -161,6 +161,16 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py \
 - `feature_dialect`
 - `observed_feature_dialects`
 
+如果你要切换硬件架构使用的 cache/core 配置，可以传自定义硬件 profile YAML：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py \
+  --output-dir /tmp/single_op_stage1_dataset_alt_hw \
+  --hardware-profile /path/to/your_hardware_profile.yaml
+```
+
+这会影响 `hw_ratio_*` 和 `comp_feat_pressure_*` 这类基于 cache/core 容量推导的特征。实际使用的 profile 路径会写进 `dataset_summary.json`。
+
 手动指定 case：
 
 ```bash
@@ -258,6 +268,7 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py \
   --selected-cases case_1_1_1 case_2_4_4 \
   --max-files-per-case 4 \
   --profile-instability-threshold 0.20 \
+  --hardware-profile /path/to/your_hardware_profile.yaml \
   --output-root /tmp/single_op_stage1_selected
 ```
 

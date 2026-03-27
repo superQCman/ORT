@@ -43,6 +43,11 @@ def parse_args() -> argparse.Namespace:
         default="auto",
         help="Input dataset dialect: auto, trace, or no_trace.",
     )
+    parser.add_argument(
+        "--hardware-profile",
+        default="",
+        help="Optional hardware profile YAML used during dataset feature construction.",
+    )
     parser.add_argument("--train-ratio", type=float, default=0.7)
     parser.add_argument("--val-ratio", type=float, default=0.2)
     parser.add_argument("--test-ratio", type=float, default=0.1)
@@ -93,6 +98,7 @@ def main() -> None:
             "test": args.test_ratio,
         },
         feature_dialect=args.feature_dialect,
+        hardware_profile_path=Path(args.hardware_profile).resolve() if args.hardware_profile else None,
         drop_first_profile_batch=args.drop_first_profile_batch.strip().lower() not in {"0", "false", "no", "off"},
         profile_instability_metric=args.profile_instability_metric,
         profile_instability_threshold=args.profile_instability_threshold,

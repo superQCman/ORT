@@ -144,6 +144,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--hardware-profile",
+        default="",
+        help=(
+            "Optional hardware profile YAML used to derive cache/core hardware context. "
+            "Defaults to the project's built-in Kunpeng profile."
+        ),
+    )
+    parser.add_argument(
         "--drop-first-profile-batch",
         type=str2bool,
         default=True,
@@ -438,6 +446,7 @@ def build_rows_for_feature_csv(
     feature_csv: Path,
     case_meta: dict[str, Any],
     *,
+    hardware_profile_path: Path | None,
     drop_first_profile_batch: bool,
 ) -> pd.DataFrame:
     combo = feature_csv.stem
@@ -486,6 +495,7 @@ def build_rows_for_feature_csv(
     df = build_stage2_candidate_feature_frame(
         df,
         combo_profile_dir=case_meta["sweep_dir"] / "onnx_profiles" / combo,
+        hardware_profile_path=hardware_profile_path,
     )
     profile_stats_df = load_profile_label_stats(
         case_meta,
@@ -586,6 +596,7 @@ def build_dataset(
     seed: int,
     ratios: dict[str, float],
     feature_dialect: str,
+    hardware_profile_path: Path | None,
     drop_first_profile_batch: bool,
     profile_instability_metric: str,
     profile_instability_threshold: float,
@@ -629,6 +640,7 @@ def build_dataset(
             frame = build_rows_for_feature_csv(
                 feature_csv,
                 case_meta,
+                hardware_profile_path=hardware_profile_path,
                 drop_first_profile_batch=drop_first_profile_batch,
             )
             if not frame.empty:
@@ -749,6 +761,7 @@ def build_dataset(
         "feature_dialect_requested": feature_dialect,
         "feature_dialect": resolved_feature_dialect,
         "observed_feature_dialects": observed_feature_dialects,
+        "hardware_profile_path": str(hardware_profile_path.resolve()) if hardware_profile_path is not None else None,
         "case_count": len(case_entries),
         "case_file_counts": case_file_counts,
         "feature_count": len(feature_columns),
@@ -808,6 +821,7 @@ def main() -> None:
         seed=args.seed,
         ratios=ratios,
         feature_dialect=args.feature_dialect,
+        hardware_profile_path=Path(args.hardware_profile).resolve() if args.hardware_profile else None,
         drop_first_profile_batch=args.drop_first_profile_batch,
         profile_instability_metric=args.profile_instability_metric,
         profile_instability_threshold=args.profile_instability_threshold,
