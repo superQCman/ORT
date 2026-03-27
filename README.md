@@ -18,6 +18,11 @@
 - 支持手动挑选 case，便于只跑指定 case 子集
 - 默认剔除每个 profile 的第一个 batch，并按剩余 batch 的波动过滤不稳定单算子样本
 
+Analytical 设计文档：
+
+- [ANALYTICAL_MODEL_V2.md](/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md)
+  详细说明基于 ORT CPU kernel 的 `Gather`、`ReduceSum`、`Gemm`、`MatMul`、`Transpose`、`Concat` analytical model V2，包括伪代码、cache/latency 建模动机、新特征语义、参数可用性和整体流程图。
+
 ## 特征口径
 
 这里采用的是 E2E/competition 里 stage-1 baseline 的输入风格：

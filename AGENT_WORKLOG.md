@@ -486,3 +486,37 @@ Validation run:
 Open risks:
 - ...
 ```
+
+### 2026-03-27 - Add a dedicated Analytical Model V2 design document
+
+Request summary:
+- Add a new standalone document that explains Analytical Model V2 in detail.
+- Base the explanation on ORT CPU kernel behavior for `Gather`, `ReduceSum`, `Gemm`, `MatMul`, `Transpose`, and `Concat`.
+- Include modeling rationale, pseudocode, new-feature definitions, parameter availability in the current dataset, flowcharts, and the overall implementation/validation plan.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added `ANALYTICAL_MODEL_V2.md` as the project-local design document for the next-generation soft/hardware analytical feature stack.
+- The document now:
+  - explains why the current global `ana_*` family is insufficient
+  - maps ORT CPU kernel behavior to family-specific analytical models
+  - includes pseudocode for the six target operator families
+  - defines the proposed V2 analytical features and what each one means
+  - records, for each required parameter, whether it already exists in `dataset_full.csv`, can be reconstructed, or requires new export
+  - includes multiple Mermaid flowcharts for cache-tier decision logic, overall feature flow, and analytical-feature gating
+  - documents the recommended rollout and validation order
+- README now links directly to the new design document near the top-level project overview.
+
+Validation run:
+- `sed -n '1,260p' /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `cd /data/qc/dlrm/ORT/single_op_stage1_mlp && git diff --check`
+- `python3 - <<'PY' ... verify mermaid block count, pseudocode block count, and ORT source-link count in ANALYTICAL_MODEL_V2.md ... PY`
+- `python3 - <<'PY' ... inspect /tmp/single_op_ana_smoke_trace/feature_columns.json and dataset_full.csv columns to confirm which parameters are currently exported ... PY`
+
+Open risks:
+- The document is intentionally a design/spec artifact; it does not yet implement the proposed V2 family-specific analytical features in code.
+- Some parameters referenced by the document, such as explicit `M/N/K`, transpose regime labels, and concat input-byte summaries, are currently reconstructible from existing inputs but are not exported as dedicated dataset columns yet.
