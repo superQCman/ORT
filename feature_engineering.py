@@ -33,7 +33,7 @@ DTYPE_SIZES = {
     "int64": 8,
 }
 
-HARDWARE_PROFILE_PATH = Path(__file__).resolve().parent.parent / "model" / "hardware_profiles" / "kunpeng920_gem5.yaml"
+HARDWARE_PROFILE_PATH = Path(__file__).resolve().parent / "hardware_profile" / "kunpeng920_host_4socket.yaml"
 
 
 def normalize_node_name(node_name: str | float | int | None) -> str:
@@ -610,7 +610,7 @@ def load_hardware_features(profile_path: Path | None = None) -> dict[str, float]
     flat = _flatten_dict(profile)
     out: dict[str, float] = {}
     for key, value in flat.items():
-        if key.startswith("paper_cross_check") or key in {"profile_name", "source_config", "source_paper", "notes"}:
+        if key.startswith("paper_cross_check") or key.startswith("host_cross_check") or key in {"profile_name", "source_config", "source_paper", "notes"}:
             continue
         normalized = _normalize_profile_value(value)
         if isinstance(normalized, (int, float)) and normalized is not None and np.isfinite(float(normalized)):

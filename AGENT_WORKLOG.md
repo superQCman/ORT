@@ -314,6 +314,59 @@ Open risks:
 - The hardware profile parameter currently only affects the stage-2-style hardware/context features derived during dataset building; it does not automatically validate that a custom YAML contains every field needed for all downstream derived ratios.
 - The built-in YAML still lacks explicit instruction bit-width and memory bandwidth fields, so switching profiles currently changes cache/core topology more directly than ISA throughput assumptions.
 
+### 2026-03-27 - Move the default hardware profile into the project and seed it with host-plus-paper values
+
+Request summary:
+- Create a dedicated hardware-profile directory inside `single_op_stage1_mlp`.
+- Add a YAML profile that includes cache size/latency, memory bandwidth/latency, instruction width/latency, CPU frequency, and pipeline width.
+- Make dataset extraction use the project-local profile by default.
+- Check the local machine's actual architecture parameters and compare them with the cited Kunpeng papers.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/hardware_profile/kunpeng920_host_4socket.yaml`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The default hardware profile path now points to the project-local file `hardware_profile/kunpeng920_host_4socket.yaml` instead of the external `ORT/model/hardware_profiles` directory.
+- The new YAML keeps host-observable values for topology/cache sizes and adds paper-reference values for:
+  - memory bandwidth
+  - memory latency
+  - SIMD width
+  - FP instruction latency/throughput
+  - pipeline width
+- `load_hardware_features()` now ignores both `paper_cross_check` and `host_cross_check` sections so those audit values can be kept in the YAML without polluting model features.
+- `dataset_summary.json` now records the effective hardware profile path even when the default project-local profile is used implicitly.
+
+Validation run:
+- `lscpu`
+- `lscpu -C`
+- `numactl -H`
+- `grep -m 2 -E 'model name|cpu MHz|Features' /proc/cpuinfo`
+- `python3 - <<'PY' ... from feature_engineering import HARDWARE_PROFILE_PATH, load_hardware_features ... PY`
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/*.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_stage1_internal_hw_default2 --selected-cases case_9_4_4 --max-files-per-case 1 --feature-dialect auto`
+- Verified that `/tmp/single_op_stage1_internal_hw_default2/dataset_summary.json` records `/data/qc/dlrm/ORT/single_op_stage1_mlp/hardware_profile/kunpeng920_host_4socket.yaml`
+
+Observed host-versus-paper findings:
+- The local machine is genuinely `aarch64 / HiSilicon / Kunpeng-920`.
+- Directly observed local topology:
+  - `4 sockets`
+  - `48 cores per socket`
+  - `8 NUMA nodes`
+  - `64KiB L1I`, `64KiB L1D`, `512KiB L2`
+  - `24MiB L3` shared by each `24-core` NUMA group
+- These observations are only partially consistent with the cited papers:
+  - cache sizes at L1/L2 and the 4-wide pipeline story are consistent
+  - the local host topology does not match the paper's single-socket / 2-socket examples exactly
+  - the local host exposes `48 cores per socket` and `24MiB L3 per 24-core NUMA group`, while the papers/reference materials describe different socket-level totals
+
+Open risks:
+- CPU frequency could not be read reliably from the local kernel interfaces on this host, so the YAML keeps `2.6GHz` as a paper/reference value rather than a direct machine readout.
+- Cache latency and FP instruction latency are still reference values from papers or prior approximations, not locally measured hardware counters on this machine.
+
 ### Entry Template
 
 Use this format for future updates:

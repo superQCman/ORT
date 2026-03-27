@@ -25,6 +25,7 @@ from feature_contract import (
     feature_columns_for_dialect,
 )
 from feature_engineering import (
+    HARDWARE_PROFILE_PATH,
     add_engineered_features,
     build_stage2_candidate_feature_frame,
     extract_node_scope,
@@ -604,6 +605,9 @@ def build_dataset(
 ) -> dict[str, Any]:
     if abs(sum(ratios.values()) - 1.0) > 1e-9:
         raise ValueError(f"Split ratios must sum to 1.0, got {ratios}")
+    effective_hardware_profile_path = (
+        hardware_profile_path.resolve() if hardware_profile_path is not None else HARDWARE_PROFILE_PATH.resolve()
+    )
 
     all_case_entries = discover_case_entries()
     if not all_case_entries:
@@ -640,7 +644,7 @@ def build_dataset(
             frame = build_rows_for_feature_csv(
                 feature_csv,
                 case_meta,
-                hardware_profile_path=hardware_profile_path,
+                hardware_profile_path=effective_hardware_profile_path,
                 drop_first_profile_batch=drop_first_profile_batch,
             )
             if not frame.empty:
@@ -761,7 +765,7 @@ def build_dataset(
         "feature_dialect_requested": feature_dialect,
         "feature_dialect": resolved_feature_dialect,
         "observed_feature_dialects": observed_feature_dialects,
-        "hardware_profile_path": str(hardware_profile_path.resolve()) if hardware_profile_path is not None else None,
+        "hardware_profile_path": str(effective_hardware_profile_path),
         "case_count": len(case_entries),
         "case_file_counts": case_file_counts,
         "feature_count": len(feature_columns),

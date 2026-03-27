@@ -171,6 +171,12 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py \
 
 这会影响 `hw_ratio_*` 和 `comp_feat_pressure_*` 这类基于 cache/core 容量推导的特征。实际使用的 profile 路径会写进 `dataset_summary.json`。
 
+当前默认内置 profile 已经移到本项目目录下：
+
+- [kunpeng920_host_4socket.yaml](/data/qc/dlrm/ORT/single_op_stage1_mlp/hardware_profile/kunpeng920_host_4socket.yaml)
+
+这份配置优先采用本机可直接观察到的 Kunpeng-920 拓扑信息，例如 `4 sockets / 192 cores / 8 NUMA / 24MiB L3 per NUMA group`；本机无法直接读出的字段，例如 cache latency、memory bandwidth、FP instruction latency，则保留论文参考值并在 YAML 备注里注明来源。
+
 手动指定 case：
 
 ```bash
