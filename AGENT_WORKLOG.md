@@ -181,6 +181,35 @@ Open risks:
 - The keep/review decision is currently based on a representative all-case sample (`max-files-per-case=20`) rather than the full dataset, because the full rebuild with the new stage-2 candidate extraction path was too slow for this turn.
 - The promoted hardware ratio features are partially collinear with existing working-set / size features, so downstream retraining should confirm whether they provide incremental gain.
 
+### 2026-03-27 - Add per-op-type val/test metric analysis
+
+Request summary:
+- Add a local script that analyzes validation and test prediction quality by `op_type`.
+- Keep the workflow self-contained inside this project and make it easy to run from an existing model artifact directory.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added `analyze_op_type_metrics.py` to load `predictions_val.csv` and `predictions_test.csv` from a model directory.
+- The script automatically resolves `data_dir` from `metrics.json` unless `--data-dir` is passed explicitly.
+- If prediction CSVs do not already contain `op_type`, the script joins them back to the matching `val.csv` / `test.csv` rows using `row_uid`.
+- The script now exports, for each analyzed split:
+  - a full per-`op_type` metric table with `row_count`, `mae_us`, `rmse_us`, `r2`, `mape`, `median_ape`, `p90_ape`, target/prediction mean and median, and mean bias
+  - a ranked table filtered by a configurable minimum sample count
+  - a Top-N worst-op-type bar chart using a configurable ranking metric
+- README now documents the new analysis entry point and output files.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/*.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py --model-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/model_all_clean_2_stage_2`
+
+Open risks:
+- The script assumes `row_uid` remains a stable one-to-one key between prediction CSVs and dataset split CSVs.
+- Worst-op-type ranking can be dominated by low-support operator types if `--min-count-for-ranking` is set too low.
+
 ### Entry Template
 
 Use this format for future updates:

@@ -259,6 +259,45 @@ provider 选择规则：
 - `--provider openvino`：强制要求 OpenVINO NPU provider。
 - `--provider cpu`：只在 CPU 上跑。
 
+## 按算子类型分析 val/test 指标
+
+如果你想看验证集和测试集中每种 `op_type` 的聚合指标，可以直接分析训练产物里的预测表：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py \
+  --model-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/model_all_clean_2_stage_2
+```
+
+默认行为：
+
+- 自动从 `metrics.json` 读取训练使用的 `data_dir`
+- 把 `predictions_val.csv`、`predictions_test.csv` 和对应的 `val.csv`、`test.csv` 按 `row_uid` 对齐
+- 输出每种 `op_type` 的 `row_count`、`mae_us`、`rmse_us`、`r2`、`mape`、`median_ape`、`p90_ape`、目标均值、预测均值等指标
+- 额外导出一个按误差排序的 ranked 表和 Top-N 柱状图
+
+默认输出到：
+
+```text
+<model-dir>/op_type_metrics/
+├── op_type_metrics_val.csv
+├── op_type_metrics_val.ranked.csv
+├── op_type_metrics_val.top10_mape.png
+├── op_type_metrics_test.csv
+├── op_type_metrics_test.ranked.csv
+├── op_type_metrics_test.top10_mape.png
+└── op_type_metrics_summary.json
+```
+
+如果你想调整“最差算子类型”的排序口径和最小样本数，可以这样跑：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py \
+  --model-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/model_all_clean_2_stage_2 \
+  --ranking-metric rmse_us \
+  --min-count-for-ranking 50 \
+  --top-n 12
+```
+
 如果是 Ascend NPU 环境，可以显式指定：
 
 ```bash
