@@ -11,12 +11,14 @@ import numpy as np
 import pandas as pd
 
 from feature_contract import (
+    ANALYTICAL_RESIDUAL_TARGET_COLUMN,
     BASELINE_CATEGORICAL_FEATURES,
     DEFAULT_SPLIT_RATIOS,
     FEATURE_DIALECTS,
     GROUP_COLUMN,
     METADATA_COLUMNS,
     PROFILE_INSTABILITY_METRICS,
+    SUPPORTED_TARGET_COLUMNS,
     TARGET_COLUMN,
     TRACE_FEATURE_SOURCE_COLUMNS,
     analysis_numeric_features_for_dialect,
@@ -508,6 +510,10 @@ def build_rows_for_feature_csv(
     df = df.merge(profile_stats_df, on="node_name_normalized", how="left")
 
     df[TARGET_COLUMN] = pd.to_numeric(df.get("profile_label_kept_batch_mean_us"), errors="coerce")
+    ana_base_us = pd.to_numeric(df.get("ana_base_us"), errors="coerce").fillna(1e-3).clip(lower=1e-3)
+    df[ANALYTICAL_RESIDUAL_TARGET_COLUMN] = np.log(
+        df[TARGET_COLUMN].clip(lower=1e-9) / ana_base_us
+    )
     df["row_uid"] = [
         make_row_uid(case_meta["source_name"], combo, op_idx, node)
         for op_idx, node in zip(df["op_idx"], df["node_name"])
@@ -583,8 +589,9 @@ def ordered_output_columns(
     for column in analysis_numeric_features:
         if column in df.columns and column not in columns:
             columns.append(column)
-    if TARGET_COLUMN in df.columns:
-        columns.append(TARGET_COLUMN)
+    for column in SUPPORTED_TARGET_COLUMNS:
+        if column in df.columns and column not in columns:
+            columns.append(column)
     return columns
 
 
@@ -739,6 +746,19 @@ def build_dataset(
         "categorical_features": list(BASELINE_CATEGORICAL_FEATURES),
         "numeric_features": baseline_numeric_features,
         "analysis_numeric_features": analysis_numeric_features,
+        "analytical_feature_columns": [
+            "ana_cache_fit_level",
+            "ana_expected_latency_ns",
+            "ana_compute_ops",
+            "ana_roofline_base_us",
+            "ana_base_us",
+            "ana_mem_bw_time_us",
+            "ana_latency_proxy_us",
+            "ana_ridge_gap",
+        ],
+        "analytical_base_column": "ana_base_us",
+        "residual_target_column": ANALYTICAL_RESIDUAL_TARGET_COLUMN,
+        "target_columns": list(SUPPORTED_TARGET_COLUMNS),
         "all_features": feature_columns,
         "target_column": TARGET_COLUMN,
         "group_column": group_column,

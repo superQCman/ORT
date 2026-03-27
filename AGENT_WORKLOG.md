@@ -404,6 +404,66 @@ Open risks:
 - The single-NUMA bandwidth value is still a derived approximation from the paper's socket-level bandwidth, not a locally measured NUMA-specific STREAM result on this host.
 - Some field names such as `cores_per_die` and `l3_per_die` are retained for backward compatibility with the existing feature-engineering code even though the current modeling scope is really a NUMA-local L3 sharing domain.
 
+### 2026-03-27 - Add cache-tier analytical features and residual-target training mode
+
+Request summary:
+- Implement the soft/hardware fusion refinement plan inside `single_op_stage1_mlp` only.
+- Add a minimal analytical feature family centered on cache-tier fit and expected latency.
+- Keep the direct MLP conservative by promoting only `ana_cache_fit_level` and `ana_expected_latency_ns` into the training contract.
+- Export the broader `ana_*` family for analysis/residual support, and add an `analytical_residual` training mode built on `ana_base_us`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_contract.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/infer_mlp_onnx.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added two direct analytical features to both `trace` and `no_trace` training contracts:
+  - `ana_cache_fit_level`
+  - `ana_expected_latency_ns`
+- Added exported analytical support columns:
+  - `ana_compute_ops`
+  - `ana_roofline_base_us`
+  - `ana_base_us`
+  - `ana_mem_bw_time_us`
+  - `ana_latency_proxy_us`
+  - `ana_ridge_gap`
+- The analytical feature family now follows fixed soft/hardware rules:
+  - cache fit is determined by `working_set / active_cache_capacity`
+  - expected latency is selected from `L1/L2/L3 response latency` or `local_mem_delay_ns`
+  - compute baseline uses `vector_sp_fma` throughput, SIMD width, CPU frequency, and active cores
+  - `Gemm` and `MatMul` now share the same gemm-like shape recovery path for analytical compute estimation
+- Dataset export now includes:
+  - `label_operator_residual_log = log(label_operator_actual_dur_us / ana_base_us)`
+  - manifest fields for `analytical_base_column`, `residual_target_column`, and analytical feature columns
+- `train_mlp.py` now supports:
+  - `--target-mode direct_us`
+  - `--target-mode analytical_residual`
+- In analytical residual mode:
+  - the model trains on `label_operator_residual_log`
+  - predictions are reconstructed as `ana_base_us * exp(pred_residual_log)`
+  - predictions CSVs now carry `ana_base_us` and residual-target columns when applicable
+- ONNX inference now mirrors the same reconstruction logic, so residual-trained exports remain deployable.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_contract.py /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py /data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py /data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py /data/qc/dlrm/ORT/single_op_stage1_mlp/infer_mlp_onnx.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/infer_mlp_onnx.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_ana_smoke_trace --selected-cases case_1_1_1 --max-files-per-case 1`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_ana_smoke_notrace --selected-cases case_9_4_4 --feature-dialect no_trace --max-files-per-case 1`
+- Verified both smoke datasets contain the new `ana_*` columns, `label_operator_residual_log`, and manifest analytical metadata.
+- Verified residual reconstruction helper with `ana_base_us=[10, 100]` and residual logs `[0, log(2)]` produces `[10, 200]`.
+
+Open risks:
+- This environment still does not have `torch` installed, so a full end-to-end MLP retraining run could not be executed in this turn.
+- The newly exported analysis-only `ana_*` columns are intentionally not yet part of the direct feature contract; future ablations should confirm whether any of them deserve promotion beyond the current cache-tier pair.
+
 ### Entry Template
 
 Use this format for future updates:

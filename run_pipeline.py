@@ -73,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--npu-device-id", type=int, default=0)
     parser.add_argument("--early-stopping-patience", type=int, default=12)
     parser.add_argument("--disable-log-target", action="store_true")
+    parser.add_argument(
+        "--target-mode",
+        choices=["direct_us", "analytical_residual"],
+        default="direct_us",
+        help="Train directly on operator latency or on analytical residuals.",
+    )
     parser.add_argument("--disable-onnx-export", action="store_true")
     parser.add_argument("--onnx-opset", type=int, default=17)
     return parser.parse_args()
@@ -114,6 +120,7 @@ def main() -> None:
         learning_rate_init=args.learning_rate_init,
         seed=args.seed,
         log_target=not args.disable_log_target,
+        target_mode=args.target_mode,
         train_device=args.train_device,
         npu_device_id=args.npu_device_id,
         early_stopping_patience=args.early_stopping_patience,

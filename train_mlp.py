@@ -11,6 +11,7 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from feature_contract import (
+    ANALYTICAL_RESIDUAL_TARGET_COLUMN,
     BASELINE_CATEGORICAL_FEATURES,
     BASELINE_NUMERIC_FEATURES,
     DEFAULT_FEATURE_DIALECT,
@@ -66,6 +67,12 @@ def parse_args() -> argparse.Namespace:
         "--disable-log-target",
         action="store_true",
         help="Train directly on microseconds instead of log1p(target).",
+    )
+    parser.add_argument(
+        "--target-mode",
+        choices=["direct_us", "analytical_residual"],
+        default="direct_us",
+        help="Train directly on operator latency or on log(label_us / ana_base_us).",
     )
     parser.add_argument(
         "--disable-onnx-export",
@@ -131,12 +138,16 @@ def load_feature_manifest(data_dir: Path) -> dict[str, Any]:
             "feature_dialect": DEFAULT_FEATURE_DIALECT,
             "numeric_features": list(BASELINE_NUMERIC_FEATURES),
             "categorical_features": list(BASELINE_CATEGORICAL_FEATURES),
+            "analytical_base_column": "ana_base_us",
+            "residual_target_column": ANALYTICAL_RESIDUAL_TARGET_COLUMN,
         }
     with manifest_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     payload.setdefault("feature_dialect", DEFAULT_FEATURE_DIALECT)
     payload.setdefault("numeric_features", list(BASELINE_NUMERIC_FEATURES))
     payload.setdefault("categorical_features", list(BASELINE_CATEGORICAL_FEATURES))
+    payload.setdefault("analytical_base_column", "ana_base_us")
+    payload.setdefault("residual_target_column", ANALYTICAL_RESIDUAL_TARGET_COLUMN)
     return payload
 
 
@@ -278,6 +289,70 @@ def inverse_transform_target(values: np.ndarray, log_target: bool) -> np.ndarray
     return np.expm1(target).astype(np.float32)
 
 
+def resolve_target_mode_config(
+    feature_manifest: dict[str, Any],
+    *,
+    target_mode: str,
+    log_target_requested: bool,
+) -> dict[str, Any]:
+    mode = str(target_mode).strip().lower()
+    if mode == "direct_us":
+        return {
+            "target_mode": mode,
+            "train_target_column": TARGET_COLUMN,
+            "model_log_target": bool(log_target_requested),
+            "analytical_base_column": "",
+            "prediction_reconstruction": "direct_us",
+        }
+    if mode == "analytical_residual":
+        analytical_base_column = str(feature_manifest.get("analytical_base_column", "ana_base_us"))
+        residual_target_column = str(
+            feature_manifest.get("residual_target_column", ANALYTICAL_RESIDUAL_TARGET_COLUMN)
+        )
+        return {
+            "target_mode": mode,
+            "train_target_column": residual_target_column,
+            "model_log_target": False,
+            "analytical_base_column": analytical_base_column,
+            "prediction_reconstruction": f"{analytical_base_column} * exp({residual_target_column})",
+        }
+    raise ValueError(f"Unsupported target_mode={target_mode!r}")
+
+
+def resolve_analytical_base_values(df: pd.DataFrame, analytical_base_column: str) -> np.ndarray:
+    if not analytical_base_column or analytical_base_column not in df.columns:
+        raise KeyError(
+            f"Analytical residual mode requires column {analytical_base_column!r} in the dataset split table"
+        )
+    return (
+        pd.to_numeric(df[analytical_base_column], errors="coerce")
+        .fillna(1e-3)
+        .clip(lower=1e-3)
+        .to_numpy(dtype=np.float32)
+    )
+
+
+def reconstruct_latency_predictions(
+    raw_predictions: np.ndarray,
+    df: pd.DataFrame,
+    *,
+    target_mode: str,
+    log_target: bool,
+    analytical_base_column: str,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    if target_mode == "direct_us":
+        predictions = inverse_transform_target(raw_predictions, log_target=log_target)
+        return predictions.astype(np.float32), None
+
+    if target_mode == "analytical_residual":
+        residual_log = np.asarray(raw_predictions, dtype=np.float32)
+        base_us = resolve_analytical_base_values(df, analytical_base_column)
+        predictions = base_us * np.exp(np.clip(residual_log, a_min=-20.0, a_max=20.0))
+        return predictions.astype(np.float32), residual_log
+
+    raise ValueError(f"Unsupported target_mode={target_mode!r}")
+
+
 class TorchMLPRegressor:
     def __init__(self, input_dim: int, hidden_layers: tuple[int, ...], nn_module: Any) -> None:
         layers: list[Any] = []
@@ -363,13 +438,28 @@ def save_predictions(
     df: pd.DataFrame,
     predictions: np.ndarray,
     output_dir: Path,
+    *,
+    target_mode: str,
+    train_target_column: str,
+    analytical_base_column: str = "",
+    predicted_model_target: np.ndarray | None = None,
 ) -> dict[str, float]:
     pred = np.clip(predictions, a_min=0.0, a_max=None)
     y_true = pd.to_numeric(df[TARGET_COLUMN], errors="coerce").to_numpy(dtype=float)
     columns = [column for column in METADATA_COLUMNS if column in df.columns]
     prediction_df = df[columns].copy()
+    prediction_df["target_mode"] = target_mode
     prediction_df["target_us"] = y_true
     prediction_df["pred_us"] = pred
+    if analytical_base_column and analytical_base_column in df.columns:
+        prediction_df[analytical_base_column] = pd.to_numeric(
+            df[analytical_base_column],
+            errors="coerce",
+        )
+    if train_target_column != TARGET_COLUMN and train_target_column in df.columns:
+        prediction_df[train_target_column] = pd.to_numeric(df[train_target_column], errors="coerce")
+    if predicted_model_target is not None and train_target_column != TARGET_COLUMN:
+        prediction_df[f"pred_{train_target_column}"] = np.asarray(predicted_model_target, dtype=float)
     prediction_df["abs_error_us"] = np.abs(pred - y_true)
     prediction_df["ape"] = prediction_df["abs_error_us"] / np.clip(prediction_df["target_us"], 1e-9, None)
     prediction_df.to_csv(output_dir / f"predictions_{split_name}.csv", index=False)
@@ -496,6 +586,7 @@ def train_model(
     learning_rate_init: float,
     seed: int,
     log_target: bool,
+    target_mode: str = "direct_us",
     train_device: str = "auto",
     npu_device_id: int = 0,
     early_stopping_patience: int = 12,
@@ -509,6 +600,14 @@ def train_model(
 
     tables = load_split_tables(data_dir)
     feature_manifest = load_feature_manifest(data_dir)
+    target_mode_config = resolve_target_mode_config(
+        feature_manifest,
+        target_mode=target_mode,
+        log_target_requested=log_target,
+    )
+    train_target_column = str(target_mode_config["train_target_column"])
+    model_log_target = bool(target_mode_config["model_log_target"])
+    analytical_base_column = str(target_mode_config["analytical_base_column"])
     numeric_features = [
         column
         for column in feature_manifest["numeric_features"]
@@ -521,6 +620,14 @@ def train_model(
     ]
     if not numeric_features and not categorical_features:
         raise RuntimeError("No feature columns were found in the training table")
+    for split_name, frame in tables.items():
+        if train_target_column not in frame.columns:
+            raise KeyError(
+                f"Target column {train_target_column!r} is missing from {split_name}.csv. "
+                f"Requested target_mode={target_mode!r}."
+            )
+        if target_mode == "analytical_residual":
+            resolve_analytical_base_values(frame, analytical_base_column)
 
     preprocessor_state = fit_preprocessor_state(
         train_df=tables["train"],
@@ -536,9 +643,13 @@ def train_model(
         split_name: pd.to_numeric(frame[TARGET_COLUMN], errors="coerce").to_numpy(dtype=np.float32)
         for split_name, frame in tables.items()
     }
+    model_target_arrays = {
+        split_name: pd.to_numeric(frame[train_target_column], errors="coerce").to_numpy(dtype=np.float32)
+        for split_name, frame in tables.items()
+    }
     transformed_targets = {
-        split_name: transform_target(targets, log_target=log_target)
-        for split_name, targets in target_arrays.items()
+        split_name: transform_target(targets, log_target=model_log_target)
+        for split_name, targets in model_target_arrays.items()
     }
 
     device = select_training_device(torch, torch_npu, train_device, npu_device_id)
@@ -621,8 +732,23 @@ def train_model(
             device=device,
             torch=torch,
         )
-        predictions = inverse_transform_target(raw_predictions, log_target=log_target)
-        metrics[split_name] = save_predictions(split_name, frame, predictions, output_dir)
+        predictions, predicted_model_target = reconstruct_latency_predictions(
+            raw_predictions,
+            frame,
+            target_mode=target_mode,
+            log_target=model_log_target,
+            analytical_base_column=analytical_base_column,
+        )
+        metrics[split_name] = save_predictions(
+            split_name,
+            frame,
+            predictions,
+            output_dir,
+            target_mode=target_mode,
+            train_target_column=train_target_column,
+            analytical_base_column=analytical_base_column,
+            predicted_model_target=predicted_model_target,
+        )
 
     model_path = output_dir / "mlp_model.pt"
     torch.save(
@@ -630,8 +756,11 @@ def train_model(
             "state_dict": model.state_dict(),
             "hidden_layers": list(hidden_layers),
             "input_dim": int(preprocessor_state["input_dim"]),
-            "log_target": log_target,
+            "log_target": model_log_target,
             "target_column": TARGET_COLUMN,
+            "train_target_column": train_target_column,
+            "target_mode": target_mode,
+            "analytical_base_column": analytical_base_column,
         },
         model_path,
     )
@@ -660,6 +789,10 @@ def train_model(
         "model_type": "pytorch_mlp",
         "feature_dialect": feature_manifest.get("feature_dialect", DEFAULT_FEATURE_DIALECT),
         "target_column": TARGET_COLUMN,
+        "train_target_column": train_target_column,
+        "target_mode": target_mode,
+        "prediction_reconstruction": target_mode_config["prediction_reconstruction"],
+        "analytical_base_column": analytical_base_column,
         "feature_count": len(numeric_features) + len(categorical_features),
         "input_dim_after_encoding": int(preprocessor_state["input_dim"]),
         "numeric_features": numeric_features,
@@ -673,7 +806,8 @@ def train_model(
         "train_device": str(device),
         "torch_npu_enabled": bool(torch_npu is not None),
         "npu_device_id": int(npu_device_id),
-        "log_target": log_target,
+        "log_target_requested": log_target,
+        "log_target": model_log_target,
         "best_epoch": best_epoch,
         "best_validation_loss": best_val_loss,
         "epochs_trained": len(train_history),
@@ -711,6 +845,7 @@ def main() -> None:
         learning_rate_init=args.learning_rate_init,
         seed=args.seed,
         log_target=not args.disable_log_target,
+        target_mode=args.target_mode,
         train_device=args.train_device,
         npu_device_id=args.npu_device_id,
         early_stopping_patience=args.early_stopping_patience,

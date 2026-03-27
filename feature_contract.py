@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 TARGET_COLUMN = "label_operator_actual_dur_us"
+ANALYTICAL_RESIDUAL_TARGET_COLUMN = "label_operator_residual_log"
 GROUP_COLUMN = "sample_group"
 PROFILE_INSTABILITY_METRICS = (
     "last2_range_ratio",
@@ -17,6 +18,11 @@ BASELINE_CATEGORICAL_FEATURES = (
     "arch_embedding_size",
     "arch_mlp_bot",
     "arch_mlp_top",
+)
+
+DIRECT_ANALYTICAL_NUMERIC_FEATURES = (
+    "ana_cache_fit_level",
+    "ana_expected_latency_ns",
 )
 
 SHARED_BASELINE_NUMERIC_FEATURES = (
@@ -43,6 +49,7 @@ SHARED_BASELINE_NUMERIC_FEATURES = (
     "local_ctx_same_op_overlap_ratio_mean",
     "comp_feat_pressure_ws_to_l2_ratio",
     "comp_feat_pressure_ws_to_l3_ratio",
+    *DIRECT_ANALYTICAL_NUMERIC_FEATURES,
 )
 
 TRACE_ONLY_NUMERIC_FEATURES = (
@@ -58,6 +65,18 @@ TRACE_ONLY_NUMERIC_FEATURES = (
     "opc_math_ratio",
     "opc_simd_ratio",
     "opc_store_ratio",
+)
+
+ANALYTICAL_RESIDUAL_BASELINE_NUMERIC_FEATURES = (
+    "ana_compute_ops",
+    "ana_roofline_base_us",
+    "ana_base_us",
+)
+
+ANALYTICAL_ANALYSIS_ONLY_NUMERIC_FEATURES = (
+    "ana_mem_bw_time_us",
+    "ana_latency_proxy_us",
+    "ana_ridge_gap",
 )
 
 STAGE2_CANDIDATE_NUMERIC_FEATURES = (
@@ -102,7 +121,12 @@ def baseline_numeric_features_for_dialect(feature_dialect: str) -> tuple[str, ..
 
 
 def analysis_numeric_features_for_dialect(feature_dialect: str) -> list[str]:
-    return list(baseline_numeric_features_for_dialect(feature_dialect) + STAGE2_CANDIDATE_NUMERIC_FEATURES)
+    return list(
+        baseline_numeric_features_for_dialect(feature_dialect)
+        + ANALYTICAL_RESIDUAL_BASELINE_NUMERIC_FEATURES
+        + ANALYTICAL_ANALYSIS_ONLY_NUMERIC_FEATURES
+        + STAGE2_CANDIDATE_NUMERIC_FEATURES
+    )
 
 
 def feature_columns_for_dialect(feature_dialect: str) -> list[str]:
@@ -142,6 +166,11 @@ METADATA_COLUMNS = (
     "profile_last2_abs_diff_us",
     "profile_last2_range_ratio",
     "profile_last2_cv",
+)
+
+SUPPORTED_TARGET_COLUMNS = (
+    TARGET_COLUMN,
+    ANALYTICAL_RESIDUAL_TARGET_COLUMN,
 )
 
 DEFAULT_SPLIT_RATIOS = {

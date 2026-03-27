@@ -425,7 +425,7 @@ def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
     activation_bytes = out["activation_size"].fillna(0).clip(lower=0)
     parameter_bytes = out["parameter_size"].fillna(0).clip(lower=0)
     op_type = out["op_type"].fillna("").astype(str)
-    gemm_mask = op_type.eq("Gemm")
+    gemm_mask = op_type.isin(["Gemm", "MatMul"])
     reduction_mask = op_type.eq("ReduceSum")
     gather_mask = op_type.eq("Gather")
 
@@ -656,6 +656,118 @@ def add_operator_hardware_context(
     return out
 
 
+def _numeric_series(df: pd.DataFrame, column: str, default: float = 0.0) -> pd.Series:
+    if column in df.columns:
+        return pd.to_numeric(df[column], errors="coerce").fillna(default)
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+def add_analytical_hardware_software_features(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    feat_io_bytes_sum = _numeric_series(out, "feat_io_bytes_sum", 0.0).clip(lower=0.0)
+    feat_output_elements = _numeric_series(out, "feat_output_elements", 0.0).clip(lower=0.0)
+    active_cores = _numeric_series(out, "hw_core_active_cores", 1.0).clip(lower=1.0)
+    cpu_clock_ghz = _numeric_series(out, "hw_core_cpu_clock", 1.0).clip(lower=1e-6)
+
+    throughput_fma = _numeric_series(
+        out,
+        "hw_instruction_fp_throughput_per_cycle_vector_sp_fma",
+        np.nan,
+    )
+    throughput_mul = _numeric_series(
+        out,
+        "hw_instruction_fp_throughput_per_cycle_vector_sp_mul",
+        0.0,
+    )
+    vector_sp_throughput = throughput_fma.where(throughput_fma > 0.0, throughput_mul).clip(lower=0.0)
+    simd_width_bits = _numeric_series(out, "hw_instruction_simd_width_bits", 128.0).clip(lower=32.0)
+    peak_fp32_ops_per_us = vector_sp_throughput * (simd_width_bits / 32.0) * 2.0 * cpu_clock_ghz * 1e3 * active_cores
+
+    compute_ops = pd.Series(0.0, index=out.index, dtype=float)
+    op_type = out.get("op_type", pd.Series("", index=out.index)).fillna("").astype(str)
+    gemm_like_mask = op_type.isin(["Gemm", "MatMul"])
+    reduction_mask = op_type.eq("ReduceSum")
+    elementwise_mask = op_type.isin(["Relu", "Add", "Mul"])
+    sigmoid_mask = op_type.eq("Sigmoid")
+
+    gemm_compute_ops = (
+        2.0
+        * _numeric_series(out, "feat_gemm_m", 0.0).clip(lower=0.0)
+        * _numeric_series(out, "feat_gemm_n", 0.0).clip(lower=0.0)
+        * _numeric_series(out, "feat_gemm_k", 0.0).clip(lower=0.0)
+    )
+    compute_ops = compute_ops.where(~gemm_like_mask, gemm_compute_ops)
+    compute_ops = compute_ops.where(
+        ~reduction_mask,
+        _numeric_series(out, "feat_reduction_work_items", 0.0).clip(lower=0.0),
+    )
+    compute_ops = compute_ops.where(~elementwise_mask, feat_output_elements)
+    compute_ops = compute_ops.where(~sigmoid_mask, 4.0 * feat_output_elements)
+
+    mem_bandwidth_bytes_per_us = _numeric_series(out, "hw_memory_bandwidth_gb_s_total", 0.0).clip(lower=1e-6) * 1e3
+    compute_time_us = compute_ops / peak_fp32_ops_per_us.clip(lower=1e-6)
+    mem_bw_time_us = feat_io_bytes_sum / mem_bandwidth_bytes_per_us
+    roofline_base_us = np.maximum(
+        compute_time_us.to_numpy(dtype=float),
+        mem_bw_time_us.to_numpy(dtype=float),
+    )
+
+    l1_ratio = _numeric_series(out, "hw_ratio_working_set_to_l1d_active_bytes", np.inf).replace([np.inf, -np.inf], np.inf)
+    l2_ratio = _numeric_series(out, "hw_ratio_working_set_to_l2_active_bytes", np.inf).replace([np.inf, -np.inf], np.inf)
+    l3_ratio = _numeric_series(out, "hw_ratio_working_set_to_l3_active_bytes", np.inf).replace([np.inf, -np.inf], np.inf)
+    cache_fit_level = np.select(
+        [
+            l1_ratio.to_numpy(dtype=float) <= 1.0,
+            l2_ratio.to_numpy(dtype=float) <= 1.0,
+            l3_ratio.to_numpy(dtype=float) <= 1.0,
+        ],
+        [1.0, 2.0, 3.0],
+        default=4.0,
+    )
+
+    l1_latency_ns = _numeric_series(out, "hw_cache_l1d_response_latency_cycles", 0.0) / cpu_clock_ghz
+    l2_latency_ns = _numeric_series(out, "hw_cache_l2_response_latency_cycles", 0.0) / cpu_clock_ghz
+    l3_latency_ns = _numeric_series(out, "hw_cache_l3_per_die_response_latency_cycles", 0.0) / cpu_clock_ghz
+    dram_latency_ns = _numeric_series(out, "hw_memory_local_mem_delay_ns", 0.0).clip(lower=0.0)
+    expected_latency_ns = np.select(
+        [
+            cache_fit_level == 1.0,
+            cache_fit_level == 2.0,
+            cache_fit_level == 3.0,
+        ],
+        [
+            l1_latency_ns.to_numpy(dtype=float),
+            l2_latency_ns.to_numpy(dtype=float),
+            l3_latency_ns.to_numpy(dtype=float),
+        ],
+        default=dram_latency_ns.to_numpy(dtype=float),
+    )
+
+    cacheline_bytes = _numeric_series(out, "hw_cache_cacheline_bytes", 64.0).clip(lower=1.0)
+    access_units = feat_io_bytes_sum / cacheline_bytes
+    latency_proxy_us = (
+        access_units.to_numpy(dtype=float)
+        * expected_latency_ns
+        / 1000.0
+        / active_cores.to_numpy(dtype=float)
+    )
+
+    arithmetic_intensity = compute_ops / feat_io_bytes_sum.clip(lower=1.0)
+    ridge_point_ops_per_byte = peak_fp32_ops_per_us / mem_bandwidth_bytes_per_us
+    ridge_gap = arithmetic_intensity / ridge_point_ops_per_byte.clip(lower=1e-6)
+
+    out["ana_cache_fit_level"] = cache_fit_level.astype(float)
+    out["ana_expected_latency_ns"] = expected_latency_ns.astype(float)
+    out["ana_compute_ops"] = compute_ops.to_numpy(dtype=float)
+    out["ana_mem_bw_time_us"] = mem_bw_time_us.to_numpy(dtype=float)
+    out["ana_latency_proxy_us"] = latency_proxy_us.astype(float)
+    out["ana_ridge_gap"] = ridge_gap.to_numpy(dtype=float)
+    out["ana_roofline_base_us"] = roofline_base_us.astype(float)
+    out["ana_base_us"] = np.maximum(roofline_base_us, 1e-3).astype(float)
+    return out
+
+
 def _robust_mean(series: pd.Series) -> float:
     clean = pd.to_numeric(series, errors="coerce").replace([np.inf, -np.inf], np.nan).dropna()
     if clean.empty:
@@ -878,4 +990,4 @@ def build_stage2_candidate_feature_frame(
         feat_working_set_bytes * local_active_ops,
         pd.to_numeric(out.get("hw_cache_l3_active_bytes", 0.0), errors="coerce").fillna(0.0),
     )
-    return out
+    return add_analytical_hardware_software_features(out)

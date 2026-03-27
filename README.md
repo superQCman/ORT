@@ -72,6 +72,8 @@
 | `local_ctx_same_op_overlap_ratio_mean` | 该算子与同类型算子在 branch-parallel 时间线上发生重叠的平均比例。 |
 | `comp_feat_pressure_ws_to_l2_ratio` | 考虑本地并发活跃算子数放大后的工作集压力，再除以活跃 L2 容量。 |
 | `comp_feat_pressure_ws_to_l3_ratio` | 考虑本地并发活跃算子数放大后的工作集压力，再除以活跃 L3 容量。 |
+| `ana_cache_fit_level` | Analytical cache-tier 特征。按工作集是否能落进活跃 L1/L2/L3，编码成 `1/2/3/4`。 |
+| `ana_expected_latency_ns` | 根据 `ana_cache_fit_level` 选择的预期访问时延。L1/L2/L3 用各级 response latency，超出 L3 后退化到本地内存时延。 |
 
 目标列：
 
@@ -84,6 +86,15 @@
 - `output_size`、`activation_size`、`parameter_size` 当前都按字节理解。
 - `feat_*elements*` 这类特征是用字节数除以 `4` 近似得到元素个数，因此默认按 `float32` 大小估算。
 - `feat_reduction_*` 只对 `ReduceSum` 类算子有意义，其他算子会补 `0`。
+- `ana_cache_fit_level` 和 `ana_expected_latency_ns` 是当前正式进入主 MLP 合同的 analytical 特征。
+- 另外还会导出一批 analysis-only / residual-support 的 `ana_*` 列，例如：
+  - `ana_compute_ops`
+  - `ana_roofline_base_us`
+  - `ana_base_us`
+  - `ana_mem_bw_time_us`
+  - `ana_latency_proxy_us`
+  - `ana_ridge_gap`
+- 这批 analysis-only `ana_*` 默认不会进入 direct MLP 主合同，目的是避免把在单硬件数据上近似退化成常数缩放的特征硬塞进模型。
 - `dataset_full.csv` 里还会保留一些 metadata，例如 `row_uid`、`case_id`、`combo`、`op_idx`、`input_type_shape`、`output_type_shape`，这些列主要用于追溯样本，不参与训练。
 - 如果输入是 no-trace CSV，`load_store_ratio`、`feat_memops_per_inst`、`feat_insts_per_thread`、`reuse_*`、`opc_*` 这批 trace 特征不会进入主 MLP 的训练合同，也不会再被静默补成全 0 后参与训练。
 - 当前数值特征列表已经按 [numeric_feature_target_correlation.csv](/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/correlation_analysis/numeric_feature_target_correlation.csv) 做过一次裁剪，去掉了和目标绝对相关性小于 `0.1` 的数值列。
@@ -160,6 +171,9 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py \
 - `feature_dialect_requested`
 - `feature_dialect`
 - `observed_feature_dialects`
+- `analytical_feature_columns`
+- `analytical_base_column`
+- `residual_target_column`
 
 如果你要切换硬件架构使用的 cache/core 配置，可以传自定义硬件 profile YAML：
 
@@ -257,6 +271,21 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py \
   --max-iter 200 \
   --early-stopping-patience 20
 ```
+
+如果你要切到 analytical residual 训练：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py \
+  --data-dir /tmp/single_op_stage1_dataset \
+  --output-dir /tmp/single_op_stage1_model_residual \
+  --target-mode analytical_residual
+```
+
+这个模式下：
+
+- 模型训练目标会切到 `label_operator_residual_log = log(label_operator_actual_dur_us / ana_base_us)`
+- 推理和 ONNX 结果会自动按 `pred_us = ana_base_us * exp(pred_residual_log)` 重建回真实微秒
+- 默认 direct 模式 `--target-mode direct_us` 保持不变
 
 说明：
 

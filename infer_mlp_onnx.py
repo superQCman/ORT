@@ -9,7 +9,11 @@ import numpy as np
 import pandas as pd
 
 from feature_contract import METADATA_COLUMNS, TARGET_COLUMN
-from train_mlp import evaluation_metrics, inverse_transform_target, transform_features
+from train_mlp import (
+    evaluation_metrics,
+    reconstruct_latency_predictions,
+    transform_features,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -133,11 +137,19 @@ def load_preprocessor_state(model_dir: Path) -> dict[str, Any]:
 def load_model_runtime_config(model_dir: Path) -> dict[str, Any]:
     metrics_path = model_dir / "metrics.json"
     if not metrics_path.exists():
-        return {"log_target": True}
+        return {
+            "log_target": True,
+            "target_mode": "direct_us",
+            "analytical_base_column": "",
+            "train_target_column": TARGET_COLUMN,
+        }
     with metrics_path.open("r", encoding="utf-8") as handle:
         payload = json.load(handle)
     return {
         "log_target": bool(payload.get("log_target", True)),
+        "target_mode": str(payload.get("target_mode", "direct_us")),
+        "analytical_base_column": str(payload.get("analytical_base_column", "")),
+        "train_target_column": str(payload.get("train_target_column", TARGET_COLUMN)),
     }
 
 
@@ -159,10 +171,28 @@ def run_session_predictions(
     return np.concatenate(predictions, axis=0) if predictions else np.empty((0,), dtype=np.float32)
 
 
-def build_output_frame(input_df: pd.DataFrame, predictions: np.ndarray) -> pd.DataFrame:
+def build_output_frame(
+    input_df: pd.DataFrame,
+    predictions: np.ndarray,
+    *,
+    target_mode: str,
+    train_target_column: str,
+    analytical_base_column: str,
+    predicted_model_target: np.ndarray | None,
+) -> pd.DataFrame:
     columns = [column for column in METADATA_COLUMNS if column in input_df.columns]
     output_df = input_df[columns].copy()
+    output_df["target_mode"] = target_mode
     output_df["pred_us"] = np.clip(predictions, a_min=0.0, a_max=None)
+    if analytical_base_column and analytical_base_column in input_df.columns:
+        output_df[analytical_base_column] = pd.to_numeric(
+            input_df[analytical_base_column],
+            errors="coerce",
+        )
+    if train_target_column != TARGET_COLUMN and train_target_column in input_df.columns:
+        output_df[train_target_column] = pd.to_numeric(input_df[train_target_column], errors="coerce")
+    if predicted_model_target is not None and train_target_column != TARGET_COLUMN:
+        output_df[f"pred_{train_target_column}"] = np.asarray(predicted_model_target, dtype=float)
     if TARGET_COLUMN in input_df.columns:
         target = pd.to_numeric(input_df[TARGET_COLUMN], errors="coerce").to_numpy(dtype=float)
         output_df["target_us"] = target
@@ -193,10 +223,23 @@ def main() -> None:
     runtime_config = load_model_runtime_config(model_dir)
     input_df = pd.read_csv(args.input_csv)
     features = transform_features(input_df, preprocessor_state)
-    predictions = run_session_predictions(session, features, batch_size=args.batch_size)
-    predictions = inverse_transform_target(predictions, log_target=runtime_config["log_target"])
+    raw_predictions = run_session_predictions(session, features, batch_size=args.batch_size)
+    predictions, predicted_model_target = reconstruct_latency_predictions(
+        raw_predictions,
+        input_df,
+        target_mode=runtime_config["target_mode"],
+        log_target=runtime_config["log_target"],
+        analytical_base_column=runtime_config["analytical_base_column"],
+    )
 
-    output_df = build_output_frame(input_df, predictions)
+    output_df = build_output_frame(
+        input_df,
+        predictions,
+        target_mode=runtime_config["target_mode"],
+        train_target_column=runtime_config["train_target_column"],
+        analytical_base_column=runtime_config["analytical_base_column"],
+        predicted_model_target=predicted_model_target,
+    )
     output_path = Path(args.output_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_df.to_csv(output_path, index=False)
