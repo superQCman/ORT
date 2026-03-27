@@ -298,6 +298,82 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py \
   --top-n 12
 ```
 
+## 单独训练 Trace 特征代理模型
+
+这个目录里还单独补了一条“非 trace 特征 -> trace 特征”的 MLP 链路，用来预测当前数据表里已经保留的 trace 派生列，不会和主延迟模型共用训练脚本。
+
+当前默认预测的 trace 目标列是：
+
+- `load_store_ratio`
+- `feat_memops_per_inst`
+- `feat_insts_per_thread`
+- `reuse_time_mean`
+- `reuse_distance_mean`
+- `reuse_distance_unique_cache_lines_per_k_accesses`
+- `opc_branch_ratio`
+- `opc_fp_math_ratio`
+- `opc_load_ratio`
+- `opc_math_ratio`
+- `opc_simd_ratio`
+- `opc_store_ratio`
+
+输入侧只使用非 trace 列，包括：
+
+- 类别列：`op_type`、`node_scope`、`node_name_normalized`、`arch_embedding_size`、`arch_mlp_bot`、`arch_mlp_top`
+- 数值列：shape/size、`num_threads`、working-set/hardware ratio、以及 branch-parallel 的本地上下文和并发特征
+
+单独训练：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_trace_feature_mlp.py \
+  --data-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_clean_2_stage_2 \
+  --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/trace_feature_model
+```
+
+常用可选参数：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_trace_feature_mlp.py \
+  --data-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_clean_2_stage_2 \
+  --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/trace_feature_model \
+  --train-device npu \
+  --npu-device-id 0 \
+  --hidden-layers 512,256,128 \
+  --target-columns reuse_time_mean reuse_distance_mean opc_load_ratio
+```
+
+默认产物：
+
+```text
+<output-dir>/
+├── trace_feature_mlp_model.pt
+├── trace_feature_preprocessor_state.json
+├── trace_feature_training_history.csv
+├── trace_feature_metrics.json
+├── trace_feature_metrics_train.csv
+├── trace_feature_metrics_val.csv
+├── trace_feature_metrics_test.csv
+├── trace_feature_predictions_train.csv
+├── trace_feature_predictions_val.csv
+└── trace_feature_predictions_test.csv
+```
+
+说明：
+
+- 这是多输出 MLP，会一次性预测整组 trace 目标。
+- 训练脚本会像主 MLP 一样支持 `torch_npu`。
+- 对 `reuse_*`、`feat_*per_inst` 这类跨度较大的正值目标，默认会做 `log1p + z-score`；`opc_*` 这类比例列默认只做标准化。
+- 当前数据表默认没有导出 `total_instructions`、`total_loads`、`total_stores`，所以这三个原始计数不在默认目标里；如果你后面准备了包含这些列的数据版本，也可以通过 `--target-columns` 显式指定。
+
+如果你想一键从 case 数据重新构建数据集再训练这条独立模型，可以直接跑：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/run_trace_feature_pipeline.py \
+  --output-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest_trace_feature_proxy \
+  --train-device npu \
+  --npu-device-id 0
+```
+
 如果是 Ascend NPU 环境，可以显式指定：
 
 ```bash

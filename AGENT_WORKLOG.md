@@ -210,6 +210,39 @@ Open risks:
 - The script assumes `row_uid` remains a stable one-to-one key between prediction CSVs and dataset split CSVs.
 - Worst-op-type ranking can be dominated by low-support operator types if `--min-count-for-ranking` is set too low.
 
+### 2026-03-27 - Add a separate trace-feature proxy MLP pipeline
+
+Request summary:
+- Add a separate PyTorch MLP path that predicts trace-derived features from non-trace inputs.
+- Keep this implementation separate from the main latency MLP so the contracts, scripts, and artifacts do not get mixed together.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/trace_feature_contract.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/train_trace_feature_mlp.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_trace_feature_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added `trace_feature_contract.py` to define a dedicated non-trace input feature contract and a dedicated trace-target contract for the proxy model.
+- Added `train_trace_feature_mlp.py` as a self-contained multi-output PyTorch MLP trainer that:
+  - uses only non-trace features as inputs
+  - predicts a separate vector of trace-derived targets
+  - supports `torch_npu`
+  - saves a separate model checkpoint, preprocessing state, per-target metrics, and prediction CSVs
+- Added `run_trace_feature_pipeline.py` as a one-command dataset-build plus trace-proxy-training entry point.
+- README now documents the new independent trace-feature proxy path, its targets, its outputs, and the fact that raw counters such as `total_instructions` are not in the current default dataset export.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/*.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_trace_feature_mlp.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/run_trace_feature_pipeline.py --help`
+- Verified that the default trace targets and non-trace input columns are present in `artifacts/latest/dataset_all_clean_2_stage_2/train.csv`
+
+Open risks:
+- This environment currently does not have `torch` installed, so the new trace-feature proxy MLP could not be run end-to-end in this turn.
+- The current prepared dataset export does not include raw DynamoRIO count columns such as `total_instructions`, `total_loads`, and `total_stores`, so those are only supported as optional user-selected targets for future dataset variants that include them.
+
 ### Entry Template
 
 Use this format for future updates:
