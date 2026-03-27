@@ -173,9 +173,17 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py \
 
 当前默认内置 profile 已经移到本项目目录下：
 
+- [kunpeng920_single_numa.yaml](/data/qc/dlrm/ORT/single_op_stage1_mlp/hardware_profile/kunpeng920_single_numa.yaml)
 - [kunpeng920_host_4socket.yaml](/data/qc/dlrm/ORT/single_op_stage1_mlp/hardware_profile/kunpeng920_host_4socket.yaml)
 
-这份配置优先采用本机可直接观察到的 Kunpeng-920 拓扑信息，例如 `4 sockets / 192 cores / 8 NUMA / 24MiB L3 per NUMA group`；本机无法直接读出的字段，例如 cache latency、memory bandwidth、FP instruction latency，则保留论文参考值并在 YAML 备注里注明来源。
+默认建模口径现在是单 NUMA：
+
+- `24 cores`
+- `24MiB L3`
+- `4 memory channels`
+- `100 GB/s` 本地 NUMA 带宽近似
+
+这更符合当前 DLRM 负载的实际运行方式，因为你的任务被限制在一个 NUMA 内执行。`kunpeng920_host_4socket.yaml` 仍然保留，作为整机拓扑审计和交叉检查用。对本机无法直接读出的字段，例如 cache latency、memory bandwidth、FP instruction latency，YAML 里仍保留论文参考值并在备注里注明来源。
 
 手动指定 case：
 

@@ -367,6 +367,43 @@ Open risks:
 - CPU frequency could not be read reliably from the local kernel interfaces on this host, so the YAML keeps `2.6GHz` as a paper/reference value rather than a direct machine readout.
 - Cache latency and FP instruction latency are still reference values from papers or prior approximations, not locally measured hardware counters on this machine.
 
+### 2026-03-27 - Switch the default modeling scope to a single NUMA domain
+
+Request summary:
+- Because current DLRM workloads are pinned within a single NUMA node, switch the default hardware profile from whole-host scope to single-NUMA scope.
+- Re-anchor core count, L3 sharing domain, memory channels, and local bandwidth to the execution-local NUMA domain instead of the 4-socket machine total.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/hardware_profile/kunpeng920_single_numa.yaml`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The default hardware profile path now points to `hardware_profile/kunpeng920_single_numa.yaml`.
+- The new default profile models one local NUMA domain with:
+  - `24` local cores
+  - `24MiB` shared local L3
+  - `4` local memory channels
+  - `100 GB/s` local memory bandwidth approximation
+- The previous `kunpeng920_host_4socket.yaml` remains in the repo as a whole-host audit/reference profile, but it is no longer the default modeling scope.
+- README now explains that the default profile is single-NUMA because the current DLRM runs do not span the full host.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/*.py`
+- `python3 - <<'PY' ... from feature_engineering import HARDWARE_PROFILE_PATH, load_hardware_features ... PY`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py --output-dir /tmp/single_op_stage1_single_numa_smoke --selected-cases case_9_4_4 --max-files-per-case 1 --feature-dialect auto`
+- Verified that the loaded default hardware values include:
+  - `hw_core_total_cores = 24`
+  - `hw_cache_l3_per_die_size = 24MiB`
+  - `hw_memory_channels_total = 4`
+  - `hw_memory_bandwidth_gb_s_total = 100`
+- Verified that `/tmp/single_op_stage1_single_numa_smoke/dataset_summary.json` records `/data/qc/dlrm/ORT/single_op_stage1_mlp/hardware_profile/kunpeng920_single_numa.yaml`
+
+Open risks:
+- The single-NUMA bandwidth value is still a derived approximation from the paper's socket-level bandwidth, not a locally measured NUMA-specific STREAM result on this host.
+- Some field names such as `cores_per_die` and `l3_per_die` are retained for backward compatibility with the existing feature-engineering code even though the current modeling scope is really a NUMA-local L3 sharing domain.
+
 ### Entry Template
 
 Use this format for future updates:

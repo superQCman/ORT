@@ -33,7 +33,7 @@ DTYPE_SIZES = {
     "int64": 8,
 }
 
-HARDWARE_PROFILE_PATH = Path(__file__).resolve().parent / "hardware_profile" / "kunpeng920_host_4socket.yaml"
+HARDWARE_PROFILE_PATH = Path(__file__).resolve().parent / "hardware_profile" / "kunpeng920_single_numa.yaml"
 
 
 def normalize_node_name(node_name: str | float | int | None) -> str:
