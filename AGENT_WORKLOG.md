@@ -731,3 +731,52 @@ Validation run:
 Open risks:
 - This is still a documentation-only update; no feature builder or training data path has been changed yet.
 - The calibrated formulas are currently recorded as design-level analytical models rather than executable repo code, so the next implementation step must translate them into `feature_engineering.py` carefully and keep the parameter semantics intact.
+
+## 2026-03-29
+
+Summary:
+- Added a reproducible held-out calibration/generalization evaluator:
+  - [evaluate_analytical_generalization.py](/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py)
+- Added a new results document focused on out-of-fold behavior:
+  - [ANALYTICAL_MODEL_V4_GENERALIZATION.md](/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V4_GENERALIZATION.md)
+- The new script calibrates the explainable analytical model family on training folds only, then evaluates held-out `MAPE` under:
+  - `leave_one_case_out`
+  - `leave_one_combo_out`
+- The evaluation scope is the same heavy-op slice documented in V3:
+  - `case_9_4_4`
+  - `case_10_2_1`
+  - `case_10_4_4`
+  - combos `bs1024_nip1500`, `bs1440_nip1700`, `bs1888_nip1800`
+  - total heavy-op rows `178`
+- The script writes reproducible outputs under:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization/`
+  - including `summary.md`, `summary.json`, `fold_parameters.csv`, `fold_family_metrics.csv`, and `heavy_op_eval_slice.csv`
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V4_GENERALIZATION.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The project now has a repo-local analytical evaluation script that:
+  - filters the heavy-op slice directly from `dataset_full.csv`
+  - reconstructs family-specific shape semantics from `input_type_shape` / `output_type_shape`
+  - calibrates the explainable analytical parameters on training folds only using bounded coordinate descent over interpretable grids
+  - reports train/test per-family MAPE and calibrated parameter values for each fold
+- The new V4 document records the first genuine held-out results for the explainable analytical model:
+  - `leave_one_case_out`: mean macro `MAPE = 21.20%`, weighted family `MAPE = 16.96%`
+  - `leave_one_combo_out`: mean macro `MAPE = 15.75%`, weighted family `MAPE = 11.66%`
+- The held-out results show:
+  - `Gather / ReduceSum / Gemm / Concat` generalize relatively well
+  - `MatMul` is acceptable but still weaker on cross-case transfer
+  - `Transpose` remains the largest generalization gap
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `sed -n '1,260p' /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V4_GENERALIZATION.md`
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff --check -- evaluate_analytical_generalization.py ANALYTICAL_MODEL_V4_GENERALIZATION.md`
+
+Open risks:
+- The current evaluator calibrates only the explainable parameter family recorded in V3; it does not yet compare against alternative model structures such as an explicit `C_contention` term during held-out evaluation.
+- The largest remaining held-out gap is concentrated in `Transpose`, and secondarily `MatMul`, which suggests that the next model revision should separate kernel base time from concurrency-induced wall-time inflation more explicitly.

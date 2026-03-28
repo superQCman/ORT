@@ -1,0 +1,764 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from feature_engineering import (
+    DTYPE_SIZES,
+    _infer_gemm_mnk,
+    _shape_entries,
+    add_operator_hardware_context,
+    load_hardware_features,
+)
+
+
+DEFAULT_INPUT_CSV = (
+    Path(__file__).resolve().parent
+    / "artifacts"
+    / "latest"
+    / "dataset_all_no_trace"
+    / "dataset_full.csv"
+)
+DEFAULT_OUTPUT_DIR = (
+    Path(__file__).resolve().parent
+    / "artifacts"
+    / "latest"
+    / "analytical_generalization"
+)
+
+EVAL_CASES = ["case_9_4_4", "case_10_2_1", "case_10_4_4"]
+EVAL_COMBOS = ["bs1024_nip1500", "bs1440_nip1700", "bs1888_nip1800"]
+FAMILY_ORDER = ["Gather", "ReduceSum", "Gemm", "MatMul", "Transpose", "Concat"]
+COPY_FAMILIES = ["Concat", "ReduceSum", "Transpose"]
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Calibrate the explainable analytical heavy-op models and evaluate "
+            "held-out generalization under leave-one-case-out and leave-one-combo-out."
+        ),
+    )
+    parser.add_argument(
+        "--input-csv",
+        default=str(DEFAULT_INPUT_CSV),
+        help="Input dataset CSV. Defaults to artifacts/latest/dataset_all_no_trace/dataset_full.csv.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help="Directory for JSON/CSV/Markdown outputs.",
+    )
+    parser.add_argument(
+        "--schemes",
+        nargs="+",
+        default=["leave_one_case_out", "leave_one_combo_out"],
+        choices=["leave_one_case_out", "leave_one_combo_out"],
+        help="Generalization schemes to run.",
+    )
+    parser.add_argument(
+        "--passes",
+        type=int,
+        default=3,
+        help="Maximum coordinate-descent passes per fold.",
+    )
+    return parser.parse_args()
+
+
+def dtype_size(dtype_name: str | None) -> int:
+    text = "" if dtype_name is None else str(dtype_name).strip().lower()
+    return int(DTYPE_SIZES.get(text, 4))
+
+
+def entry_num_elements(entry: dict[str, Any]) -> int:
+    dims = [int(dim) for dim in entry.get("dims", [])]
+    if not dims:
+        return 0
+    product = 1
+    for dim in dims:
+        product *= int(dim)
+    return int(product)
+
+
+def entry_num_bytes(entry: dict[str, Any]) -> float:
+    return float(entry_num_elements(entry) * dtype_size(str(entry.get("dtype", ""))))
+
+
+def safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if len(y_true) == 0:
+        return 0.0
+    target = np.asarray(y_true, dtype=float)
+    pred = np.asarray(y_pred, dtype=float)
+    denominator = np.clip(target, a_min=1e-9, a_max=None)
+    return float(np.mean(np.abs(pred - target) / denominator))
+
+
+def fit_latency_us(working_set_bytes: float, row: pd.Series) -> float:
+    ws = max(safe_float(working_set_bytes, 0.0), 0.0)
+    l1_bytes = max(safe_float(row.get("hw_cache_l1d_active_bytes"), 0.0), 0.0)
+    l2_bytes = max(safe_float(row.get("hw_cache_l2_active_bytes"), 0.0), 0.0)
+    l3_bytes = max(safe_float(row.get("hw_cache_l3_active_bytes"), 0.0), 0.0)
+    cpu_clock_ghz = max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6)
+
+    l1_us = safe_float(row.get("hw_cache_l1d_response_latency_cycles"), 1.0) / cpu_clock_ghz / 1000.0
+    l2_us = safe_float(row.get("hw_cache_l2_response_latency_cycles"), 10.0) / cpu_clock_ghz / 1000.0
+    l3_us = safe_float(row.get("hw_cache_l3_per_die_response_latency_cycles"), 20.0) / cpu_clock_ghz / 1000.0
+    mem_us = safe_float(row.get("hw_memory_local_mem_delay_ns"), 90.0) / 1000.0
+
+    if ws <= max(l1_bytes, 1.0):
+        return l1_us
+    if ws <= max(l2_bytes, 1.0):
+        return l2_us
+    if ws <= max(l3_bytes, 1.0):
+        return l3_us
+    return mem_us
+
+
+def peak_add_ops_per_us(row: pd.Series) -> float:
+    throughput = max(
+        safe_float(row.get("hw_instruction_fp_throughput_per_cycle_vector_sp_add"), 2.0),
+        1e-6,
+    )
+    lanes = max(safe_float(row.get("hw_instruction_simd_width_bits"), 128.0) / 32.0, 1.0)
+    cpu_clock = max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6)
+    active_cores = max(
+        min(safe_float(row.get("num_threads"), 1.0), safe_float(row.get("hw_core_total_cores"), 24.0)),
+        1.0,
+    )
+    return throughput * lanes * cpu_clock * 1e3 * active_cores
+
+
+def peak_fma_ops_per_us(row: pd.Series) -> float:
+    throughput = max(
+        safe_float(row.get("hw_instruction_fp_throughput_per_cycle_vector_sp_fma"), 2.0),
+        1e-6,
+    )
+    lanes = max(safe_float(row.get("hw_instruction_simd_width_bits"), 128.0) / 32.0, 1.0)
+    cpu_clock = max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6)
+    active_cores = max(
+        min(safe_float(row.get("num_threads"), 1.0), safe_float(row.get("hw_core_total_cores"), 24.0)),
+        1.0,
+    )
+    return throughput * lanes * 2.0 * cpu_clock * 1e3 * active_cores
+
+
+def heavy_family_name(row: pd.Series) -> str:
+    op_type = str(row.get("op_type", ""))
+    node_name = str(row.get("node_name", ""))
+    if op_type == "Gather" and safe_float(row.get("output_size"), 0.0) > 1e8:
+        return "Gather"
+    if op_type == "ReduceSum" and safe_float(row.get("activation_size"), 0.0) > 1e8:
+        return "ReduceSum"
+    if op_type == "Gemm" and safe_float(row.get("label_operator_actual_dur_us"), 0.0) > 1000.0:
+        return "Gemm"
+    if node_name == "/MatMul":
+        return "MatMul"
+    if node_name == "/Transpose":
+        return "Transpose"
+    if node_name == "/Concat":
+        return "Concat"
+    return ""
+
+
+def infer_batched_matmul_dims(input_entries: list[dict[str, Any]], output_entries: list[dict[str, Any]]) -> tuple[float, float, float, float]:
+    if len(input_entries) < 2 or not output_entries:
+        return 0.0, 0.0, 0.0, 0.0
+    a_dims = [int(dim) for dim in input_entries[0].get("dims", [])]
+    b_dims = [int(dim) for dim in input_entries[1].get("dims", [])]
+    c_dims = [int(dim) for dim in output_entries[0].get("dims", [])]
+    if len(a_dims) < 3 or len(b_dims) < 3 or len(c_dims) < 3:
+        return 0.0, 0.0, 0.0, 0.0
+    batch_count = float(c_dims[0])
+    m_dim = float(c_dims[-2])
+    n_dim = float(c_dims[-1])
+    k_dim = float(a_dims[-1])
+    if len(b_dims) >= 2 and b_dims[-1] == int(n_dim):
+        k_dim = float(b_dims[-2])
+    return batch_count, m_dim, n_dim, k_dim
+
+
+def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
+    dataset = pd.read_csv(input_csv, low_memory=False)
+    dataset = add_operator_hardware_context(dataset, load_hardware_features())
+    dataset = dataset[
+        dataset["case_id"].astype(str).isin(EVAL_CASES) & dataset["combo"].astype(str).isin(EVAL_COMBOS)
+    ].copy()
+    dataset["family"] = dataset.apply(heavy_family_name, axis=1)
+    dataset = dataset[dataset["family"] != ""].copy()
+    dataset["actual_us"] = pd.to_numeric(dataset["label_operator_actual_dur_us"], errors="coerce").fillna(0.0)
+
+    records: list[dict[str, Any]] = []
+    for _, row in dataset.iterrows():
+        input_entries = _shape_entries(row.get("input_type_shape"))
+        output_entries = _shape_entries(row.get("output_type_shape"))
+        input_bytes_sum = float(sum(entry_num_bytes(entry) for entry in input_entries))
+        output_bytes_sum = float(sum(entry_num_bytes(entry) for entry in output_entries))
+        output_entry = output_entries[0] if output_entries else {}
+        output_dims = [int(dim) for dim in output_entry.get("dims", [])]
+        output_dtype_bytes = dtype_size(str(output_entry.get("dtype", "float32")))
+
+        gemm_m, gemm_n, gemm_k = _infer_gemm_mnk(input_entries, output_entries)
+        batch_count, matmul_m, matmul_n, matmul_k = infer_batched_matmul_dims(input_entries, output_entries)
+
+        request_rows = max(safe_float(row.get("feat_lookup_count"), 0.0), 0.0)
+        row_bytes = safe_float(row.get("output_size"), 0.0) / max(request_rows, 1.0)
+        cacheline = max(safe_float(row.get("hw_cache_cacheline_bytes"), 64.0), 1.0)
+        cachelines_per_row = math.ceil(row_bytes / cacheline) if row_bytes > 0.0 else 0
+        src_latency_us = fit_latency_us(safe_float(row.get("parameter_size"), 0.0), row)
+
+        transpose_prefix_blocks = 1.0
+        if len(output_dims) > 1:
+            prefix = 1
+            for dim in output_dims[:-1]:
+                prefix *= int(dim)
+            transpose_prefix_blocks = float(prefix)
+        transpose_stride_latency_us = fit_latency_us(output_bytes_sum / max(safe_float(row.get("num_threads"), 1.0), 1.0), row)
+
+        records.append(
+            {
+                "row_uid": row["row_uid"],
+                "case_id": str(row["case_id"]),
+                "combo": str(row["combo"]),
+                "node_name": str(row["node_name"]),
+                "family": str(row["family"]),
+                "actual_us": safe_float(row.get("actual_us"), 0.0),
+                "num_threads": max(safe_float(row.get("num_threads"), 1.0), 1.0),
+                "output_size": max(safe_float(row.get("output_size"), 0.0), 0.0),
+                "activation_size": max(safe_float(row.get("activation_size"), 0.0), 0.0),
+                "parameter_size": max(safe_float(row.get("parameter_size"), 0.0), 0.0),
+                "feat_io_bytes_sum": max(safe_float(row.get("feat_io_bytes_sum"), 0.0), 0.0),
+                "feat_lookup_count": request_rows,
+                "feat_reduction_axes_product": max(safe_float(row.get("feat_reduction_axes_product"), 0.0), 0.0),
+                "feat_reduction_work_items": max(safe_float(row.get("feat_reduction_work_items"), 0.0), 0.0),
+                "input_count": float(len(input_entries)),
+                "input_bytes_sum": input_bytes_sum,
+                "output_bytes_sum": output_bytes_sum,
+                "copy_chunk_mean_bytes": input_bytes_sum / max(float(len(input_entries)), 1.0),
+                "gather_row_bytes": row_bytes,
+                "gather_cachelines_per_row": float(cachelines_per_row),
+                "gather_src_latency_us": src_latency_us,
+                "gemm_m": float(gemm_m),
+                "gemm_n": float(gemm_n),
+                "gemm_k": float(gemm_k),
+                "matmul_batch_count": float(batch_count),
+                "matmul_m": float(matmul_m),
+                "matmul_n": float(matmul_n),
+                "matmul_k": float(matmul_k),
+                "transpose_prefix_blocks": transpose_prefix_blocks,
+                "transpose_stride_latency_us": transpose_stride_latency_us,
+                "bw_peak_bytes_per_us": max(safe_float(row.get("hw_memory_bandwidth_gb_s_total"), 100.0), 1e-6) * 1e3,
+                "peak_add_ops_per_us": peak_add_ops_per_us(row),
+                "peak_fma_ops_per_us": peak_fma_ops_per_us(row),
+            }
+        )
+
+    return pd.DataFrame(records)
+
+
+def default_params() -> dict[str, float]:
+    return {
+        "rho_copy_inf": 0.18,
+        "B50_copy": 0.0,
+        "tau_dispatch": 20.0,
+        "kappa_reduce": 0.5,
+        "B50_reduce": 0.0,
+        "rho_gather_inf": 0.12,
+        "B50_gather_row": 128.0,
+        "m_gather": 4.0,
+        "rho_fma_inf": 0.55,
+        "M50": 32.0,
+        "N50": 0.0,
+        "K50": 64.0,
+        "occ_ref": 16.0,
+        "rho_tiny_inf": 0.30,
+        "K50_tiny": 0.0,
+        "tau_micro": 0.0,
+        "m_stride": 8.0,
+        "eta_stride": 0.0,
+    }
+
+
+PARAM_GRID: dict[str, list[float]] = {
+    "rho_copy_inf": [0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.26, 0.30],
+    "B50_copy": [0.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0],
+    "tau_dispatch": [0.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 60.0, 80.0],
+    "kappa_reduce": [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 1.00],
+    "B50_reduce": [0.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0],
+    "rho_gather_inf": [0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.26],
+    "B50_gather_row": [0.0, 64.0, 128.0, 256.0, 512.0, 1024.0],
+    "m_gather": [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0],
+    "rho_fma_inf": [0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.70, 0.80],
+    "M50": [0.0, 8.0, 16.0, 32.0, 64.0, 128.0],
+    "N50": [0.0, 8.0, 16.0, 32.0, 64.0],
+    "K50": [0.0, 16.0, 32.0, 64.0, 128.0, 256.0],
+    "occ_ref": [4.0, 8.0, 12.0, 16.0, 24.0, 32.0],
+    "rho_tiny_inf": [0.08, 0.12, 0.18, 0.24, 0.30, 0.40, 0.50, 0.60],
+    "K50_tiny": [0.0, 16.0, 32.0, 64.0, 128.0, 256.0],
+    "tau_micro": [0.0, 0.25, 0.5, 1.0, 2.0, 4.0],
+    "m_stride": [1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0],
+    "eta_stride": [0.0, 0.25, 0.5, 0.75, 1.0],
+}
+
+
+def predict_concat(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    chunk = frame["copy_chunk_mean_bytes"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    stream = (frame["input_bytes_sum"] + frame["output_size"]).to_numpy(dtype=float)
+    input_count = frame["input_count"].to_numpy(dtype=float)
+    b50 = max(params["B50_copy"], 0.0)
+    bw_eff = bw_peak * max(params["rho_copy_inf"], 1e-6) * chunk / np.clip(chunk + b50, a_min=1e-6, a_max=None)
+    return stream / np.clip(bw_eff, a_min=1e-6, a_max=None) + input_count * max(params["tau_dispatch"], 0.0)
+
+
+def predict_reduce(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    inner = frame["feat_reduction_axes_product"].to_numpy(dtype=float)
+    stream = (frame["activation_size"] + frame["output_size"]).to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    peak_add = frame["peak_add_ops_per_us"].to_numpy(dtype=float)
+    add_ops = frame["feat_reduction_work_items"].to_numpy(dtype=float)
+    b50 = max(params["B50_reduce"], 0.0)
+    bw_eff = (
+        bw_peak
+        * max(params["rho_copy_inf"], 1e-6)
+        * max(params["kappa_reduce"], 1e-6)
+        * inner
+        / np.clip(inner + b50, a_min=1e-6, a_max=None)
+    )
+    t_mem = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    t_add = add_ops / np.clip(peak_add, a_min=1e-6, a_max=None)
+    return np.maximum(t_mem, t_add)
+
+
+def predict_gather(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    row_bytes = frame["gather_row_bytes"].to_numpy(dtype=float)
+    request_rows = frame["feat_lookup_count"].to_numpy(dtype=float)
+    stream = (2.0 * frame["output_size"] + 8.0 * frame["feat_lookup_count"]).to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    cachelines_per_row = frame["gather_cachelines_per_row"].to_numpy(dtype=float)
+    lat_src_us = frame["gather_src_latency_us"].to_numpy(dtype=float)
+    threads = frame["num_threads"].to_numpy(dtype=float)
+    b50 = max(params["B50_gather_row"], 0.0)
+    bw_eff = (
+        bw_peak
+        * max(params["rho_gather_inf"], 1e-6)
+        * row_bytes
+        / np.clip(row_bytes + b50, a_min=1e-6, a_max=None)
+    )
+    t_bw = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    t_src = request_rows * cachelines_per_row * lat_src_us / np.clip(
+        threads * max(params["m_gather"], 1e-6),
+        a_min=1e-6,
+        a_max=None,
+    )
+    return np.maximum(t_bw, t_src)
+
+
+def predict_gemm(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    m_dim = frame["gemm_m"].to_numpy(dtype=float)
+    n_dim = frame["gemm_n"].to_numpy(dtype=float)
+    k_dim = frame["gemm_k"].to_numpy(dtype=float)
+    flops = 2.0 * m_dim * n_dim * k_dim
+    mem_bytes = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    peak_fma = frame["peak_fma_ops_per_us"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    rho_eff = (
+        max(params["rho_fma_inf"], 1e-6)
+        * m_dim / np.clip(m_dim + max(params["M50"], 0.0), a_min=1e-6, a_max=None)
+        * n_dim / np.clip(n_dim + max(params["N50"], 0.0), a_min=1e-6, a_max=None)
+        * k_dim / np.clip(k_dim + max(params["K50"], 0.0), a_min=1e-6, a_max=None)
+    )
+    t_comp = flops / np.clip(peak_fma * rho_eff, a_min=1e-6, a_max=None)
+    t_mem = mem_bytes / np.clip(bw_peak, a_min=1e-6, a_max=None)
+    return np.maximum(t_comp, t_mem)
+
+
+def predict_matmul(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    batch_count = frame["matmul_batch_count"].to_numpy(dtype=float)
+    m_dim = frame["matmul_m"].to_numpy(dtype=float)
+    n_dim = frame["matmul_n"].to_numpy(dtype=float)
+    k_dim = frame["matmul_k"].to_numpy(dtype=float)
+    flops = 2.0 * batch_count * m_dim * n_dim * k_dim
+    peak_fma = frame["peak_fma_ops_per_us"].to_numpy(dtype=float)
+    threads = frame["num_threads"].to_numpy(dtype=float)
+    occ_ref = max(params["occ_ref"], 1e-6)
+    rho_eff = (
+        max(params["rho_tiny_inf"], 1e-6)
+        * np.minimum(m_dim / occ_ref, 1.0)
+        * np.minimum(n_dim / occ_ref, 1.0)
+        * k_dim / np.clip(k_dim + max(params["K50_tiny"], 0.0), a_min=1e-6, a_max=None)
+    )
+    t_comp = flops / np.clip(peak_fma * rho_eff, a_min=1e-6, a_max=None)
+    t_launch = np.ceil(batch_count / np.clip(threads, a_min=1.0, a_max=None)) * max(params["tau_micro"], 0.0)
+    return t_comp + t_launch
+
+
+def predict_transpose(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    out_bytes = frame["output_size"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    prefix_blocks = frame["transpose_prefix_blocks"].to_numpy(dtype=float)
+    lat_us = frame["transpose_stride_latency_us"].to_numpy(dtype=float)
+    threads = frame["num_threads"].to_numpy(dtype=float)
+    copy_us = 2.0 * out_bytes / np.clip(
+        bw_peak * max(params["rho_copy_inf"], 1e-6),
+        a_min=1e-6,
+        a_max=None,
+    )
+    stride_us = prefix_blocks * lat_us / np.clip(
+        np.power(np.clip(threads, a_min=1.0, a_max=None), max(params["eta_stride"], 0.0))
+        * max(params["m_stride"], 1e-6),
+        a_min=1e-6,
+        a_max=None,
+    )
+    return copy_us + stride_us
+
+
+def predict_family(frame: pd.DataFrame, family: str, params: dict[str, float]) -> np.ndarray:
+    if frame.empty:
+        return np.zeros(0, dtype=float)
+    if family == "Concat":
+        return predict_concat(frame, params)
+    if family == "ReduceSum":
+        return predict_reduce(frame, params)
+    if family == "Gather":
+        return predict_gather(frame, params)
+    if family == "Gemm":
+        return predict_gemm(frame, params)
+    if family == "MatMul":
+        return predict_matmul(frame, params)
+    if family == "Transpose":
+        return predict_transpose(frame, params)
+    raise KeyError(family)
+
+
+def family_mape(frame: pd.DataFrame, family: str, params: dict[str, float]) -> float:
+    family_df = frame[frame["family"] == family].copy()
+    if family_df.empty:
+        return float("nan")
+    pred = predict_family(family_df, family, params)
+    return mape(family_df["actual_us"].to_numpy(dtype=float), pred)
+
+
+def macro_mape(frame: pd.DataFrame, params: dict[str, float], families: list[str] | None = None) -> float:
+    selected_families = families or FAMILY_ORDER
+    scores = [
+        family_mape(frame, family, params)
+        for family in selected_families
+        if not frame[frame["family"] == family].empty
+    ]
+    if not scores:
+        return float("nan")
+    clean_scores = [score for score in scores if np.isfinite(score)]
+    return float(np.mean(clean_scores)) if clean_scores else float("nan")
+
+
+def weighted_mape(frame: pd.DataFrame, params: dict[str, float]) -> float:
+    if frame.empty:
+        return float("nan")
+    preds = np.zeros(len(frame), dtype=float)
+    for family in FAMILY_ORDER:
+        family_mask = frame["family"].eq(family).to_numpy()
+        if not np.any(family_mask):
+            continue
+        preds[family_mask] = predict_family(frame.loc[family_mask], family, params)
+    return mape(frame["actual_us"].to_numpy(dtype=float), preds)
+
+
+def coordinate_search(
+    param_names: list[str],
+    objective: Any,
+    params: dict[str, float],
+    passes: int,
+) -> dict[str, float]:
+    tuned = dict(params)
+    best_score = objective(tuned)
+    for _ in range(max(int(passes), 1)):
+        improved = False
+        for name in param_names:
+            local_best_value = tuned[name]
+            local_best_score = best_score
+            for candidate in PARAM_GRID[name]:
+                trial = dict(tuned)
+                trial[name] = float(candidate)
+                score = objective(trial)
+                if not np.isfinite(score):
+                    continue
+                if score + 1e-12 < local_best_score:
+                    local_best_score = score
+                    local_best_value = float(candidate)
+            if local_best_value != tuned[name]:
+                tuned[name] = local_best_value
+                best_score = local_best_score
+                improved = True
+        if not improved:
+            break
+    return tuned
+
+
+def calibrate_params(train_df: pd.DataFrame, passes: int) -> dict[str, float]:
+    params = default_params()
+
+    def copy_objective(trial: dict[str, float]) -> float:
+        return macro_mape(train_df[train_df["family"].isin(COPY_FAMILIES)], trial, COPY_FAMILIES)
+
+    def concat_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Concat", trial)
+
+    def reduce_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "ReduceSum", trial)
+
+    def gather_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Gather", trial)
+
+    def gemm_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Gemm", trial)
+
+    def matmul_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "MatMul", trial)
+
+    def transpose_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Transpose", trial)
+
+    for _ in range(max(int(passes), 1)):
+        before = dict(params)
+        params = coordinate_search(["rho_copy_inf", "B50_copy"], copy_objective, params, passes=1)
+        params = coordinate_search(["tau_dispatch"], concat_objective, params, passes=1)
+        params = coordinate_search(["kappa_reduce", "B50_reduce"], reduce_objective, params, passes=1)
+        params = coordinate_search(["rho_gather_inf", "B50_gather_row", "m_gather"], gather_objective, params, passes=1)
+        params = coordinate_search(["rho_fma_inf", "M50", "N50", "K50"], gemm_objective, params, passes=1)
+        params = coordinate_search(["occ_ref", "rho_tiny_inf", "K50_tiny", "tau_micro"], matmul_objective, params, passes=1)
+        params = coordinate_search(["m_stride", "eta_stride"], transpose_objective, params, passes=1)
+        if params == before:
+            break
+    return params
+
+
+def family_metric_rows(frame: pd.DataFrame, params: dict[str, float], scheme: str, fold_name: str, split_name: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for family in FAMILY_ORDER:
+        family_df = frame[frame["family"] == family].copy()
+        if family_df.empty:
+            continue
+        pred = predict_family(family_df, family, params)
+        rows.append(
+            {
+                "scheme": scheme,
+                "fold": fold_name,
+                "split": split_name,
+                "family": family,
+                "row_count": int(len(family_df)),
+                "mape": mape(family_df["actual_us"].to_numpy(dtype=float), pred),
+                "actual_mean_us": float(family_df["actual_us"].mean()),
+                "pred_mean_us": float(np.mean(pred)),
+            }
+        )
+    return rows
+
+
+def build_folds(frame: pd.DataFrame, scheme: str) -> list[tuple[str, pd.DataFrame, pd.DataFrame]]:
+    if scheme == "leave_one_case_out":
+        values = sorted(frame["case_id"].astype(str).unique().tolist())
+        return [
+            (
+                value,
+                frame[frame["case_id"].astype(str) != value].copy(),
+                frame[frame["case_id"].astype(str) == value].copy(),
+            )
+            for value in values
+        ]
+    if scheme == "leave_one_combo_out":
+        values = sorted(frame["combo"].astype(str).unique().tolist())
+        return [
+            (
+                value,
+                frame[frame["combo"].astype(str) != value].copy(),
+                frame[frame["combo"].astype(str) == value].copy(),
+            )
+            for value in values
+        ]
+    raise KeyError(scheme)
+
+
+def summarize_scheme(metrics_df: pd.DataFrame, split_name: str) -> dict[str, Any]:
+    split_df = metrics_df[metrics_df["split"] == split_name].copy()
+    if split_df.empty:
+        return {}
+    family_summary = (
+        split_df.groupby("family", as_index=False)
+        .agg(
+            mean_mape=("mape", "mean"),
+            median_mape=("mape", "median"),
+            max_mape=("mape", "max"),
+            folds=("fold", "nunique"),
+            total_rows=("row_count", "sum"),
+        )
+        .sort_values("family")
+    )
+    fold_macro = (
+        split_df.groupby("fold", as_index=False)
+        .agg(
+            macro_mape=("mape", "mean"),
+            total_rows=("row_count", "sum"),
+        )
+        .sort_values("fold")
+    )
+    weighted = float(np.average(split_df["mape"], weights=split_df["row_count"]))
+    return {
+        "split": split_name,
+        "family_summary": family_summary.to_dict(orient="records"),
+        "fold_macro": fold_macro.to_dict(orient="records"),
+        "macro_mape_mean": float(fold_macro["macro_mape"].mean()),
+        "macro_mape_max": float(fold_macro["macro_mape"].max()),
+        "weighted_family_mape": weighted,
+    }
+
+
+def render_markdown(
+    input_csv: Path,
+    heavy_df: pd.DataFrame,
+    params_df: pd.DataFrame,
+    metrics_df: pd.DataFrame,
+    summaries: dict[str, dict[str, Any]],
+) -> str:
+    lines: list[str] = []
+    lines.append("# Analytical Model Generalization And Calibration Results")
+    lines.append("")
+    lines.append(f"- Input dataset: `{input_csv}`")
+    lines.append(f"- Heavy-op rows: `{len(heavy_df)}`")
+    lines.append(f"- Cases: `{', '.join(EVAL_CASES)}`")
+    lines.append(f"- Combos: `{', '.join(EVAL_COMBOS)}`")
+    lines.append("")
+    lines.append("## Heavy-Op Counts")
+    lines.append("")
+    lines.append("| family | rows |")
+    lines.append("| --- | ---: |")
+    for family in FAMILY_ORDER:
+        count = int((heavy_df["family"] == family).sum())
+        lines.append(f"| `{family}` | {count} |")
+    lines.append("")
+
+    for scheme, summary in summaries.items():
+        lines.append(f"## {scheme}")
+        lines.append("")
+        test_summary = summary.get("test", {})
+        if test_summary:
+            lines.append(
+                f"- Mean fold macro MAPE: `{test_summary['macro_mape_mean'] * 100.0:.2f}%`"
+            )
+            lines.append(
+                f"- Worst fold macro MAPE: `{test_summary['macro_mape_max'] * 100.0:.2f}%`"
+            )
+            lines.append(
+                f"- Row-count-weighted family MAPE: `{test_summary['weighted_family_mape'] * 100.0:.2f}%`"
+            )
+            lines.append("")
+            lines.append("### Test Family MAPE")
+            lines.append("")
+            lines.append("| family | mean MAPE | median MAPE | max MAPE | folds |")
+            lines.append("| --- | ---: | ---: | ---: | ---: |")
+            for row in test_summary["family_summary"]:
+                lines.append(
+                    f"| `{row['family']}` | {row['mean_mape'] * 100.0:.2f}% | "
+                    f"{row['median_mape'] * 100.0:.2f}% | {row['max_mape'] * 100.0:.2f}% | {int(row['folds'])} |"
+                )
+            lines.append("")
+            lines.append("### Fold Macro MAPE")
+            lines.append("")
+            lines.append("| fold | macro MAPE | rows |")
+            lines.append("| --- | ---: | ---: |")
+            for row in test_summary["fold_macro"]:
+                lines.append(
+                    f"| `{row['fold']}` | {row['macro_mape'] * 100.0:.2f}% | {int(row['total_rows'])} |"
+                )
+            lines.append("")
+
+        scheme_params = params_df[params_df["scheme"] == scheme].copy()
+        if not scheme_params.empty:
+            lines.append("### Calibrated Parameters By Fold")
+            lines.append("")
+            param_columns = [
+                "rho_copy_inf",
+                "B50_copy",
+                "tau_dispatch",
+                "kappa_reduce",
+                "B50_reduce",
+                "rho_gather_inf",
+                "B50_gather_row",
+                "m_gather",
+                "rho_fma_inf",
+                "M50",
+                "N50",
+                "K50",
+                "occ_ref",
+                "rho_tiny_inf",
+                "K50_tiny",
+                "tau_micro",
+                "m_stride",
+                "eta_stride",
+            ]
+            header = "| fold | " + " | ".join(param_columns) + " |"
+            divider = "| --- |" + " ---: |" * len(param_columns)
+            lines.append(header)
+            lines.append(divider)
+            for _, row in scheme_params.sort_values("fold").iterrows():
+                values = " | ".join(f"{safe_float(row[column]):.3f}" for column in param_columns)
+                lines.append(f"| `{row['fold']}` | {values} |")
+            lines.append("")
+
+    return "\n".join(lines) + "\n"
+
+
+def main() -> None:
+    args = parse_args()
+    input_csv = Path(args.input_csv)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    heavy_df = prepare_heavy_slice(input_csv)
+    metrics_rows: list[dict[str, Any]] = []
+    param_rows: list[dict[str, Any]] = []
+    summary_payload: dict[str, dict[str, Any]] = {}
+
+    for scheme in args.schemes:
+        for fold_name, train_df, test_df in build_folds(heavy_df, scheme):
+            params = calibrate_params(train_df, passes=args.passes)
+            param_rows.append({"scheme": scheme, "fold": fold_name, **params})
+            metrics_rows.extend(family_metric_rows(train_df, params, scheme, fold_name, "train"))
+            metrics_rows.extend(family_metric_rows(test_df, params, scheme, fold_name, "test"))
+
+        scheme_df = pd.DataFrame([row for row in metrics_rows if row["scheme"] == scheme])
+        summary_payload[scheme] = {
+            "train": summarize_scheme(scheme_df, "train"),
+            "test": summarize_scheme(scheme_df, "test"),
+        }
+
+    params_df = pd.DataFrame(param_rows)
+    metrics_df = pd.DataFrame(metrics_rows)
+
+    heavy_df.to_csv(output_dir / "heavy_op_eval_slice.csv", index=False)
+    params_df.to_csv(output_dir / "fold_parameters.csv", index=False)
+    metrics_df.to_csv(output_dir / "fold_family_metrics.csv", index=False)
+    with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
+        json.dump(summary_payload, handle, indent=2, ensure_ascii=False)
+    markdown = render_markdown(input_csv, heavy_df, params_df, metrics_df, summary_payload)
+    (output_dir / "summary.md").write_text(markdown, encoding="utf-8")
+
+    print(markdown)
+
+
+if __name__ == "__main__":
+    main()
