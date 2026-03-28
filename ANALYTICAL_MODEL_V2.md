@@ -105,7 +105,7 @@ V2 固定采用下面三条原则：
 | 算子 | ORT CPU 内核语义 | 对 cache 最敏感的对象 | 为什么不能和其他算子共用一套 analytical 公式 |
 | --- | --- | --- | --- |
 | `Gather` | index 驱动的 block copy，源地址不规则，目标写入连续 | source row reuse、L3/DRAM latency | 它不是“全张量顺序读”，而是“按索引离散取块” |
-| `ReduceSum` | 先做 shape collapse，再按 `KR/RK/KRK/RKR/...` 走不同 fast path | accumulator 驻留、reduce axis 是否连续 | 连续归约和非连续归约的 miss 行为完全不同 |
+| `ReduceSum` | 先做 shape collapse，再按 `KR/RK/KRK/RKR/...` 走不同 fast path | accumulator 驻留、被累加输入是否连续 | 连续归约更像 streaming，非连续归约更像 stride-heavy 跳读，cache line 利用率和 miss 行为差异很大 |
 | `Gemm` | bias broadcast + MLAS Gemm + activation，可 `PackB` | weight reuse、tile 驻留、SIMD 吞吐 | 核心是 blocked compute，不是简单 bytes 模型 |
 | `MatMul` | `MatMulComputeHelper` + batched MLAS Gemm，可 `PackB` | batch reuse、rhs broadcast、weight 驻留 | 与 `Gemm` 相近，但 batch 结构不同 |
 | `Transpose` | 先判定 reshape-like / single-axis / generic，再走 block-copy 或 eltwise-strided | suffix block size、stride locality | 不同 regime 的 cache 行为差别极大 |
@@ -243,6 +243,21 @@ for batch in range(M):
 | `ana_gather_copy_us` | copy 主导项 | `stream_bytes / BW` | `可重建` |
 | `ana_gather_base_us` | Gather 的解析一阶基线 | `max(copy_us, request_rows * latency / T)` | `可重建` |
 
+- ```table_rows * (1 - exp(-request_rows / max(table_rows, 1)))```解释：
+    - 可以把它理解成“往 table_rows 个桶里随机扔 request_rows 个球，最后有多少个桶至少被扔中过一次”。
+
+    - 对任意一行来说：
+
+    - 一次请求没命中它的概率大约是 1 - 1/table_rows
+    - request_rows 次都没命中的概率大约是
+    ```(1 - 1/table_rows) ^ request_rows```
+    - 当 table_rows 比较大时，这个量常近似成：
+    ```exp(-request_rows / table_rows)```
+    所以：
+    - 某一行至少被命中一次的概率约等于
+    ```1 - exp(-request_rows / table_rows)```
+    - 再乘总行数 table_rows，就得到预计被命中的不同 row 数：
+    ```table_rows * (1 - exp(-request_rows / table_rows))```
 ## 5.2 ReduceSum
 
 ### 5.2.1 ORT kernel 语义
@@ -267,9 +282,8 @@ else:
 
 `ReduceSum` 的关键不只是“reduce 了多少元素”，而是：
 
-- reduce axis 是否连续
+- 被累加的输入数据在内存里是否连续
 - partial sum 是不是能留在 L1/L2
-- input 是按连续流读，还是 stride 很大的方式跳着读
 
 所以 V2 里的 `ReduceSum` 需要一个 regime 特征，而不是只有全局 `feat_reduction_work_items`。
 

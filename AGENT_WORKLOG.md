@@ -520,3 +520,28 @@ Validation run:
 Open risks:
 - The document is intentionally a design/spec artifact; it does not yet implement the proposed V2 family-specific analytical features in code.
 - Some parameters referenced by the document, such as explicit `M/N/K`, transpose regime labels, and concat input-byte summaries, are currently reconstructible from existing inputs but are not exported as dedicated dataset columns yet.
+
+### 2026-03-28 - Clarify the ReduceSum explanation in Analytical Model V2
+
+Request summary:
+- Tighten the `ReduceSum` explanation in the Analytical Model V2 document.
+- Merge the overlapping ideas of “reduce axis continuity” and “streaming vs stride-heavy input reads” into one clearer point.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The `ReduceSum` summary table now describes the main cache-sensitive factor as whether the input being accumulated is contiguous in memory.
+- The detailed `ReduceSum` rationale now lists two primary factors instead of three:
+  - whether the accumulated input is contiguous
+  - whether partial sums can stay resident in L1/L2
+- This removes wording overlap while preserving the meaning of `ana_reduce_strided_flag` as a stride-sensitive regime indicator.
+
+Validation run:
+- `rg -n "ReduceSum|ana_reduce_strided_flag|reduce axis 是否连续|streaming|stride-heavy" /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `sed -n '100,320p' /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `cd /data/qc/dlrm/ORT/single_op_stage1_mlp && git diff --check`
+
+Open risks:
+- This is a documentation-only clarification; it does not yet revise any code or feature extraction logic for `ana_reduce_strided_flag`.
