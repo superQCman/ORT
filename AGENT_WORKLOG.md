@@ -570,3 +570,43 @@ Validation run:
 
 Open risks:
 - This change refines the design contract in documentation only; the current code path still exports the older, more verbose analytical candidate columns.
+
+### 2026-03-28 - Add explicit explanations for analytical formulas
+
+Request summary:
+- Make the formulas in `ANALYTICAL_MODEL_V2.md` easier to understand.
+- Add direct explanations for the shared formulas and for each operator family's key analytical formulas.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a new shared-formula explanation section covering:
+  - `T = min(num_threads, hw_core_total_cores)`
+  - `lat(level) = response_latency_cycles / cpu_clock`
+  - `BW = hw_memory_bandwidth_gb_s_total * 1e3`
+  - `peak_fp32_ops_per_us`
+  - `fit(bytes)`
+  - the repeated `max(..., 1)` numerical-safety pattern
+- Added per-operator `公式解释` sections for:
+  - `Gather`
+  - `ReduceSum`
+  - `Gemm`
+  - `MatMul`
+  - `Transpose`
+  - `Concat`
+- Each section now explains not only what the formula computes, but also what hardware or kernel behavior it is trying to approximate, for example:
+  - why `Gather` uses an occupancy-style unique-row estimate
+  - why `ReduceSum` adds a stride penalty instead of only using total bytes
+  - why `Gemm` uses `max(compute_us, stream_us)` rather than summing both terms
+  - why `Transpose` and `Concat` add dispatch/latency-like terms on top of streaming copy time
+
+Validation run:
+- `rg -n "### 4\\.1\\.1|### 5\\.1\\.4|### 5\\.2\\.4|### 5\\.3\\.4|### 5\\.4\\.4|### 5\\.5\\.4|### 5\\.6\\.4|公式解释" /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `sed -n '140,430p' /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `cd /data/qc/dlrm/ORT/single_op_stage1_mlp && git diff --check`
+
+Open risks:
+- This is still a documentation-only refinement; the code path does not yet emit every family-specific V2 analytical feature described in the document.
+- The document now explains the current formulas much more explicitly, but some formulas remain approximation-level by design because they summarize ORT kernel behavior rather than replicate MLAS or cache hardware exactly.

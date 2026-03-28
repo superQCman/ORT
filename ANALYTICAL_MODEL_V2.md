@@ -147,6 +147,19 @@ V2 固定采用下面三条原则：
 | `peak_fp32_ops_per_us` | SIMD + FMA + freq + active cores 推导出的峰值计算吞吐 | profile 已有，可重建 |
 | `fit(bytes)` | bytes 落入 L1/L2/L3/MEM 的 tier 编码 | 当前可重建，未统一封装为函数列 |
 
+### 4.1.1 共享公式解释
+
+本节里的符号会反复出现在后面的算子族公式里，先统一解释一次。
+
+| 公式 | 解释 |
+| --- | --- |
+| `T = min(num_threads, hw_core_total_cores)` | 表示这次算子执行时理论上真正能参与工作的 core 数。之所以取 `min`，是因为线程数不可能让活跃 core 数超过机器总 core 数；如果线程数比物理 core 多，额外线程更多只是排队或上下文切换。 |
+| `lat(level) = response_latency_cycles / cpu_clock` | cache latency 在 profile 里通常以 cycles 给出，但建模时需要时间单位，所以要除以 `cpu_clock` 把 cycles 转成 `ns`。如果 tier 已经落到主存，则直接使用 `local_mem_delay_ns`。 |
+| `BW = hw_memory_bandwidth_gb_s_total * 1e3` | 把 `GB/s` 转成 `bytes/us`。因为 `1 GB/s = 10^9 bytes/s = 10^3 bytes/us`，所以乘 `1e3` 后就能直接拿来做 `bytes / BW = us`。 |
+| `peak_fp32_ops_per_us = fp_throughput_per_cycle.vector_sp_fma * (simd_width_bits / 32) * 2 * cpu_clock_ghz * 1e3 * T` | 这是 float32 FMA 路径的峰值算力上界。`simd_width_bits / 32` 表示一条向量指令能同时处理多少个 `fp32` 元素；FMA 一次相当于 `mul + add` 两个浮点操作，所以乘 `2`；再乘频率和活跃 core 数，把“每 cycle 的向量吞吐”换成“每微秒的总吞吐”。 |
+| `fit(bytes)` | `fit` 不是机器学习里的 fit，而是“这个局部工作集能装进哪一级 cache”。可以写成分段函数：`bytes <= active_L1D -> 1`，否则若 `<= active_L2 -> 2`，否则若 `<= active_L3 -> 3`，否则 `-> 4`。它的作用是把连续的工作集大小映射到离散的 cache tier，再用于选 latency。 |
+| `max(x, 1)` 或 `max(x, epsilon)` | 文中很多公式都带这个保护项，它只是数值安全垫，用来避免除零、空 shape 或极端边界值导致公式失效。它不改变主导趋势，只是让 builder 在极端样本上仍然稳定。 |
+
 ### 4.2 共享流程
 
 ```mermaid
@@ -243,6 +256,8 @@ for batch in range(M):
         memcpy(dst + dst_offset, src + src_offset, block_size)
 ```
 
+其中 `block_size = element_bytes * suffix_product_after_axis` 的含义是：在 `Gather` 的目标轴上取到一个 `idx` 时，真正要搬运的不是单个标量，而是该 `idx` 后面整段连续后缀子张量。`suffix_product_after_axis` 给出这个后缀子张量有多少个元素，再乘 `element_bytes` 就得到一次逻辑 copy 的 payload 大小。
+
 ### 5.1.2 为什么这样建模
 
 `Gather` 的核心不是“总共搬了多少字节”，而是：
@@ -277,21 +292,20 @@ for batch in range(M):
 
 其余量，例如 `row_bytes`、`table_rows`、`unique_rows_est`、`stream_bytes`，都只作为构造中间变量。
 
-- ```table_rows * (1 - exp(-request_rows / max(table_rows, 1)))```解释：
-    - 可以把它理解成“往 table_rows 个桶里随机扔 request_rows 个球，最后有多少个桶至少被扔中过一次”。
+### 5.1.4 公式解释
 
-    - 对任意一行来说：
-
-    - 一次请求没命中它的概率大约是 1 - 1/table_rows
-    - request_rows 次都没命中的概率大约是
-    ```(1 - 1/table_rows) ^ request_rows```
-    - 当 table_rows 比较大时，这个量常近似成：
-    ```exp(-request_rows / table_rows)```
-    所以：
-    - 某一行至少被命中一次的概率约等于
-    ```1 - exp(-request_rows / table_rows)```
-    - 再乘总行数 table_rows，就得到预计被命中的不同 row 数：
-    ```table_rows * (1 - exp(-request_rows / table_rows))```
+| 公式 | 解释 |
+| --- | --- |
+| `feat_output_elements_per_lookup * 4` | `feat_output_elements_per_lookup` 表示一次 lookup 平均会产出多少个元素；当前文档默认按 `float32` 估算，所以每个元素按 `4 bytes` 计，乘起来就是“一次 lookup 实际要搬多大一行”。 |
+| `parameter_size / max(row_bytes, 1)` | 用参数总字节数除以单行字节数，近似估计 embedding table 有多少行。分母加 `max(..., 1)` 只是避免异常样本里 `row_bytes = 0` 时除零。 |
+| `table_rows * (1 - exp(-request_rows / max(table_rows, 1)))` | 这是一个 occupancy 近似，用来估计本次请求真正触碰了多少个 unique rows。可以把它想成“往 `table_rows` 个桶里随机扔 `request_rows` 个球，最后有多少个桶至少被扔中过一次”。对任意一行来说，一次请求没命中它的概率约是 `1 - 1/table_rows`，连续 `request_rows` 次都没命中的概率近似为 `(1 - 1/table_rows) ^ request_rows`，当 `table_rows` 较大时再近似成 `exp(-request_rows / table_rows)`，于是“一行至少命中一次”的概率约等于 `1 - exp(-request_rows / table_rows)`，最后乘总行数就得到 unique rows 估计。 |
+| `unique_rows_est * row_bytes` | 把“预计碰到多少不同 row”转换成“这些不同 row 一共占多少字节”，从而得到 source 侧真正影响 cache 的局部唯一工作集。 |
+| `2 * output_size + 8 * feat_lookup_count` | `2 * output_size` 表示 source 侧读出结果和 destination 侧写入结果各算一份；`8 * feat_lookup_count` 表示每次 lookup 还要读取一个 `int64` index。它不是一次性搬运量，而是 Gather 这一阶段总的 streaming/copy 流量 proxy。 |
+| `fit(src_unique_bytes_est)` | 判断 source unique working set 更像落在 `L1/L2/L3/MEM` 哪一层。它的目的不是精确模拟 cache，而是把“工作集大小”转成“最接近哪一级 latency”。 |
+| `lat(fit(...))` | 先用 `fit` 选 tier，再取对应的 tier latency。如果 working set 只 fit 到 `L3`，就使用 `L3` latency；如果连 `L3` 都放不下，就退到主存 latency。 |
+| `stream_bytes / BW` | 这是 bandwidth 主导下界。它假设 Gather 的 copy 部分整体上像“总共要搬这么多字节”，于是总时间至少受到 `总字节量 / 可用带宽` 的约束。这里的 `BW` 是内存侧流式带宽 proxy，不是单次搬运事务大小。 |
+| `max(copy_us, request_rows * latency / T)` | Gather 同时受两类机制约束：如果 block 较大，更可能被 `copy_us` 的带宽项主导；如果 block 较小且 source miss 很散，更多受“每次 request 付一次 latency”的延迟项主导。`/ T` 表示这些 request 可以在活跃 core 间分摊，所以总 latency 压力会被并行度部分稀释。 |
+| `ana_gather_stream_bytes / ana_gather_base_us` | 这是 Gather 的有效带宽。不是硬件峰值带宽，而是“按当前 cache miss、copy 粒度和并发条件折算后，模型认为 Gather 实际跑出来的吞吐”。 |
 ## 5.2 ReduceSum
 
 ### 5.2.1 ORT kernel 语义
@@ -342,6 +356,20 @@ else:
 - `ana_reduce_strided_flag`
 
 其余量，例如 `reduce_extent`、`keep_extent`、`acc_bytes_per_thread`、`expected_latency_ns`，都只作为构造中间变量。
+
+### 5.2.4 公式解释
+
+| 公式 | 解释 |
+| --- | --- |
+| `feat_reduction_axes_product` | 表示所有被 reduce 掉的维度乘起来后的总规模，也就是一条输出值平均需要累加多少个输入元素。它是 ReduceSum 的“工作量”摘要，但还没告诉我们这些元素在内存里是否连续。 |
+| `max(output_size / 4, 1)` | 当前默认把输出按 `float32` 近似，所以 `output_size / 4` 表示输出里大约有多少个元素，也就是 keep 部分的元素规模。加 `max(..., 1)` 是为了防止极端空输出。 |
+| `output_size / T` | 把总输出字节数均摊到活跃线程，得到“每个线程大约要维护多少 partial sum”。如果这个值很小，partial accumulator 更可能一直驻留在寄存器或 L1/L2。 |
+| `fit(acc_bytes_per_thread)` | 判断每线程 accumulator 更可能留在 L1/L2/L3 还是已经大到需要频繁溢出。这里真正关心的是 partial sum 的驻留，而不是输入张量总大小。 |
+| `fast_kind in {RK, RKR, None}` | 这是一条 regime 判别规则。`RK`、`RKR` 和 generic `None` 通常意味着被累加输入不再是尾部连续块，访问更像 stride-heavy 跳读，所以把它们标成 `strided_flag = 1`；`KR`、`KRK`、`R` 之类更接近连续归约。 |
+| `activation_size + output_size` | 把输入读流量和输出写流量相加，得到 ReduceSum 的基础 streaming 量。这里没有把 partial sum 额外单独展开成独立大项，是因为它主要通过 `acc_bytes_per_thread` 和 `acc_fit_level` 去控制 latency/驻留效应。 |
+| `lat(acc_fit)` 或 `lat(src_fit)` | 如果瓶颈主要来自 partial sum 驻留，就用 accumulator 对应的 tier latency；如果瓶颈主要来自输入 stride 访问，就用 source working set 对应的 tier latency。它本质是在回答“这次 miss 更像谁在主导”。 |
+| `stream_bytes / BW + strided_penalty_us` | 连续归约时，主体更像流式带宽受限，所以 `stream_bytes / BW` 会占主导；一旦进入 stride-heavy regime，就要额外加上 `strided_penalty_us`，把 cache line 利用率差、prefetch 失效和 miss 增加的代价补回来。 |
+| `ana_reduce_stream_bytes / ana_reduce_base_us` | 这是 ReduceSum 的有效带宽。它能直接反映“同样的输入输出字节量，在连续归约和 stride-heavy 归约下最终跑出来的吞吐差了多少”。 |
 
 ## 5.3 Gemm
 
@@ -401,6 +429,22 @@ apply_activation_if_needed(Y)
 
 其余量，例如 `flops`、`ai`、`effective_weight_bytes`、`compute_us`、`stream_us`，都只作为构造中间变量。
 
+### 5.3.4 公式解释
+
+| 公式 | 解释 |
+| --- | --- |
+| `2 * M * N * K` | 这是标准 GEMM 的理论浮点操作数。对 `C = A x B`，每个输出元素需要 `K` 次乘法和 `K-1` 次加法，建模里通常近似成 `K` 次 FMA，所以记成 `2MNK` 个浮点操作。 |
+| `flops / max(activation_size + parameter_size + output_size, 1)` | 这是 arithmetic intensity，表示“每搬 1 byte 数据，平均能做多少浮点操作”。它越高，越可能是 compute-bound；越低，越可能是 memory-bound。 |
+| `fit(parameter_size)` | 用权重总大小近似判断 `B` 矩阵是否有机会长期留在较高层 cache。对 GEMM 来说，权重是否能被反复复用，比“权重是不是先读”更重要。 |
+| `fit(output_size / T)` | 把输出/accumulator 大小均摊到线程，估计每线程输出 tile 或 partial sum 更可能驻留在哪一级 cache。这个量决定了输出回写前能否在小缓存里多做一些累加。 |
+| `flops / peak_fp32_ops_per_us` | 假设 GEMM 完全由计算单元主导时的时间下界。分母是当前硬件在 `SIMD width + FMA throughput + 频率 + 活跃 core` 条件下的峰值算力，分子是本次 GEMM 的理论 FLOPs。 |
+| `parameter_size` 或 `parameter_size / min(max(M, 1), T)` | 这是对权重复用的摘要。如果 `B` 不能很好复用，就把整块权重都算成有效搬运量；如果 `B` 能在 `M` 行或多个线程间被重用，就按复用程度把有效搬运量折减。`min(max(M, 1), T)` 表示复用上限不会超过输出行数，也不会超过并行线程数。 |
+| `(activation_size + effective_weight_bytes + output_size) / BW` | 这是 memory 主导下界，把输入激活、有效权重流量和输出写回流量加总后除以内存带宽 proxy，得到纯流量视角下至少需要的时间。 |
+| `max(compute_us, stream_us)` | GEMM 的一阶基线用 `max` 而不是相加，因为 blocked GEMM 常常会让计算和部分访存重叠。若算力更紧，则由 `compute_us` 主导；若数据搬运更重，则由 `stream_us` 主导。 |
+| `ai / ridge_point` | `ridge_point` 可以理解成 roofline 的拐点，也就是 `peak_fp32_ops_per_us / BW`。当 `ai / ridge_point > 1` 时，GEMM 更接近 compute-bound；反之更接近 bandwidth-bound。 |
+| `ana_gemm_flops / ana_gemm_base_us` | 这是 GEMM 的有效计算吞吐，表示在当前 cache 复用和并发条件下，解析模型认为 GEMM 实际能跑到多少 `FLOPs/us`。 |
+| `ana_gemm_compute_us / ana_gemm_base_us` | 这是 `compute_share` 的一种写法，用来表示总时延里有多大比例是由计算侧上界决定的。比例越高，说明算子越偏 compute-bound。 |
+
 ## 5.4 MatMul
 
 ### 5.4.1 ORT kernel 语义
@@ -444,6 +488,16 @@ for i in range(num_batches):
 - `ana_matmul_base_us`
 - `ana_matmul_effective_flops_per_us`
 - `ana_matmul_rhs_broadcast_flag`
+
+### 5.4.4 公式解释
+
+| 公式 | 解释 |
+| --- | --- |
+| `leading dims product` | 把 `M/K/N` 之前的 leading dimensions 相乘，得到 batched MatMul 的 batch 次数。它表示同一个 kernel 语义要重复执行多少个独立的 GEMM-like 子问题。 |
+| `rhs_broadcast_flag` | 判断右操作数 `B` 是否在 batch 维上被广播复用。如果为真，说明多个 batch slice 可以重复消费同一份 `B`，这样 `B` 的有效搬运量会下降，cache 重用会变好。 |
+| `2 * M * N * K * batch_count` | 这是把单个 GEMM 的理论 FLOPs 扩展到 batched MatMul。单 batch 是 `2MNK`，再乘 batch 数就得到总计算量。 |
+| `基于 Gemm 公式再乘 batch 结构修正` | 这里的意思不是简单“乘一个常数”，而是：先对单个 batch slice 套用与 GEMM 相同的 `compute_us / stream_us / fit` 逻辑，再用 `batch_count` 聚合，同时根据 `rhs_broadcast_flag` 纠正 `B` 的有效流量。也就是说，MatMul 的解析模型仍然是 GEMM-like，只是多了 batch 复用这层结构。 |
+| `ana_matmul_flops / ana_matmul_base_us` | 这是 MatMul 的有效计算吞吐。若 `rhs_broadcast_flag = 1`，同样的 FLOPs 可能在更低的有效权重流量下完成，所以这个吞吐通常会更高。 |
 
 ## 5.5 Transpose
 
@@ -501,6 +555,18 @@ else:
 - `ana_transpose_effective_bw_bytes_per_us`
 - `ana_transpose_regime_id`
 
+### 5.5.4 公式解释
+
+| 公式 | 解释 |
+| --- | --- |
+| `suffix dims product * dtype bytes` | `suffix dims product` 表示从某个连续后缀开始，一次 block-copy 能覆盖多少个元素；再乘每元素字节数，就得到 contiguous suffix block 的字节大小。这个量决定了 Transpose 更像“大块 memcpy”还是“小粒度跳读跳写”。 |
+| `total elements / suffix block elements` | 把总元素数除以单个 suffix block 的元素数，得到一共要处理多少个 block。block 越多、每个 block 越小，越容易进入高 dispatch/high miss 的 regime。 |
+| `fit(suffix_block_bytes)` | 判断一个连续 suffix block 本身能否很好地留在 `L1/L2/L3`。它不是在看整个张量能否进 cache，而是在看“这个被反复拿来搬运的小块”是否 cache-friendly。 |
+| `2 * output_size / BW` | Transpose 至少要把数据从源位置读一遍、再往目标位置写一遍，所以 streaming 量近似是 `2 * output_size`。除以带宽得到 block-copy 视角下的时间下界。 |
+| `prefix_blocks * latency` 或 `num_elements * latency / T` | 如果是 generic-block regime，主要问题是每个 block 的定位和搬运都要付一次 latency，所以按 block 数乘 latency；如果是 generic-eltwise regime，每个元素都可能以 stride 方式访问，所以更像按元素数累计 latency，并由 `T` 个线程分摊。 |
+| `stream_us + latency_us` | 和 GEMM 不同，Transpose 的 block-copy 与 stride penalty 往往不容易完全重叠，所以这里用“流量项 + 额外 latency 项”更符合 copy-like kernel 的语义。 |
+| `(2 * output_size) / ana_transpose_base_us` | 这是 Transpose 的有效带宽。它能直接反映当前 transpose regime 是否接近 memcpy 性能，还是已经被 stride-heavy 模式严重拖慢。 |
+
 ## 5.6 Concat
 
 ### 5.6.1 ORT kernel 语义
@@ -548,6 +614,19 @@ for tensor in inputs:
 - `ana_concat_base_us`
 - `ana_concat_effective_bw_bytes_per_us`
 - `ana_concat_dispatch_share`
+
+### 5.6.4 公式解释
+
+| 公式 | 解释 |
+| --- | --- |
+| `input_bytes_sum / input_count` | 用总输入字节数除以输入 tensor 个数，得到平均每个 chunk 的 copy 大小。这个值决定 Concat 更像“少量大块流式 copy”，还是“很多个小块 copy”。 |
+| `fit(chunk_bytes_mean)` | 判断平均 chunk 是否足够大到能稳定形成 cache-friendly / bandwidth-friendly 的 copy。如果 chunk 很小，即便总字节量不小，也可能因为 dispatch 开销和 cache line 利用率差而变慢。 |
+| `input_bytes_sum + output_size` | Concat 至少要把所有输入读一遍，再把结果写到输出里，所以总 streaming 量近似为“所有输入字节 + 输出字节”。 |
+| `stream_bytes / BW` | 这是纯 copy 流量主导项，回答的是“如果 Concat 完全是流式拷贝，总共需要多久”。 |
+| `input_count * latency / 1000` | 每增加一个输入 chunk，就多一次 dispatch/offset 计算/小块 copy 的启动成本。`latency` 这里用 `ns` 表示，所以除以 `1000` 把它换成 `us`。 |
+| `stream_us + dispatch_penalty_us` | 对 Concat 来说，大块搬运和“处理很多个小输入”的额外开销通常同时存在，因此把它们相加更符合实际语义。 |
+| `ana_concat_stream_bytes / ana_concat_base_us` | 这是 Concat 的有效带宽。它比硬件峰值带宽更接近“当前 chunk 粒度下真实跑出来的 copy 吞吐”。 |
+| `ana_concat_dispatch_penalty_us / ana_concat_base_us` | 这是 `dispatch_share`，用来衡量总时延里有多大比例是由“小 chunk 太多”带来的管理和启动开销决定的。比例越高，说明 Concat 越不适合只用总字节量来解释。 |
 
 ## 6. 新旧 analytical 特征映射
 
