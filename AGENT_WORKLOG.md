@@ -610,3 +610,62 @@ Validation run:
 Open risks:
 - This is still a documentation-only refinement; the code path does not yet emit every family-specific V2 analytical feature described in the document.
 - The document now explains the current formulas much more explicitly, but some formulas remain approximation-level by design because they summarize ORT kernel behavior rather than replicate MLAS or cache hardware exactly.
+
+### 2026-03-28 - Add a shared CPU submodel to Analytical Model V2 documentation
+
+Request summary:
+- Extend `ANALYTICAL_MODEL_V2.md` so the CPU model explicitly covers instruction width/latency, CPU frequency, and pipeline width.
+- Document that these hardware quantities should first enter a shared CPU submodel and then be absorbed into a small set of family-specific primary analytical features, rather than being exposed as raw direct features.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added CPU-related shared symbols to the document:
+  - `W_simd`
+  - `f_cpu`
+  - `L_fma / L_add`
+  - `Th_fma / Th_add`
+  - `W_pipe`
+  - `cacheline_bytes`
+- Added a dedicated `CPU submodel` section under the shared modeling framework.
+  - The document now defines three CPU-side ceilings/floors:
+    - `throughput ceiling`
+    - `issue ceiling`
+    - `dependency latency floor`
+  - It includes explicit formulas for:
+    - `ana_cpu_effective_pipeline_width`
+    - `ana_cpu_peak_issue_slots_per_us`
+    - `ana_cpu_peak_vec_fma_ops_per_us`
+    - `ana_cpu_peak_vec_add_ops_per_us`
+    - `ana_cpu_fp_fma_latency_us`
+    - `ana_cpu_fp_add_latency_us`
+  - It also includes a new Mermaid diagram showing how CPU ceilings and memory/cache terms merge into family-specific `base_us`.
+- Added a CPU parameter source table explaining that the required CPU quantities already exist in `kunpeng920_single_numa.yaml`, even though they are not exported as standalone `dataset_full.csv` columns.
+- Added a `CPU 融合方式` subsection for all six operator families:
+  - `Gather`
+  - `ReduceSum`
+  - `Gemm`
+  - `MatMul`
+  - `Transpose`
+  - `Concat`
+- Rewrote the operator-family primary-feature definitions so that CPU effects are absorbed into:
+  - `base_us`
+  - effective throughput
+  - one family-specific bottleneck/regime feature
+- Inserted a new section explaining why raw CPU constants should not be fed directly into MLP under the current single-hardware dataset regime, and added a table mapping:
+  - raw CPU quantity
+  - shared CPU intermediate
+  - affected primary analytical feature
+- Renumbered downstream sections accordingly.
+
+Validation run:
+- `rg -n "CPU submodel|effective_pipeline_width|peak_issue_slots_per_us|dependency_latency_us|compute_share|CPU 融合方式|cpu_clock|simd_width_bits|pipeline width" /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `rg -n "^## |^### " /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `sed -n '130,760p' /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `cd /data/qc/dlrm/ORT/single_op_stage1_mlp && git diff --check`
+
+Open risks:
+- This is still a documentation-only update; the code path has not yet been changed to emit the newly described CPU-derived analytical intermediates.
+- The issue-side formulas such as `copy_issue_us` and `issue_us` are intentionally coarse analytical proxies; they summarize pipeline pressure rather than reproducing microarchitectural instruction scheduling exactly.
