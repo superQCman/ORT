@@ -545,3 +545,28 @@ Validation run:
 
 Open risks:
 - This is a documentation-only clarification; it does not yet revise any code or feature extraction logic for `ana_reduce_strided_flag`.
+
+### 2026-03-28 - Converge Analytical Model V2 to a small set of primary features
+
+Request summary:
+- Reduce the perceived clutter in the per-operator Analytical Model V2 feature lists.
+- Make the document explicitly separate primary performance-oriented analytical features from internal intermediate variables.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a new “feature convergence” section that states the V2 contract rule: each operator family should keep at most `2~3` primary analytical features in the direct contract.
+- The document now explicitly distinguishes:
+  - primary features such as `base_us`, effective throughput, and one key regime/bottleneck indicator
+  - intermediate variables such as `stream_bytes`, `unique_rows_est`, `effective_weight_bytes`, and `dispatch_penalty_us`
+- For each operator family (`Gather`, `ReduceSum`, `Gemm`, `MatMul`, `Transpose`, `Concat`), the document now lists the final recommended primary analytical features that should survive feature contraction.
+
+Validation run:
+- `rg -n "新特征|base_us|throughput|吞吐|中间变量|direct analytical|analysis-only" /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `sed -n '140,560p' /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V2.md`
+- `cd /data/qc/dlrm/ORT/single_op_stage1_mlp && git diff --check`
+
+Open risks:
+- This change refines the design contract in documentation only; the current code path still exports the older, more verbose analytical candidate columns.

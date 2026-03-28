@@ -192,6 +192,32 @@ flowchart TD
 - `可重建`：现在的数据集里没有独立列，但可由现有 `input_type_shape`、`output_type_shape`、size 列和 hardware profile 算出来
 - `需新增`：当前既没导出，也不能稳定从现有列直接恢复
 
+### 4.4 特征收束原则
+
+V2 不会把所有 analytical 中间量都送进主合同。每个算子族最终只收束到少量主特征，其余量只作为构造这些主特征的中间变量。
+
+统一规则如下：
+
+- 每个算子族最多保留 `2~3` 个主 Analytical 特征进入 direct contract
+- 其余 `row_bytes`、`unique_rows_est`、`stream_bytes`、`effective_weight_bytes`、`dispatch_penalty_us` 这类量只作为 builder 内部中间变量或 analysis-only 列
+- 主特征优先选“直接对应性能”的量：
+  - `base_us`：解析一阶时延
+  - `throughput`：由 `bytes/base_us` 或 `flops/base_us` 得到的有效吞吐
+  - `bottleneck/regime`：决定性能模式的一个关键离散或比率特征
+
+建议的主合同收束如下：
+
+| 算子族 | 主特征 1 | 主特征 2 | 主特征 3 |
+| --- | --- | --- | --- |
+| `Gather` | `ana_gather_base_us` | `ana_gather_effective_bw_bytes_per_us = ana_gather_stream_bytes / ana_gather_base_us` | `ana_gather_src_fit_level` 或 `ana_gather_src_expected_latency_ns` |
+| `ReduceSum` | `ana_reduce_base_us` | `ana_reduce_effective_bw_bytes_per_us = ana_reduce_stream_bytes / ana_reduce_base_us` | `ana_reduce_strided_flag` |
+| `Gemm` | `ana_gemm_base_us` | `ana_gemm_effective_flops_per_us = ana_gemm_flops / ana_gemm_base_us` | `ana_gemm_ridge_gap` 或 `ana_gemm_compute_share = ana_gemm_compute_us / ana_gemm_base_us` |
+| `MatMul` | `ana_matmul_base_us` | `ana_matmul_effective_flops_per_us = ana_matmul_flops / ana_matmul_base_us` | `ana_matmul_rhs_broadcast_flag` |
+| `Transpose` | `ana_transpose_base_us` | `ana_transpose_effective_bw_bytes_per_us = (2 * output_size) / ana_transpose_base_us` | `ana_transpose_regime_id` |
+| `Concat` | `ana_concat_base_us` | `ana_concat_effective_bw_bytes_per_us = ana_concat_stream_bytes / ana_concat_base_us` | `ana_concat_dispatch_share = ana_concat_dispatch_penalty_us / ana_concat_base_us` |
+
+换句话说，`base_us` 和 `throughput` 是主线，regime/bottleneck 只保留一个最关键的。
+
 ## 5. 按算子族的 Analytical V2
 
 ## 5.1 Gather
@@ -242,6 +268,14 @@ for batch in range(M):
 | `ana_gather_src_expected_latency_ns` | source miss 对应的预期 tier latency | `lat(fit(...))` | `可重建` |
 | `ana_gather_copy_us` | copy 主导项 | `stream_bytes / BW` | `可重建` |
 | `ana_gather_base_us` | Gather 的解析一阶基线 | `max(copy_us, request_rows * latency / T)` | `可重建` |
+
+最终建议进入主合同的 `Gather` 主特征只有 3 个：
+
+- `ana_gather_base_us`
+- `ana_gather_effective_bw_bytes_per_us`
+- `ana_gather_src_fit_level` 或 `ana_gather_src_expected_latency_ns`
+
+其余量，例如 `row_bytes`、`table_rows`、`unique_rows_est`、`stream_bytes`，都只作为构造中间变量。
 
 - ```table_rows * (1 - exp(-request_rows / max(table_rows, 1)))```解释：
     - 可以把它理解成“往 table_rows 个桶里随机扔 request_rows 个球，最后有多少个桶至少被扔中过一次”。
@@ -301,6 +335,14 @@ else:
 | `ana_reduce_expected_latency_ns` | 连续或非连续访问对应的预期 latency | `lat(acc_fit)` 或 `lat(src_fit)` | `可重建` |
 | `ana_reduce_base_us` | Reduce 的解析一阶基线 | `stream_bytes / BW + strided_penalty_us` | `可重建` |
 
+最终建议进入主合同的 `ReduceSum` 主特征只有 3 个：
+
+- `ana_reduce_base_us`
+- `ana_reduce_effective_bw_bytes_per_us`
+- `ana_reduce_strided_flag`
+
+其余量，例如 `reduce_extent`、`keep_extent`、`acc_bytes_per_thread`、`expected_latency_ns`，都只作为构造中间变量。
+
 ## 5.3 Gemm
 
 ### 5.3.1 ORT kernel 语义
@@ -351,6 +393,14 @@ apply_activation_if_needed(Y)
 | `ana_gemm_base_us` | GEMM 一阶基线 | `max(compute_us, stream_us)` | `可重建` |
 | `ana_gemm_ridge_gap` | GEMM 专用 roofline gap | `ai / ridge_point` | `可重建` |
 
+最终建议进入主合同的 `Gemm` 主特征只有 3 个：
+
+- `ana_gemm_base_us`
+- `ana_gemm_effective_flops_per_us`
+- `ana_gemm_ridge_gap` 或 `ana_gemm_compute_share`
+
+其余量，例如 `flops`、`ai`、`effective_weight_bytes`、`compute_us`、`stream_us`，都只作为构造中间变量。
+
 ## 5.4 MatMul
 
 ### 5.4.1 ORT kernel 语义
@@ -388,6 +438,12 @@ for i in range(num_batches):
 | `ana_matmul_rhs_broadcast_flag` | 右操作数是否被 batch 复用 | 根据 rank 和 leading dims 判断 | `需新增` |
 | `ana_matmul_flops` | MatMul 理论运算量 | `2 * M * N * K * batch_count` | `可重建` |
 | `ana_matmul_base_us` | MatMul 一阶基线 | 基于 Gemm 公式再乘 batch 结构修正 | `可重建` |
+
+最终建议进入主合同的 `MatMul` 主特征只有 3 个：
+
+- `ana_matmul_base_us`
+- `ana_matmul_effective_flops_per_us`
+- `ana_matmul_rhs_broadcast_flag`
 
 ## 5.5 Transpose
 
@@ -439,6 +495,12 @@ else:
 | `ana_transpose_latency_us` | generic regime 的额外 latency 成本 | `prefix_blocks * latency` 或 `num_elements * latency / T` | `可重建` |
 | `ana_transpose_base_us` | Transpose 一阶基线 | `stream_us + latency_us` | `可重建` |
 
+最终建议进入主合同的 `Transpose` 主特征只有 3 个：
+
+- `ana_transpose_base_us`
+- `ana_transpose_effective_bw_bytes_per_us`
+- `ana_transpose_regime_id`
+
 ## 5.6 Concat
 
 ### 5.6.1 ORT kernel 语义
@@ -480,6 +542,12 @@ for tensor in inputs:
 | `ana_concat_stream_us` | copy 主导项 | `stream_bytes / BW` | `可重建` |
 | `ana_concat_dispatch_penalty_us` | 每个 chunk 的 dispatch/latency 开销 | `input_count * latency / 1000` | `可重建` |
 | `ana_concat_base_us` | Concat 一阶基线 | `stream_us + dispatch_penalty_us` | `可重建` |
+
+最终建议进入主合同的 `Concat` 主特征只有 3 个：
+
+- `ana_concat_base_us`
+- `ana_concat_effective_bw_bytes_per_us`
+- `ana_concat_dispatch_share`
 
 ## 6. 新旧 analytical 特征映射
 
