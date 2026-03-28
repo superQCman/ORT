@@ -669,3 +669,65 @@ Validation run:
 Open risks:
 - This is still a documentation-only update; the code path has not yet been changed to emit the newly described CPU-derived analytical intermediates.
 - The issue-side formulas such as `copy_issue_us` and `issue_us` are intentionally coarse analytical proxies; they summarize pipeline pressure rather than reproducing microarchitectural instruction scheduling exactly.
+
+## 2026-03-29
+
+Summary:
+- Added a new paper-style analysis document:
+  - [ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md](/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md)
+- The new document formalizes two analytical-model families for the heavy-op DLRM slice:
+  - an explainable calibrated family with physically interpretable parameters
+  - a pure no-fit analytical family used to probe the accuracy ceiling of zero-calibration formulas
+- It fixes the evaluation scope to heavy operators from:
+  - `case_9_4_4`
+  - `case_10_2_1`
+  - `case_10_4_4`
+  - combos `bs1024_nip1500`, `bs1440_nip1700`, `bs1888_nip1800`
+- It documents the heavy-op sample counts:
+  - `Gather`: 59
+  - `ReduceSum`: 59
+  - `Gemm`: 35
+  - `MatMul`: 8
+  - `Transpose`: 8
+  - `Concat`: 9
+- It records the final explainable calibrated models and interpretable parameter meanings for:
+  - `Concat`
+  - `ReduceSum`
+  - `Gather`
+  - `Gemm`
+  - `MatMul`
+  - `Transpose`
+- It records the calibrated evaluation results:
+  - `Gather`: `7.89%`
+  - `ReduceSum`: `11.82%`
+  - `Gemm`: `13.22%`
+  - `MatMul`: `15.29%`
+  - `Transpose`: `27.09%`
+  - `Concat`: `14.66%`
+  - family macro `MAPE = 14.99%`
+  - weighted overall `MAPE = 11.78%`
+- It also defines the pure analytical upper-bound group and reports the best no-fit structure per operator family:
+  - `Gather`: `req_lat_t`
+  - `ReduceSum`: `stream_plus_blocks_lat_mem`
+  - `Gemm`: `roofline+dependency`
+  - `MatMul`: `dep_batch_over_t`
+  - `Transpose`: `prefix_lat_outfit`
+  - `Concat`: `memory_plus_chunk_lat`
+- It records the pure analytical upper-bound results:
+  - `Gather`: `85.88%`
+  - `ReduceSum`: `34.97%`
+  - `Gemm`: `56.63%`
+  - `MatMul`: `91.15%`
+  - `Transpose`: `52.23%`
+  - `Concat`: `78.83%`
+  - family macro `MAPE = 66.62%`
+  - weighted overall `MAPE = 61.62%`
+
+Validation run:
+- `sed -n '1,260p' /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`
+- `rg -n "MAPE|纯 Analytical|可解释校准|Gather|ReduceSum|Gemm|MatMul|Transpose|Concat" /data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff --check -- ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md AGENT_WORKLOG.md`
+
+Open risks:
+- This is still a documentation-only update; no feature builder or training data path has been changed yet.
+- The calibrated formulas are currently recorded as design-level analytical models rather than executable repo code, so the next implementation step must translate them into `feature_engineering.py` carefully and keep the parameter semantics intact.
