@@ -17,16 +17,34 @@ if str(PROJECT_ROOT) not in sys.path:
 from feature_contract import ANALYTICAL_RESIDUAL_TARGET_COLUMN, TARGET_COLUMN  # noqa: E402
 from feature_engineering import add_engineered_features  # noqa: E402
 
-from analytical_calibrated.contracts import (  # noqa: E402
-    ANALYTICAL_FEATURE_COLUMNS,
-    ANALYTICAL_FEATURE_DESCRIPTIONS,
-    BASELINE_COMPARE_DIR,
-    DEFAULT_INPUT_DATASET_DIR,
-    FEATURE_DESCRIPTIONS,
-    OP_CLASS_ORDER,
-    PER_CLASS_NUMERIC_FEATURES,
-    SHARED_CATEGORICAL_FEATURES,
-)
+try:  # noqa: E402
+    from .contracts import (
+        BASELINE_COMPARE_DIR,
+        CLASSED_FEATURE_DESCRIPTIONS,
+        DEFAULT_FEATURE_BRANCH,
+        DEFAULT_INPUT_DATASET_DIR,
+        FEATURE_BRANCH_NO_ANALYTICAL,
+        OP_CLASS_ORDER,
+        SHARED_CATEGORICAL_FEATURES,
+        SUPPORTED_FEATURE_BRANCHES,
+        resolve_branch_features,
+        resolve_op_class,
+        resolve_output_dir,
+    )
+except ImportError:  # noqa: E402
+    from contracts import (
+        BASELINE_COMPARE_DIR,
+        CLASSED_FEATURE_DESCRIPTIONS,
+        DEFAULT_FEATURE_BRANCH,
+        DEFAULT_INPUT_DATASET_DIR,
+        FEATURE_BRANCH_NO_ANALYTICAL,
+        OP_CLASS_ORDER,
+        SHARED_CATEGORICAL_FEATURES,
+        SUPPORTED_FEATURE_BRANCHES,
+        resolve_branch_features,
+        resolve_op_class,
+        resolve_output_dir,
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,13 +58,19 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--analytical-dir",
-        default=str(PROJECT_ROOT / "artifacts" / "latest" / "analytical_calibrated"),
-        help="Directory produced by analytical_calibrated/run_pipeline.py.",
+        default="",
+        help="Directory produced by analytical_calibrated/run_pipeline.py. Ignored for no_analytical branch.",
     )
     parser.add_argument(
         "--output-dir",
-        default=str(PROJECT_ROOT / "artifacts" / "latest" / "classed_op_mlp"),
-        help="Output root for classed dataset artifacts.",
+        default="",
+        help="Output root for classed dataset artifacts. Defaults to a branch-specific directory under artifacts/latest/classed_op_mlp.",
+    )
+    parser.add_argument(
+        "--feature-branch",
+        choices=list(SUPPORTED_FEATURE_BRANCHES),
+        default=DEFAULT_FEATURE_BRANCH,
+        help="Feature branch to export. with_analytical keeps ana_calib_*; no_analytical excludes them to isolate pure classed MLP behavior.",
     )
     return parser.parse_args()
 
@@ -98,21 +122,24 @@ def dataset_summary_op_type_map(frame: pd.DataFrame) -> dict[str, str]:
     return dict(zip(mapping["op_type"].astype(str), mapping["op_class"].astype(str)))
 
 
-def feature_manifest_payload(op_class: str) -> dict[str, Any]:
-    numeric_features = list(PER_CLASS_NUMERIC_FEATURES[op_class])
+def feature_manifest_payload(op_class: str, feature_branch: str) -> dict[str, Any]:
+    branch_features = resolve_branch_features(feature_branch)
+    numeric_features = list(branch_features[op_class])
     categorical_features = list(SHARED_CATEGORICAL_FEATURES)
     return {
         "routing_policy": "static_op_type",
+        "feature_branch": feature_branch,
+        "analytical_enabled": feature_branch != FEATURE_BRANCH_NO_ANALYTICAL,
         "op_class": op_class,
         "categorical_features": categorical_features,
         "numeric_features": numeric_features,
         "analysis_numeric_features": numeric_features,
         "shared_categorical_features": list(SHARED_CATEGORICAL_FEATURES),
-        "per_class_numeric_features": {key: list(value) for key, value in PER_CLASS_NUMERIC_FEATURES.items()},
+        "per_class_numeric_features": {key: list(value) for key, value in branch_features.items()},
         "op_type_class_map": {},  # filled by the top-level manifest
         "target_column": TARGET_COLUMN,
-        "target_columns": [TARGET_COLUMN, ANALYTICAL_RESIDUAL_TARGET_COLUMN],
-        "analytical_feature_columns": list(ANALYTICAL_FEATURE_COLUMNS),
+        "target_columns": [TARGET_COLUMN] if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else [TARGET_COLUMN, ANALYTICAL_RESIDUAL_TARGET_COLUMN],
+        "analytical_feature_columns": [] if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else ["ana_calib_total_us", "ana_calib_mem_us", "ana_calib_compute_us", "ana_calib_overhead_us", "ana_calib_family", "op_class"],
         "all_features": categorical_features + numeric_features,
         "baseline_compare_dir": str(BASELINE_COMPARE_DIR),
     }
@@ -120,35 +147,37 @@ def feature_manifest_payload(op_class: str) -> dict[str, Any]:
 
 def build_classed_dataset_artifacts(
     input_data_dir: Path,
-    analytical_dir: Path,
+    analytical_dir: Path | None,
     output_dir: Path,
+    *,
+    feature_branch: str,
 ) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     datasets_dir = output_dir / "datasets"
     datasets_dir.mkdir(parents=True, exist_ok=True)
+    branch_features = resolve_branch_features(feature_branch)
 
     base_df = load_dataset(input_data_dir)
-    analytical_df = load_analytical_features(analytical_dir)
     gemm_df = build_gemm_columns(base_df)
-
-    merged = base_df.merge(
-        analytical_df,
-        on="row_uid",
-        how="left",
-        validate="one_to_one",
-    )
-    merged = merged.merge(
-        gemm_df,
-        on="row_uid",
-        how="left",
-        validate="one_to_one",
-    )
-
-    missing = int(merged["op_class"].isna().sum()) if "op_class" in merged.columns else len(merged)
-    if missing > 0:
-        raise RuntimeError(f"analytical_calibrated features are missing for {missing} rows")
-
-    merged["op_class"] = merged["op_class"].fillna("mixed_balanced").astype(str)
+    merged = base_df.merge(gemm_df, on="row_uid", how="left", validate="one_to_one")
+    if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
+        merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)
+        merged["ana_calib_family"] = "not_used"
+    else:
+        if analytical_dir is None:
+            raise RuntimeError("analytical_dir is required for with_analytical branch")
+        analytical_df = load_analytical_features(analytical_dir)
+        merged = merged.merge(
+            analytical_df,
+            on="row_uid",
+            how="left",
+            validate="one_to_one",
+        )
+        missing = int(merged["op_class"].isna().sum()) if "op_class" in merged.columns else len(merged)
+        if missing > 0:
+            raise RuntimeError(f"analytical_calibrated features are missing for {missing} rows")
+        merged["op_class"] = merged["op_class"].fillna("mixed_balanced").astype(str)
+        merged["ana_calib_family"] = merged["ana_calib_family"].fillna("not_used").astype(str)
     merged_path = output_dir / "classed_dataset_full.csv"
     merged.to_csv(merged_path, index=False)
 
@@ -163,12 +192,11 @@ def build_classed_dataset_artifacts(
             split_df.to_csv(class_dir / f"{split_name}.csv", index=False)
         class_df.to_csv(class_dir / "dataset_full.csv", index=False)
 
-        manifest = feature_manifest_payload(op_class)
+        manifest = feature_manifest_payload(op_class, feature_branch)
         manifest["op_type_class_map"] = dict(dataset_summary_op_type_map(merged))
         manifest["feature_descriptions"] = {
-            **{key: FEATURE_DESCRIPTIONS[key] for key in SHARED_CATEGORICAL_FEATURES if key in FEATURE_DESCRIPTIONS},
-            **{key: FEATURE_DESCRIPTIONS[key] for key in PER_CLASS_NUMERIC_FEATURES[op_class] if key in FEATURE_DESCRIPTIONS},
-            **{key: ANALYTICAL_FEATURE_DESCRIPTIONS[key] for key in PER_CLASS_NUMERIC_FEATURES[op_class] if key in ANALYTICAL_FEATURE_DESCRIPTIONS},
+            **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in SHARED_CATEGORICAL_FEATURES if key in CLASSED_FEATURE_DESCRIPTIONS},
+            **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in branch_features[op_class] if key in CLASSED_FEATURE_DESCRIPTIONS},
         }
         with (class_dir / "feature_columns.json").open("w", encoding="utf-8") as handle:
             json.dump(manifest, handle, indent=2, ensure_ascii=False)
@@ -180,21 +208,29 @@ def build_classed_dataset_artifacts(
                 split_name: int((class_df["split"] == split_name).sum())
                 for split_name in ["train", "val", "test"]
             },
-            "numeric_features": list(PER_CLASS_NUMERIC_FEATURES[op_class]),
+            "numeric_features": list(branch_features[op_class]),
             "categorical_features": list(SHARED_CATEGORICAL_FEATURES),
         }
 
+    analytical_feature_descriptions: dict[str, str] = {}
+    if feature_branch != FEATURE_BRANCH_NO_ANALYTICAL:
+        for key in ["ana_calib_total_us", "ana_calib_mem_us", "ana_calib_compute_us", "ana_calib_overhead_us", "ana_calib_family"]:
+            if key in CLASSED_FEATURE_DESCRIPTIONS:
+                analytical_feature_descriptions[key] = CLASSED_FEATURE_DESCRIPTIONS[key]
+
     summary_payload = {
         "input_data_dir": str(input_data_dir),
-        "analytical_dir": str(analytical_dir),
+        "feature_branch": feature_branch,
+        "analytical_enabled": feature_branch != FEATURE_BRANCH_NO_ANALYTICAL,
+        "analytical_dir": "" if analytical_dir is None else str(analytical_dir),
         "output_dir": str(output_dir),
         "baseline_compare_dir": str(BASELINE_COMPARE_DIR),
         "routing_policy": "static_op_type",
         "op_type_class_map": dataset_summary_op_type_map(merged),
         "shared_categorical_features": list(SHARED_CATEGORICAL_FEATURES),
-        "per_class_numeric_features": {key: list(value) for key, value in PER_CLASS_NUMERIC_FEATURES.items()},
-        "feature_descriptions": FEATURE_DESCRIPTIONS,
-        "analytical_feature_descriptions": ANALYTICAL_FEATURE_DESCRIPTIONS,
+        "per_class_numeric_features": {key: list(value) for key, value in branch_features.items()},
+        "feature_descriptions": CLASSED_FEATURE_DESCRIPTIONS,
+        "analytical_feature_descriptions": analytical_feature_descriptions,
         "merged_dataset_csv": str(merged_path),
         "classes": class_summary,
     }
@@ -206,10 +242,15 @@ def build_classed_dataset_artifacts(
 
 def main() -> None:
     args = parse_args()
+    output_dir = resolve_output_dir(args.output_dir, args.feature_branch)
+    analytical_dir = None
+    if args.feature_branch != FEATURE_BRANCH_NO_ANALYTICAL:
+        analytical_dir = Path(args.analytical_dir) if args.analytical_dir else PROJECT_ROOT / "artifacts" / "latest" / "analytical_calibrated"
     payload = build_classed_dataset_artifacts(
         Path(args.input_data_dir),
-        Path(args.analytical_dir),
-        Path(args.output_dir),
+        analytical_dir,
+        output_dir,
+        feature_branch=args.feature_branch,
     )
     print(json.dumps(payload, indent=2, ensure_ascii=False))
 

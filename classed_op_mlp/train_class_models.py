@@ -23,6 +23,11 @@ from analyze_op_type_metrics import (  # noqa: E402
 
 from analytical_calibrated.contracts import BASELINE_COMPARE_DIR, OP_CLASS_ORDER  # noqa: E402
 
+try:  # noqa: E402
+    from .contracts import DEFAULT_FEATURE_BRANCH, SUPPORTED_FEATURE_BRANCHES, resolve_output_dir
+except ImportError:  # noqa: E402
+    from contracts import DEFAULT_FEATURE_BRANCH, SUPPORTED_FEATURE_BRANCHES, resolve_output_dir
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -30,15 +35,21 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--data-root",
-        default=str(PROJECT_ROOT / "artifacts" / "latest" / "classed_op_mlp"),
-        help="Output root produced by build_classed_dataset.py.",
+        default="",
+        help="Output root produced by build_classed_dataset.py. Defaults to a branch-specific directory under artifacts/latest/classed_op_mlp.",
     )
     parser.add_argument(
         "--output-dir",
         default="",
         help="Optional explicit model output root. Defaults to <data-root>/models.",
     )
-    parser.add_argument("--hidden-layers", default="128,64")
+    parser.add_argument(
+        "--feature-branch",
+        choices=list(SUPPORTED_FEATURE_BRANCHES),
+        default=DEFAULT_FEATURE_BRANCH,
+        help="Feature branch to load when --data-root is not explicitly provided.",
+    )
+    parser.add_argument("--hidden-layers", default="128,128,128,128,128")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--max-iter", type=int, default=120)
     parser.add_argument("--alpha", type=float, default=1e-4)
@@ -92,18 +103,20 @@ def combine_predictions(
             raise RuntimeError(f"Found {duplicated} duplicate row_uid values in combined {split_name} predictions")
 
         expected = merged_dataset[merged_dataset["split"] == split_name].copy()
-        expected = expected[
-            [
-                "row_uid",
-                "_source_order",
-                "split",
-                "case_id",
-                "combo",
-                "op_type",
-                "op_class",
-                "ana_calib_family",
-            ]
-        ].copy()
+        expected_columns = [
+            "row_uid",
+            "_source_order",
+            "split",
+            "case_id",
+            "combo",
+            "op_type",
+            "op_class",
+        ]
+        if "ana_calib_family" in expected.columns:
+            expected_columns.append("ana_calib_family")
+        expected = expected[expected_columns].copy()
+        if "ana_calib_family" not in expected.columns:
+            expected["ana_calib_family"] = "not_used"
         combined = expected.merge(
             merged_predictions,
             on="row_uid",
@@ -208,7 +221,7 @@ def train_all_classes(
 
 def main() -> None:
     args = parse_args()
-    data_root = Path(args.data_root)
+    data_root = Path(args.data_root) if args.data_root else resolve_output_dir("", args.feature_branch)
     model_root = Path(args.output_dir) if args.output_dir else data_root / "models"
     payload = train_all_classes(
         data_root=data_root,

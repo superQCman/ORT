@@ -16,10 +16,22 @@ from analytical_calibrated.build_analytical_features import build_full_feature_a
 from analytical_calibrated.evaluate_generalization import evaluate_generalization
 
 try:
+    from .contracts import (
+        DEFAULT_FEATURE_BRANCH,
+        FEATURE_BRANCH_NO_ANALYTICAL,
+        SUPPORTED_FEATURE_BRANCHES,
+        resolve_output_dir,
+    )
     from .build_classed_dataset import build_classed_dataset_artifacts
     from .compare_against_baseline import build_overall_comparison
     from .train_class_models import train_all_classes
 except ImportError:
+    from contracts import (
+        DEFAULT_FEATURE_BRANCH,
+        FEATURE_BRANCH_NO_ANALYTICAL,
+        SUPPORTED_FEATURE_BRANCHES,
+        resolve_output_dir,
+    )
     from build_classed_dataset import build_classed_dataset_artifacts
     from compare_against_baseline import build_overall_comparison
     from train_class_models import train_all_classes
@@ -37,12 +49,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--analytical-dir",
         default="",
-        help="Optional analytical output dir. Defaults to artifacts/latest/analytical_calibrated.",
+        help="Optional analytical output dir. Defaults to artifacts/latest/analytical_calibrated. Ignored for no_analytical branch.",
     )
     parser.add_argument(
         "--output-dir",
-        default=str(Path(__file__).resolve().parent.parent / "artifacts" / "latest" / "classed_op_mlp"),
-        help="Output directory root for classed_op_mlp artifacts.",
+        default="",
+        help="Output directory root for classed_op_mlp artifacts. Defaults to a branch-specific directory under artifacts/latest/classed_op_mlp.",
+    )
+    parser.add_argument(
+        "--feature-branch",
+        choices=list(SUPPORTED_FEATURE_BRANCHES),
+        default=DEFAULT_FEATURE_BRANCH,
+        help="Feature branch to run. no_analytical removes ana_calib_* to isolate pure classed MLP behavior.",
     )
     parser.add_argument("--passes", type=int, default=3)
     parser.add_argument("--hidden-layers", default="128,64")
@@ -63,23 +81,36 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     input_csv = Path(args.input_csv)
-    output_dir = Path(args.output_dir)
+    output_dir = resolve_output_dir(args.output_dir, args.feature_branch)
     analytical_dir = Path(args.analytical_dir) if args.analytical_dir else output_dir.parent / "analytical_calibrated"
 
-    analytical_dir.mkdir(parents=True, exist_ok=True)
-    analytical_features = build_full_feature_artifacts(input_csv, analytical_dir, passes=args.passes)
-    analytical_generalization = evaluate_generalization(
-        input_csv,
-        analytical_dir,
-        schemes=["leave_one_case_out", "leave_one_combo_out"],
-        passes=args.passes,
-    )
+    analytical_features: dict[str, object]
+    analytical_generalization: dict[str, object]
+    if args.feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
+        analytical_features = {
+            "skipped": True,
+            "reason": "feature_branch=no_analytical excludes analytical proxy features from classed MLP inputs",
+        }
+        analytical_generalization = {
+            "skipped": True,
+            "reason": "feature_branch=no_analytical excludes analytical proxy features from classed MLP inputs",
+        }
+    else:
+        analytical_dir.mkdir(parents=True, exist_ok=True)
+        analytical_features = build_full_feature_artifacts(input_csv, analytical_dir, passes=args.passes)
+        analytical_generalization = evaluate_generalization(
+            input_csv,
+            analytical_dir,
+            schemes=["leave_one_case_out", "leave_one_combo_out"],
+            passes=args.passes,
+        )
 
     data_root = output_dir
     dataset_payload = build_classed_dataset_artifacts(
         input_data_dir=input_csv.parent,
-        analytical_dir=analytical_dir,
+        analytical_dir=None if args.feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else analytical_dir,
         output_dir=data_root,
+        feature_branch=args.feature_branch,
     )
     model_root = data_root / "models"
     training_payload = train_all_classes(
@@ -105,6 +136,7 @@ def main() -> None:
     )
 
     payload = {
+        "feature_branch": args.feature_branch,
         "analytical_features": analytical_features,
         "analytical_generalization": analytical_generalization,
         "dataset": dataset_payload,

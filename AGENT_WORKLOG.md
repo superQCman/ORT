@@ -1245,3 +1245,46 @@ Open risks:
 - The current `generic_memory` proxy is too coarse for metadata/view operators like `Reshape` and `Unsqueeze`; if these operators remain in-scope for analytical supervision, they likely need separate near-zero-overhead formulas instead of a shared bandwidth proxy.
 - The correlation analysis is descriptive, not causal. It helps localize the dominant failure modes, but it does not by itself choose the next best formula update.
 - `README.md`, `roofline_op_type_analysis/README.md`, `classed_op_mlp/train_class_models.py`, `data.sh`, and `model.sh` still contain unrelated worktree changes and were intentionally not touched in this task.
+
+## 2026-03-29
+
+Summary:
+- Added a branchable feature-contract layer for `classed_op_mlp` so the classification pipeline can run in a new `no_analytical` mode that completely removes `ana_calib_*` from the class MLP inputs.
+- Aligned the new `no_analytical` branch to the existing `dataset_all_no_trace` contract and selected a compact set of per-class features from the original single-MLP `all_features` list, explicitly excluding `hw_ratio_*`, `local_ctx_*`, `comp_feat_*`, and old analytical columns.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `classed_op_mlp` now supports two explicit feature branches:
+  - `with_analytical`: keeps the previous `ana_calib_*` feature contract
+  - `no_analytical`: removes analytical proxy inputs entirely and routes rows into classes using static `op_type -> op_class`
+- `build_classed_dataset.py` now supports `--feature-branch` and branch-specific default output roots:
+  - `with_analytical` defaults to `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp`
+  - `no_analytical` defaults to `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp/no_analytical`
+- `run_pipeline.py` now supports `--feature-branch no_analytical`; in that mode it:
+  - keeps the input dataset aligned to `dataset_all_no_trace`
+  - skips analytical feature construction and analytical generalization
+  - still builds the classed dataset, trains per-class models, and compares against `model_all_no_trace`
+- `train_class_models.py` now supports `--feature-branch` for default data-root resolution and tolerates merged datasets that do not carry `ana_calib_family`.
+- The new `no_analytical` numeric feature subsets are:
+  - `memory_pure`: `batch_size`, `num_indices_per_lookup`, `num_threads`, `output_size`, `activation_size`, `parameter_size`, `feat_io_bytes_sum`, `feat_output_input_bytes_ratio`, `feat_lookup_count`, `feat_output_elements_per_lookup`, `feat_output_elements_per_batch`
+  - `mixed_balanced`: `batch_size`, `num_threads`, `output_size`, `activation_size`, `feat_io_bytes_sum`, `feat_output_input_bytes_ratio`, `feat_output_elements_per_batch`, `feat_activation_elements_per_batch`, `feat_reduction_axes_count`, `feat_reduction_axes_product`, `feat_reduction_input_rank`, `feat_reduction_output_rank`, `feat_reduction_work_items`
+  - `compute_dominant`: `batch_size`, `num_threads`, `output_size`, `activation_size`, `parameter_size`, `feat_io_bytes_sum`, `feat_output_input_bytes_ratio`, `feat_gemm_m`, `feat_gemm_n`, `feat_gemm_k`, `feat_gemm_mac_count`, `feat_gemm_bytes_per_mac`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch no_analytical --output-dir /tmp/classed_op_mlp_no_analytical_smoke`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch with_analytical --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated --output-dir /tmp/classed_op_mlp_with_analytical_smoke`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py --feature-branch no_analytical --data-root /tmp/classed_op_mlp_no_analytical_smoke --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py --help`
+
+Open risks:
+- This task only established the branchable dataset/training contract; it did not run end-to-end model training on the current machine because `torch` is not installed in this environment.
+- The chosen `no_analytical` feature subsets are intentionally compact and mechanism-driven; they are a strong starting point for the ablation, but they are not yet validated against the final test metrics.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py` default hidden-layer edit, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` contained pre-existing or user-driven worktree changes; this task preserved them and only layered the needed branch support on top.
