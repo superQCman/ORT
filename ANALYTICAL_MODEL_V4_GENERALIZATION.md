@@ -61,15 +61,19 @@ heavy-op 选择规则：
 
 ### 4.1 参数形式
 
-脚本校准的是 V3 文档里定义的同一组可解释参数：
+脚本校准的是 V3 文档同一套机制，但把 copy-like family 的半饱和写法显式改写成：
+
+`BW_eff = BW_inf * s / (BW_inf * tau_start + s)`
+
+也就是说，不再把 `B50_*` 作为主参数暴露，而是直接校准对应的 `tau_start_*`。脚本当前校准的参数为：
 
 - `rho_copy_inf`
-- `B50_copy`
+- `tau_copy_start`
 - `tau_dispatch`
 - `kappa_reduce`
-- `B50_reduce`
+- `tau_reduce_start`
 - `rho_gather_inf`
-- `B50_gather_row`
+- `tau_gather_row_start`
 - `m_gather`
 - `rho_fma_inf`
 - `M50 / N50 / K50`
@@ -83,10 +87,17 @@ heavy-op 选择规则：
 这些参数仍然维持原来的物理语义：
 
 - `rho_*` 表示持续效率比例
-- `B50_*` 表示半饱和尺度
-- `m_*` 表示有效并发深度
 - `tau_*` 表示固定启动成本
+- `m_*` 表示有效并发深度
 - `eta_stride` 表示线程扩展指数
+
+其中：
+
+- `tau_copy_start` 是 copy chunk 进入 steady-state 前的等效固定启动时间
+- `tau_reduce_start` 是 reduction 内层流式阶段的固定启动时间
+- `tau_gather_row_start` 是每个 gather row 的固定启动时间
+
+如果需要，仍可以通过 `B50 = BW_inf * tau_start` 折算回半饱和尺度，但不再把 `B50` 当作主建模参数。
 
 ### 4.2 拟合方式
 
@@ -114,55 +125,55 @@ heavy-op 选择规则：
 
 聚合结果：
 
-- test fold mean macro `MAPE = 21.20%`
-- worst-fold macro `MAPE = 23.22%`
-- row-count-weighted family `MAPE = 16.96%`
+- test fold mean macro `MAPE = 20.89%`
+- worst-fold macro `MAPE = 22.16%`
+- row-count-weighted family `MAPE = 16.70%`
 
 各 family 在测试 fold 上的平均 MAPE：
 
 | family | mean test MAPE | median test MAPE | max fold MAPE |
 | --- | ---: | ---: | ---: |
-| `Gather` | `12.02%` | `10.39%` | `16.45%` |
-| `ReduceSum` | `19.10%` | `19.59%` | `21.68%` |
+| `Gather` | `9.82%` | `7.51%` | `14.47%` |
+| `ReduceSum` | `19.51%` | `19.59%` | `22.92%` |
 | `Gemm` | `16.60%` | `17.60%` | `25.04%` |
 | `MatMul` | `28.77%` | `33.02%` | `42.43%` |
 | `Transpose` | `32.31%` | `39.81%` | `49.10%` |
-| `Concat` | `18.38%` | `11.77%` | `38.80%` |
+| `Concat` | `18.35%` | `11.58%` | `38.89%` |
 
 按 held-out case 看：
 
 | held-out case | macro test MAPE | rows |
 | --- | ---: | ---: |
-| `case_10_2_1` | `17.89%` | 65 |
-| `case_10_4_4` | `22.48%` | 55 |
-| `case_9_4_4` | `23.22%` | 58 |
+| `case_10_2_1` | `18.79%` | 65 |
+| `case_10_4_4` | `22.16%` | 55 |
+| `case_9_4_4` | `21.73%` | 58 |
 
 ### 5.2 Leave-One-Combo-Out
 
 聚合结果：
 
-- test fold mean macro `MAPE = 15.75%`
-- worst-fold macro `MAPE = 16.81%`
-- row-count-weighted family `MAPE = 11.66%`
+- test fold mean macro `MAPE = 15.79%`
+- worst-fold macro `MAPE = 16.80%`
+- row-count-weighted family `MAPE = 11.73%`
 
 各 family 在测试 fold 上的平均 MAPE：
 
 | family | mean test MAPE | median test MAPE | max fold MAPE |
 | --- | ---: | ---: | ---: |
-| `Gather` | `8.03%` | `7.35%` | `9.49%` |
-| `ReduceSum` | `11.36%` | `10.19%` | `13.81%` |
+| `Gather` | `8.10%` | `7.45%` | `9.49%` |
+| `ReduceSum` | `11.52%` | `10.81%` | `13.71%` |
 | `Gemm` | `11.19%` | `11.43%` | `16.17%` |
 | `MatMul` | `14.96%` | `12.32%` | `20.70%` |
 | `Transpose` | `34.35%` | `34.66%` | `39.68%` |
-| `Concat` | `14.61%` | `14.98%` | `15.63%` |
+| `Concat` | `14.65%` | `14.96%` | `15.68%` |
 
 按 held-out combo 看：
 
 | held-out combo | macro test MAPE | rows |
 | --- | ---: | ---: |
-| `bs1024_nip1500` | `14.77%` | 54 |
+| `bs1024_nip1500` | `14.91%` | 54 |
 | `bs1440_nip1700` | `15.66%` | 66 |
-| `bs1888_nip1800` | `16.81%` | 58 |
+| `bs1888_nip1800` | `16.80%` | 58 |
 
 ## 6. 与 In-Sample 结果对比
 
@@ -176,8 +187,8 @@ V3 文档中的 in-sample 结果是：
 | protocol | mean macro MAPE | weighted family MAPE |
 | --- | ---: | ---: |
 | in-sample prototype | `14.99%` | `11.78%` |
-| leave-one-case-out test | `21.20%` | `16.96%` |
-| leave-one-combo-out test | `15.75%` | `11.66%` |
+| leave-one-case-out test | `20.89%` | `16.70%` |
+| leave-one-combo-out test | `15.79%` | `11.73%` |
 
 这个对比说明：
 
@@ -206,7 +217,7 @@ V3 文档中的 in-sample 结果是：
 这些参数在不同 fold 之间小幅摆动，但仍集中在少数几个取值：
 
 - `rho_copy_inf in {0.15, 0.18}`
-- `B50_copy in {0, 4096}`
+- `tau_copy_start in {0, 0.032}`
 - `m_gather in {4, 6}`
 - `rho_fma_inf in {0.50, 0.55}`
 - `M50 / N50 / K50` 在少数网格点间切换
@@ -231,8 +242,10 @@ V3 文档中的 in-sample 结果是：
 
 它不是单纯的 in-sample 过拟合。最明显的证据是：
 
-- `leave-one-combo-out` 的 mean macro MAPE 只有 `15.75%`
+- `leave-one-combo-out` 的 mean macro MAPE 只有 `15.79%`
 - `Gather / ReduceSum / Gemm / Concat` 在两种 held-out 方案上都维持得比较稳
+
+此外，把 copy-like family 的表达从 `B50_*` 改写成显式 `tau_start_*` 后，held-out 结果与上一版几乎等价，说明这次改写主要提升的是参数解释性，而不是靠重新定义参数偷换指标口径。
 
 ### 8.2 跨 case 外推比跨 combo 外推更难
 

@@ -780,3 +780,39 @@ Validation run:
 Open risks:
 - The current evaluator calibrates only the explainable parameter family recorded in V3; it does not yet compare against alternative model structures such as an explicit `C_contention` term during held-out evaluation.
 - The largest remaining held-out gap is concentrated in `Transpose`, and secondarily `MatMul`, which suggests that the next model revision should separate kernel base time from concurrency-induced wall-time inflation more explicitly.
+
+## 2026-03-29
+
+Summary:
+- Replaced the copy-like heavy-op parameterization in the held-out evaluator from explicit `B50_*` half-saturation parameters to the equivalent white-box form:
+  - `BW_eff = BW_inf * s / (BW_inf * tau_start + s)`
+- Kept the same heavy-op slice and the same held-out protocols, then reran the full generalization evaluation to check whether the more explicit `tau_start_*` formulation changes out-of-fold behavior.
+- Updated the V4 results document to reflect the new parameter semantics and the refreshed held-out metrics.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V4_GENERALIZATION.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `Concat`, `ReduceSum`, and `Gather` now calibrate:
+  - `tau_copy_start`
+  - `tau_reduce_start`
+  - `tau_gather_row_start`
+  instead of `B50_copy`, `B50_reduce`, and `B50_gather_row`.
+- The evaluator now computes the effective bandwidth for these families through:
+  - `BW_eff = BW_inf * s / (BW_inf * tau_start + s)`
+  rather than exposing `B50 = BW_inf * tau_start` as the primary fitted parameter.
+- Held-out generalization remains essentially unchanged after the rewrite:
+  - `leave_one_case_out`: mean macro `MAPE = 20.89%`, weighted family `MAPE = 16.70%`
+  - `leave_one_combo_out`: mean macro `MAPE = 15.79%`, weighted family `MAPE = 11.73%`
+- The small metric movement relative to the earlier `B50_*` version indicates that this change improves interpretability much more than it changes predictive behavior.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff --check -- evaluate_analytical_generalization.py ANALYTICAL_MODEL_V4_GENERALIZATION.md AGENT_WORKLOG.md`
+
+Open risks:
+- The `tau_start_*` rewrite is mathematically cleaner, but it is still evaluated on the same heavy-op slice; broader regime coverage is still needed before treating the calibrated startup times as globally transferable.
+- `Transpose` and `MatMul` remain the dominant held-out error sources, so the next structural gain still likely comes from explicit contention/context terms rather than further reparameterizing the copy-like bandwidth curve.

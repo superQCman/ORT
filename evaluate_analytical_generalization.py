@@ -273,12 +273,12 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
 def default_params() -> dict[str, float]:
     return {
         "rho_copy_inf": 0.18,
-        "B50_copy": 0.0,
+        "tau_copy_start": 0.0,
         "tau_dispatch": 20.0,
         "kappa_reduce": 0.5,
-        "B50_reduce": 0.0,
+        "tau_reduce_start": 0.0,
         "rho_gather_inf": 0.12,
-        "B50_gather_row": 128.0,
+        "tau_gather_row_start": 128.0 / (100.0 * 1e3 * 0.12),
         "m_gather": 4.0,
         "rho_fma_inf": 0.55,
         "M50": 32.0,
@@ -295,12 +295,12 @@ def default_params() -> dict[str, float]:
 
 PARAM_GRID: dict[str, list[float]] = {
     "rho_copy_inf": [0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.26, 0.30],
-    "B50_copy": [0.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0, 4096.0],
+    "tau_copy_start": [0.0, 0.0005, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032],
     "tau_dispatch": [0.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 60.0, 80.0],
     "kappa_reduce": [0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 1.00],
-    "B50_reduce": [0.0, 64.0, 128.0, 256.0, 512.0, 1024.0, 2048.0],
+    "tau_reduce_start": [0.0, 0.0005, 0.001, 0.002, 0.004, 0.008, 0.016],
     "rho_gather_inf": [0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.26],
-    "B50_gather_row": [0.0, 64.0, 128.0, 256.0, 512.0, 1024.0],
+    "tau_gather_row_start": [0.0, 0.002, 0.004, 0.008, 0.012, 0.016, 0.024, 0.032],
     "m_gather": [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0],
     "rho_fma_inf": [0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.70, 0.80],
     "M50": [0.0, 8.0, 16.0, 32.0, 64.0, 128.0],
@@ -315,13 +315,24 @@ PARAM_GRID: dict[str, list[float]] = {
 }
 
 
+def effective_bandwidth(
+    size_bytes: np.ndarray,
+    bw_inf_bytes_per_us: np.ndarray,
+    tau_start_us: float,
+) -> np.ndarray:
+    size = np.clip(size_bytes.astype(float), a_min=0.0, a_max=None)
+    bw_inf = np.clip(bw_inf_bytes_per_us.astype(float), a_min=1e-6, a_max=None)
+    tau = max(float(tau_start_us), 0.0)
+    return bw_inf * size / np.clip(bw_inf * tau + size, a_min=1e-6, a_max=None)
+
+
 def predict_concat(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
     chunk = frame["copy_chunk_mean_bytes"].to_numpy(dtype=float)
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
     stream = (frame["input_bytes_sum"] + frame["output_size"]).to_numpy(dtype=float)
     input_count = frame["input_count"].to_numpy(dtype=float)
-    b50 = max(params["B50_copy"], 0.0)
-    bw_eff = bw_peak * max(params["rho_copy_inf"], 1e-6) * chunk / np.clip(chunk + b50, a_min=1e-6, a_max=None)
+    bw_inf = bw_peak * max(params["rho_copy_inf"], 1e-6)
+    bw_eff = effective_bandwidth(chunk, bw_inf, params["tau_copy_start"])
     return stream / np.clip(bw_eff, a_min=1e-6, a_max=None) + input_count * max(params["tau_dispatch"], 0.0)
 
 
@@ -331,14 +342,8 @@ def predict_reduce(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
     peak_add = frame["peak_add_ops_per_us"].to_numpy(dtype=float)
     add_ops = frame["feat_reduction_work_items"].to_numpy(dtype=float)
-    b50 = max(params["B50_reduce"], 0.0)
-    bw_eff = (
-        bw_peak
-        * max(params["rho_copy_inf"], 1e-6)
-        * max(params["kappa_reduce"], 1e-6)
-        * inner
-        / np.clip(inner + b50, a_min=1e-6, a_max=None)
-    )
+    bw_inf = bw_peak * max(params["rho_copy_inf"], 1e-6) * max(params["kappa_reduce"], 1e-6)
+    bw_eff = effective_bandwidth(inner, bw_inf, params["tau_reduce_start"])
     t_mem = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
     t_add = add_ops / np.clip(peak_add, a_min=1e-6, a_max=None)
     return np.maximum(t_mem, t_add)
@@ -352,13 +357,8 @@ def predict_gather(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
     cachelines_per_row = frame["gather_cachelines_per_row"].to_numpy(dtype=float)
     lat_src_us = frame["gather_src_latency_us"].to_numpy(dtype=float)
     threads = frame["num_threads"].to_numpy(dtype=float)
-    b50 = max(params["B50_gather_row"], 0.0)
-    bw_eff = (
-        bw_peak
-        * max(params["rho_gather_inf"], 1e-6)
-        * row_bytes
-        / np.clip(row_bytes + b50, a_min=1e-6, a_max=None)
-    )
+    bw_inf = bw_peak * max(params["rho_gather_inf"], 1e-6)
+    bw_eff = effective_bandwidth(row_bytes, bw_inf, params["tau_gather_row_start"])
     t_bw = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
     t_src = request_rows * cachelines_per_row * lat_src_us / np.clip(
         threads * max(params["m_gather"], 1e-6),
@@ -535,10 +535,10 @@ def calibrate_params(train_df: pd.DataFrame, passes: int) -> dict[str, float]:
 
     for _ in range(max(int(passes), 1)):
         before = dict(params)
-        params = coordinate_search(["rho_copy_inf", "B50_copy"], copy_objective, params, passes=1)
+        params = coordinate_search(["rho_copy_inf", "tau_copy_start"], copy_objective, params, passes=1)
         params = coordinate_search(["tau_dispatch"], concat_objective, params, passes=1)
-        params = coordinate_search(["kappa_reduce", "B50_reduce"], reduce_objective, params, passes=1)
-        params = coordinate_search(["rho_gather_inf", "B50_gather_row", "m_gather"], gather_objective, params, passes=1)
+        params = coordinate_search(["kappa_reduce", "tau_reduce_start"], reduce_objective, params, passes=1)
+        params = coordinate_search(["rho_gather_inf", "tau_gather_row_start", "m_gather"], gather_objective, params, passes=1)
         params = coordinate_search(["rho_fma_inf", "M50", "N50", "K50"], gemm_objective, params, passes=1)
         params = coordinate_search(["occ_ref", "rho_tiny_inf", "K50_tiny", "tau_micro"], matmul_objective, params, passes=1)
         params = coordinate_search(["m_stride", "eta_stride"], transpose_objective, params, passes=1)
@@ -692,12 +692,12 @@ def render_markdown(
             lines.append("")
             param_columns = [
                 "rho_copy_inf",
-                "B50_copy",
+                "tau_copy_start",
                 "tau_dispatch",
                 "kappa_reduce",
-                "B50_reduce",
+                "tau_reduce_start",
                 "rho_gather_inf",
-                "B50_gather_row",
+                "tau_gather_row_start",
                 "m_gather",
                 "rho_fma_inf",
                 "M50",
