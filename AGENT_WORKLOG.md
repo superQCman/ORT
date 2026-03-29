@@ -887,3 +887,35 @@ Validation run:
 Open risks:
 - The current `alpha_M/M + alpha_N/N + alpha_K/K` penalty is interpretable but appears less stable under held-out combo transfer than the saturation form, likely because it does not constrain shape effects to remain bounded as cleanly as the `M50/N50/K50` parameterization.
 - If we want a more interpretable GEMM model without losing generalization, the next best candidate is probably a hybrid form: keep bounded saturation for `M/N`, but rewrite only the `K` direction as an explicit packing/startup term.
+
+## 2026-03-29
+
+Summary:
+- Reframed the V3 `Gemm` section so `M50/N50/K50` are no longer introduced as unexplained constants.
+- The document now derives the saturation form from a simpler base-time-plus-shape-penalty model:
+  - `T_base = flops / (PeakFMA * rho_fma_inf)`
+  - `T_shape = T_base * (M50/M + N50/N + K50/K)`
+  - then rewrite to the equivalent bounded utilization form
+    `rho_fma_eff = rho_fma_inf * M/(M+M50) * N/(N+N50) * K/(K+K50)`
+- Removed the temporary `alpha_shape_penalty` GEMM branch from the held-out evaluator so the project returns to a single canonical GEMM analytical form aligned with the V3/V4 docs.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The V3 document now explains `M50/N50/K50` as equivalent half-saturation scales induced by shape-dependent penalties, rather than presenting them as standalone fitted constants.
+- `evaluate_analytical_generalization.py` is back to a single GEMM form:
+  - bounded `M50/N50/K50` saturation
+  - no optional `--gemm-model` switch
+- This keeps the repo’s official held-out evaluation path aligned with the better-generalizing GEMM parameterization.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff --check -- ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md evaluate_analytical_generalization.py AGENT_WORKLOG.md`
+
+Open risks:
+- The V3 derivation is intentionally compact and does not descend into kernel-internal tile or packing metadata, because those signals are not explicitly available in the current dataset; this keeps the explanation interpretable, but still approximate.
+- The reverted evaluator restores the better empirical baseline, but the longer-term hybrid GEMM idea (`M/N` saturation + explicit `K` packing term) remains open for future testing.
