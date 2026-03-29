@@ -105,15 +105,21 @@ def load_prediction_table(model_dir: Path, split_name: str) -> pd.DataFrame:
     return frame
 
 
-def enrich_with_op_type(frame: pd.DataFrame, data_dir: Path, split_name: str) -> pd.DataFrame:
-    if "op_type" in frame.columns:
-        enriched = frame.copy()
-    else:
+def enrich_with_metadata(frame: pd.DataFrame, data_dir: Path, split_name: str) -> pd.DataFrame:
+    enriched = frame.copy()
+    missing_columns = [column for column in ["op_type", "combo"] if column not in enriched.columns]
+    if missing_columns:
         data_csv = data_dir / f"{split_name}.csv"
         if not data_csv.exists():
             raise FileNotFoundError(data_csv)
-        lookup = pd.read_csv(data_csv, usecols=["row_uid", "op_type"])
-        enriched = frame.merge(lookup, on="row_uid", how="left", validate="one_to_one")
+        lookup = pd.read_csv(data_csv, usecols=["row_uid", "op_type", "combo"])
+        merge_columns = ["row_uid"] + missing_columns
+        enriched = enriched.merge(
+            lookup[merge_columns],
+            on="row_uid",
+            how="left",
+            validate="one_to_one",
+        )
     if "op_type" not in enriched.columns:
         raise RuntimeError(f"Failed to resolve op_type for split={split_name}")
     missing_count = int(enriched["op_type"].isna().sum())
@@ -122,6 +128,14 @@ def enrich_with_op_type(frame: pd.DataFrame, data_dir: Path, split_name: str) ->
             f"Resolved op_type for split={split_name}, but {missing_count} prediction rows still have missing op_type"
         )
     enriched["op_type"] = enriched["op_type"].fillna("__missing__").astype(str)
+    if "combo" not in enriched.columns:
+        raise RuntimeError(f"Failed to resolve combo for split={split_name}")
+    combo_missing_count = int(enriched["combo"].isna().sum())
+    if combo_missing_count > 0:
+        raise RuntimeError(
+            f"Resolved combo for split={split_name}, but {combo_missing_count} prediction rows still have missing combo"
+        )
+    enriched["combo"] = enriched["combo"].fillna("__missing__").astype(str)
     return enriched
 
 
@@ -173,6 +187,31 @@ def summarize_frame(frame: pd.DataFrame) -> dict[str, float]:
         }
     )
     return metric_values
+
+
+def combo_op_type_total_duration_weighted_mape(frame: pd.DataFrame) -> float:
+    if frame.empty:
+        return 0.0
+    work = frame.copy()
+    work["target_us"] = pd.to_numeric(work["target_us"], errors="coerce").fillna(0.0)
+    work["pred_us"] = pd.to_numeric(work["pred_us"], errors="coerce").fillna(0.0).clip(lower=0.0)
+    denominator = work["target_us"].clip(lower=1e-9)
+    work["ape"] = (work["pred_us"] - work["target_us"]).abs() / denominator
+    grouped = (
+        work.groupby(["combo", "op_type"], as_index=False)
+        .agg(
+            group_total_target_us=("target_us", "sum"),
+            group_mape=("ape", "mean"),
+        )
+    )
+    if grouped.empty:
+        return 0.0
+    weights = grouped["group_total_target_us"].to_numpy(dtype=float)
+    values = grouped["group_mape"].to_numpy(dtype=float)
+    weight_sum = float(np.sum(weights))
+    if weight_sum <= 0.0:
+        return 0.0
+    return float(np.average(values, weights=weights))
 
 
 def per_op_type_metrics(frame: pd.DataFrame) -> pd.DataFrame:
@@ -274,6 +313,7 @@ def make_summary_payload(
     plot_png: str | None,
 ) -> dict[str, Any]:
     overall = summarize_frame(merged_frame)
+    overall["combo_op_type_total_duration_weighted_mape"] = combo_op_type_total_duration_weighted_mape(merged_frame)
     summary: dict[str, Any] = {
         "split": split_name,
         "row_count": int(len(merged_frame)),
@@ -313,7 +353,7 @@ def main() -> None:
 
     for split_name in args.splits:
         predictions = load_prediction_table(model_dir, split_name)
-        merged = enrich_with_op_type(predictions, data_dir, split_name)
+        merged = enrich_with_metadata(predictions, data_dir, split_name)
         detail_df = per_op_type_metrics(merged)
         ranked_df = rank_table(detail_df, args.ranking_metric, args.min_count_for_ranking)
 

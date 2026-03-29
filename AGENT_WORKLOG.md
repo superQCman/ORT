@@ -953,3 +953,40 @@ Validation run:
 Open risks:
 - The duration-weighted metric improves deployment relevance, but it is still computed only on the current heavy-op slice; if the evaluation scope broadens to include many short operators, the balance between macro `MAPE` and duration-weighted error will become even more important to interpret jointly.
 - Some family-level means of the duration-weighted metric can exceed the corresponding mean `MAPE`, because the former upweights longer-running examples inside the family rather than averaging all rows equally.
+
+## 2026-03-29
+
+Summary:
+- Added a new overall metric to `analyze_op_type_metrics.py` that weights op-type errors by the total runtime of each `combo + op_type` bucket.
+- The goal is to better reflect both:
+  - how expensive an operator family is per invocation
+  - how often it appears inside a combo
+- The metric is exported into `overall_metrics` in the summary JSON as:
+  - `combo_op_type_total_duration_weighted_mape`
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Metadata enrichment for prediction tables now resolves both:
+  - `op_type`
+  - `combo`
+- The new metric is computed by:
+  1. grouping rows by `combo` and `op_type`
+  2. computing each group’s mean APE
+  3. weighting those group-level APEs by the group’s total `target_us`
+- This lets the overall score reflect both operator duration and operator count within each combo, instead of averaging all rows equally.
+- Validation on the existing sample model output produced:
+  - `val`: `combo_op_type_total_duration_weighted_mape = 0.27198992277246287`
+  - `test`: `combo_op_type_total_duration_weighted_mape = 0.31297357553663835`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py --model-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/model_all_clean_2_stage_2`
+- Verified `combo_op_type_total_duration_weighted_mape` is present in:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/model_all_clean_2_stage_2/op_type_metrics/op_type_metrics_summary.json`
+
+Open risks:
+- The new metric is currently summary-only; it is not yet exposed as a ranking metric or as a per-op-type CSV column because the user request was specifically for one overall aggregate.
+- README documentation was intentionally left unchanged in this task because the current worktree already contains unrelated README edits that should not be mixed into this scoped commit.
