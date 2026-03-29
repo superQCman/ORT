@@ -379,6 +379,54 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_op_type_metrics.py \
   --top-n 12
 ```
 
+## 用 Roofline model 分析每类算子的计算/访存瓶颈
+
+如果你想直接判断每个 `op_type` 更偏 `compute-bound`、`memory-bound` 还是 `near-ridge`，可以运行独立的 Roofline 分析入口：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py
+```
+
+默认行为：
+
+- 输入 `artifacts/latest/dataset_all_no_trace/dataset_full.csv`
+- 自动补齐 Roofline 需要的 `feat_*`、硬件上下文和 `ana_*` 列
+- 对每条样本计算：
+  - `arithmetic_intensity = ana_compute_ops / feat_io_bytes_sum`
+  - `achieved_perf = ana_compute_ops / label_operator_actual_dur_us`
+  - `ridge_point = peak_fp32_ops_per_us / mem_bandwidth_bytes_per_us`
+  - `ridge_gap = arithmetic_intensity / ridge_point`
+- 使用三分类规则：
+  - `ridge_gap < 0.8` -> `memory_bound`
+  - `0.8 <= ridge_gap <= 1.25` -> `near_ridge`
+  - `ridge_gap > 1.25` -> `compute_bound`
+- 由于当前数据同时覆盖 `num_threads in {1,2,3,4}`，主 Roofline 图会按线程数分面，而不是混成一张物理口径不一致的总图
+
+默认输出到：
+
+```text
+/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/roofline_op_type_analysis/
+├── row_level_roofline.csv
+├── op_type_thread_summary.csv
+├── op_type_summary.csv
+├── roofline_by_threads.png
+├── op_type_bound_share.png
+├── op_type_ridge_gap_heatmap.png
+└── roofline_summary.json
+```
+
+如果你想改输入、线程分面或 near-ridge 判定区间，可以这样跑：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py \
+  --input-csv /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace/dataset_full.csv \
+  --output-dir /tmp/roofline_op_type_analysis \
+  --min-optype-count 50 \
+  --ridge-band-low 0.8 \
+  --ridge-band-high 1.25 \
+  --thread-values 1 2 4
+```
+
 ## 单独训练 Trace 特征代理模型
 
 这个目录里还单独补了一条“非 trace 特征 -> trace 特征”的 MLP 链路，用来预测当前数据表里已经保留的 trace 派生列，不会和主延迟模型共用训练脚本。

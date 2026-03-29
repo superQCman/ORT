@@ -28,6 +28,8 @@ This project is a self-contained single-operator latency modeling pipeline for O
   Produces feature-feature and feature-target correlation CSVs and heatmaps.
 - `plot_loss_curve.py`
   Draws loss curves from saved training history.
+- `roofline_op_type_analysis/analyze_roofline_op_types.py`
+  Builds row-level and op-type-level Roofline summaries plus visualization artifacts.
 
 ### Current Data and Label Conventions
 
@@ -990,3 +992,44 @@ Validation run:
 Open risks:
 - The new metric is currently summary-only; it is not yet exposed as a ranking metric or as a per-op-type CSV column because the user request was specifically for one overall aggregate.
 - README documentation was intentionally left unchanged in this task because the current worktree already contains unrelated README edits that should not be mixed into this scoped commit.
+
+## 2026-03-29
+
+Summary:
+- Added a new independent `roofline_op_type_analysis/` directory for Roofline-based operator-type analysis.
+- The new path classifies rows and aggregated operator groups into `memory_bound`, `near_ridge`, or `compute_bound`, then exports both CSV summaries and plots.
+- README now documents the new analysis entry point and its default outputs.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a dedicated CLI entry point:
+  - `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- The script defaults to:
+  - input: `artifacts/latest/dataset_all_no_trace/dataset_full.csv`
+  - output: `artifacts/latest/roofline_op_type_analysis`
+  - hardware profile: `hardware_profile/kunpeng920_single_numa.yaml`
+- The script now:
+  - backfills or recomputes required engineered / analytical columns when needed
+  - derives row-level Roofline metrics including arithmetic intensity, achieved performance, ridge point, and ridge gap
+  - emits:
+    - `row_level_roofline.csv`
+    - `op_type_thread_summary.csv`
+    - `op_type_summary.csv`
+    - `roofline_by_threads.png`
+    - `op_type_bound_share.png`
+    - `op_type_ridge_gap_heatmap.png`
+    - `roofline_summary.json`
+- The main Roofline figure is thread-faceted instead of mixing all `num_threads` values into one plot, so each subplot keeps a consistent hardware ceiling and ridge point.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+
+Open risks:
+- The compute proxy comes from existing `ana_compute_ops`, so copy-like operators with negligible modeled FLOPs are intentionally pushed toward the memory-bound side.
+- The ridge-gap heatmap log-compresses very large values for readability, so it should be read as a relative comparison view rather than a raw-magnitude report.

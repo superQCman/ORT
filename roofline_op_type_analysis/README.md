@@ -1,0 +1,95 @@
+# Roofline Op-Type Analysis
+
+这个目录提供一个独立的 Roofline 分析入口，用 `dataset_all_no_trace` 这类单算子数据表来判断每类 `op_type` 更偏：
+
+- `memory_bound`
+- `near_ridge`
+- `compute_bound`
+
+分析脚本会优先复用数据表里已有的 `ana_*` / `feat_*` 列；如果输入缺少必要列，则会回退到项目已有的特征工程逻辑，自动补齐：
+
+- `add_engineered_features`
+- `add_operator_hardware_context`
+- `add_analytical_hardware_software_features`
+
+## 默认运行
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py
+```
+
+默认输入：
+
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace/dataset_full.csv`
+
+默认输出：
+
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/roofline_op_type_analysis`
+
+## 常用参数
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py \
+  --input-csv /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace/dataset_full.csv \
+  --output-dir /tmp/roofline_op_type_analysis \
+  --min-optype-count 50 \
+  --ridge-band-low 0.8 \
+  --ridge-band-high 1.25 \
+  --thread-values 1 2 4
+```
+
+参数说明：
+
+- `--hardware-profile`
+  - 默认使用 `hardware_profile/kunpeng920_single_numa.yaml`
+- `--min-optype-count`
+  - 主图默认只展示样本数不低于这个阈值的 `op_type`
+- `--ridge-band-low` / `--ridge-band-high`
+  - 控制 `near_ridge` 的判定区间
+- `--thread-values`
+  - 默认自动读取输入里实际出现的线程数
+
+## 分类口径
+
+行级派生指标：
+
+- `arithmetic_intensity = ana_compute_ops / feat_io_bytes_sum`
+- `achieved_perf = ana_compute_ops / actual_us`
+- `ridge_point = peak_fp32_ops_per_us / mem_bandwidth_bytes_per_us`
+- `ridge_gap = arithmetic_intensity / ridge_point`
+
+三分类规则：
+
+- `ridge_gap < ridge_band_low` -> `memory_bound`
+- `ridge_band_low <= ridge_gap <= ridge_band_high` -> `near_ridge`
+- `ridge_gap > ridge_band_high` -> `compute_bound`
+
+## 输出文件
+
+```text
+<output-dir>/
+├── row_level_roofline.csv
+├── op_type_thread_summary.csv
+├── op_type_summary.csv
+├── roofline_by_threads.png
+├── op_type_bound_share.png
+├── op_type_ridge_gap_heatmap.png
+└── roofline_summary.json
+```
+
+含义说明：
+
+- `row_level_roofline.csv`
+  - 每条样本的 Roofline 指标和分类
+- `op_type_thread_summary.csv`
+  - `(op_type, num_threads)` 聚合点
+- `op_type_summary.csv`
+  - 每个 `op_type` 的总分类占比和 headline 标签
+- `roofline_by_threads.png`
+  - 按线程数分面的 Roofline 图
+- `op_type_bound_share.png`
+  - 每个 `op_type` 的三分类时长占比图
+- `op_type_ridge_gap_heatmap.png`
+  - `op_type x num_threads` 的聚合 `ridge_gap` 热图
+- `roofline_summary.json`
+  - 入口参数、总体分类占比、Top runtime `op_type` 标签和输出路径
