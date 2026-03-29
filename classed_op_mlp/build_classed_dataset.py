@@ -193,9 +193,9 @@ def build_classed_dataset_artifacts(
     base_df = load_dataset(input_data_dir)
     gemm_df = build_gemm_columns(base_df)
     merged = base_df.merge(gemm_df, on="row_uid", how="left", validate="one_to_one")
+    merged["model_group"] = merged["op_type"].map(lambda op_type: resolve_model_group(feature_branch, op_type)).astype(str)
     if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
         merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)
-        merged["model_group"] = merged["op_type"].map(lambda op_type: resolve_model_group(feature_branch, op_type)).astype(str)
         merged["ana_calib_family"] = "not_used"
     else:
         if analytical_dir is None:
@@ -206,7 +206,6 @@ def build_classed_dataset_artifacts(
         if missing > 0:
             raise RuntimeError(f"analytical_calibrated features are missing for {missing} rows")
         merged["op_class"] = merged["op_class"].fillna("mixed_balanced").astype(str)
-        merged["model_group"] = merged["op_class"].fillna("mixed_balanced").astype(str)
         merged["ana_calib_family"] = merged["ana_calib_family"].fillna("not_used").astype(str)
     merged_path = output_dir / "classed_dataset_full.csv"
     merged.to_csv(merged_path, index=False)

@@ -4,7 +4,8 @@
 
 - `with_analytical`
   - 保留 `ana_calib_*` analytical proxy
-  - 对应原始三分类方案
+  - 现在与 `classed_op_mlp_test` 对齐为同一套 5-way 分桶和同一套非 Analytical 特征
+  - 只是在对应训练组上追加 `ana_calib_*`
 - `no_analytical`
   - 完全移除 `ana_calib_*`
   - 只使用 `dataset_all_no_trace` 里的原始软件/形状特征与派生 `feat_gemm_*`
@@ -21,10 +22,12 @@
 
 ## 静态分桶
 
-- `memory_pure`
+- `gather`
   - `Gather`
+- `layout_move`
   - `Transpose`
   - `Concat`
+- `view_meta`
   - `Reshape`
   - `Shape`
   - `Unsqueeze`
@@ -43,42 +46,65 @@
 
 ## 共享类别特征
 
-`with_analytical` 保留：
+两个分支现在都保留：
 
 | 特征 | 含义 |
 | --- | --- |
 | `op_type` | ONNX 算子类型，用于静态路由和类内建模。 |
+| `node_scope` | 节点所属的图内作用域或模块上下文，近似反映节点位置和调用背景。 |
+| `node_name_normalized` | 归一化后的节点名，近似反映节点身份和固定 kernel/dispatch 模式。 |
 | `arch_embedding_size` | DLRM embedding 维度配置。 |
 | `arch_mlp_bot` | bottom MLP 结构配置。 |
 | `arch_mlp_top` | top MLP 结构配置。 |
-
-`with_analytical` 仍然不使用：
-
-- `node_scope`
-- `node_name_normalized`
-
-`no_analytical` 在上面 4 个共享类别特征的基础上，单独回加这 2 个高基数类别特征做受控对照：
-
-| 特征 | 含义 |
-| --- | --- |
-| `node_scope` | 节点所属的图内作用域或模块上下文，近似反映节点位置和调用背景。 |
-| `node_name_normalized` | 归一化后的节点名，近似反映节点身份和固定 kernel/dispatch 模式。 |
-
-这次回加只针对 `no_analytical` 分支，目的就是单独观察这两个节点身份特征能否把 `gather / layout_move / view_meta` 拉回到更接近 baseline 的误差水平。
 
 ## 数值特征定义
 
 ### `with_analytical`
 
-### `memory_pure`
+这个分支与 `classed_op_mlp_test` 保持相同的 5-way 分桶和相同的 raw 特征，只在每个组上追加 `ana_calib_*`。
+
+### `gather`
 
 | 特征 | 含义 |
 | --- | --- |
+| `batch_size` | DLRM batch size。 |
+| `num_indices_per_lookup` | 每次 lookup 的索引数配置。 |
 | `num_threads` | intra-op 线程数。 |
-| `feat_io_bytes_sum` | 总 I/O 字节量，近似总访存工作集。 |
-| `feat_output_input_bytes_ratio` | 输出相对输入的膨胀/压缩比例。 |
-| `feat_lookup_count` | Gather 的 lookup 次数。 |
-| `feat_output_elements_per_lookup` | 每次 Gather lookup 产生的元素规模。 |
+| `output_size` | 输出张量字节量。 |
+| `activation_size` | 输入激活张量字节量。 |
+| `parameter_size` | 参数张量字节量。 |
+| `feat_io_bytes_sum` | 总 I/O 字节量。 |
+| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
+| `feat_lookup_count` | lookup 次数。 |
+| `feat_output_elements_per_lookup` | 每次 lookup 的输出元素规模。 |
+| `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
+| `ana_calib_total_us` | 校准 analytical 总时延。 |
+| `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
+
+### `layout_move`
+
+| 特征 | 含义 |
+| --- | --- |
+| `batch_size` | DLRM batch size。 |
+| `num_threads` | intra-op 线程数。 |
+| `output_size` | 输出张量字节量。 |
+| `activation_size` | 输入激活张量字节量。 |
+| `feat_io_bytes_sum` | 总 I/O 字节量。 |
+| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
+| `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
+| `ana_calib_total_us` | 校准 analytical 总时延。 |
+| `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
+
+### `view_meta`
+
+| 特征 | 含义 |
+| --- | --- |
+| `batch_size` | DLRM batch size。 |
+| `num_threads` | intra-op 线程数。 |
+| `output_size` | 输出张量字节量。 |
+| `activation_size` | 输入激活张量字节量。 |
+| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
+| `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
 | `ana_calib_total_us` | 校准 analytical 总时延。 |
 | `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
 
@@ -86,12 +112,19 @@
 
 | 特征 | 含义 |
 | --- | --- |
+| `batch_size` | DLRM batch size。 |
 | `num_threads` | intra-op 线程数。 |
+| `output_size` | 输出张量字节量。 |
+| `activation_size` | 输入激活张量字节量。 |
 | `feat_io_bytes_sum` | 总 I/O 字节量。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
 | `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
+| `feat_activation_elements_per_batch` | 每个 batch 的输入激活元素规模。 |
+| `feat_reduction_axes_count` | 被归约轴数量。 |
 | `feat_reduction_work_items` | 归约/聚合类核心工作量。 |
 | `feat_reduction_axes_product` | 被归约维度乘积。 |
+| `feat_reduction_input_rank` | 归约前张量 rank。 |
+| `feat_reduction_output_rank` | 归约后张量 rank。 |
 | `ana_calib_total_us` | 校准 analytical 总时延。 |
 | `ana_calib_mem_us` | 校准 analytical 访存项时延。 |
 | `ana_calib_compute_us` | 校准 analytical 计算项时延。 |
@@ -100,7 +133,13 @@
 
 | 特征 | 含义 |
 | --- | --- |
+| `batch_size` | DLRM batch size。 |
 | `num_threads` | intra-op 线程数。 |
+| `output_size` | 输出张量字节量。 |
+| `activation_size` | 输入激活张量字节量。 |
+| `parameter_size` | 参数张量字节量。 |
+| `feat_io_bytes_sum` | 总 I/O 字节量。 |
+| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
 | `feat_gemm_m` | Gemm/MatMul 的 `M` 维。 |
 | `feat_gemm_n` | Gemm/MatMul 的 `N` 维。 |
 | `feat_gemm_k` | Gemm/MatMul 的 `K` 维。 |
@@ -118,11 +157,6 @@
 - `comp_feat_*`
 - `ana_cache_fit_level`
 - `ana_expected_latency_ns`
-
-但会额外保留：
-
-- `node_scope`
-- `node_name_normalized`
 
 这个分支的训练组是：
 
@@ -276,11 +310,15 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py \
 ├── classed_dataset_full.csv
 ├── dataset_summary.json
 ├── datasets/
-│   ├── memory_pure/
+│   ├── gather/
+│   ├── layout_move/
+│   ├── view_meta/
 │   ├── mixed_balanced/
 │   └── compute_dominant/
 └── models/
-    ├── memory_pure/
+    ├── gather/
+    ├── layout_move/
+    ├── view_meta/
     ├── mixed_balanced/
     ├── compute_dominant/
     ├── combined/

@@ -1457,3 +1457,53 @@ Open risks:
 - This fix covered dataset construction and merge integrity; it did not rerun the full training loop on NPU in this environment.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py` still carries a separate user/local hidden-layer default change in the working tree, which was intentionally preserved.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.
+
+## 2026-03-29
+
+Summary:
+- Upgraded the `with_analytical` branch so it now matches `classed_op_mlp_test` as a true 5-way augmentation experiment instead of using the older 3-way contract.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `with_analytical` now uses the same 5-way static routing as the strong `no_analytical` experiment:
+  - `gather`
+  - `layout_move`
+  - `view_meta`
+  - `mixed_balanced`
+  - `compute_dominant`
+- `with_analytical` now uses the same shared categorical features as `classed_op_mlp_test`:
+  - `op_type`
+  - `node_scope`
+  - `node_name_normalized`
+  - `arch_embedding_size`
+  - `arch_mlp_bot`
+  - `arch_mlp_top`
+- `with_analytical` now keeps the same raw numeric features as `classed_op_mlp_test`, then appends only the relevant analytical features per group:
+  - `gather`: adds `ana_calib_total_us`, `ana_calib_mem_us`
+  - `layout_move`: adds `ana_calib_total_us`, `ana_calib_mem_us`
+  - `view_meta`: adds `ana_calib_total_us`, `ana_calib_mem_us`
+  - `mixed_balanced`: adds `ana_calib_total_us`, `ana_calib_mem_us`, `ana_calib_compute_us`
+  - `compute_dominant`: adds `ana_calib_total_us`, `ana_calib_compute_us`
+- `build_classed_dataset.py` now keeps `model_group` routing based on `op_type` for both branches, so `with_analytical` no longer collapses back to `op_class`.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch with_analytical --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated --output-dir /tmp/classed_op_mlp_with_analytical_5way_smoke`
+
+Key results:
+- The with-analytical smoke dataset now reports:
+  - `model_group_order = ['gather', 'layout_move', 'view_meta', 'mixed_balanced', 'compute_dominant']`
+  - shared categorical features include `node_scope` and `node_name_normalized`
+  - `gather/layout_move/view_meta` row counts match the strong `no_analytical` experiment exactly
+- `with_analytical` is now an apples-to-apples augmentation baseline instead of a separate 3-way contract.
+
+Open risks:
+- This task aligned the dataset and feature contracts, but did not rerun the full NPU training/evaluation loop after the contract change.
+- The current analytical additions are intentionally compact; if the next run regresses, the likely next step is to ablate which `ana_calib_*` terms help each 5-way group.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py` still carries a separate user/local hidden-layer default change in the working tree, which was intentionally preserved.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.

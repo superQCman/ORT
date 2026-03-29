@@ -25,8 +25,7 @@ SUPPORTED_FEATURE_BRANCHES = (
 )
 DEFAULT_FEATURE_BRANCH = FEATURE_BRANCH_WITH_ANALYTICAL
 
-WITH_ANALYTICAL_CATEGORICAL_FEATURES = tuple(SHARED_CATEGORICAL_FEATURES)
-NO_ANALYTICAL_CATEGORICAL_FEATURES = (
+WITH_ANALYTICAL_CATEGORICAL_FEATURES = NO_ANALYTICAL_CATEGORICAL_FEATURES = (
     "op_type",
     "node_scope",
     "node_name_normalized",
@@ -56,7 +55,9 @@ CLASSED_FEATURE_DESCRIPTIONS = {
 }
 
 WITH_ANALYTICAL_MODEL_GROUP_OP_TYPES = {
-    "memory_pure": ("Gather", "Transpose", "Concat", "Reshape", "Shape", "Unsqueeze", "Flatten"),
+    "gather": ("Gather",),
+    "layout_move": ("Concat", "Transpose"),
+    "view_meta": ("Reshape", "Shape", "Unsqueeze", "Flatten"),
     "mixed_balanced": ("ReduceSum", "Sigmoid", "Relu", "Add", "Mul"),
     "compute_dominant": ("Gemm", "MatMul"),
 }
@@ -72,28 +73,68 @@ NO_ANALYTICAL_MODEL_GROUP_OP_TYPES = {
 NO_ANALYTICAL_MODEL_GROUP_ORDER = tuple(NO_ANALYTICAL_MODEL_GROUP_OP_TYPES.keys())
 
 WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
-    "memory_pure": (
+    "gather": (
+        "batch_size",
+        "num_indices_per_lookup",
         "num_threads",
+        "output_size",
+        "activation_size",
+        "parameter_size",
         "feat_io_bytes_sum",
         "feat_output_input_bytes_ratio",
         "feat_lookup_count",
         "feat_output_elements_per_lookup",
+        "feat_output_elements_per_batch",
+        "ana_calib_total_us",
+        "ana_calib_mem_us",
+    ),
+    "layout_move": (
+        "batch_size",
+        "num_threads",
+        "output_size",
+        "activation_size",
+        "feat_io_bytes_sum",
+        "feat_output_input_bytes_ratio",
+        "feat_output_elements_per_batch",
+        "ana_calib_total_us",
+        "ana_calib_mem_us",
+    ),
+    "view_meta": (
+        "batch_size",
+        "num_threads",
+        "output_size",
+        "activation_size",
+        "feat_output_input_bytes_ratio",
+        "feat_output_elements_per_batch",
         "ana_calib_total_us",
         "ana_calib_mem_us",
     ),
     "mixed_balanced": (
+        "batch_size",
         "num_threads",
+        "output_size",
+        "activation_size",
         "feat_io_bytes_sum",
         "feat_output_elements_per_batch",
         "feat_output_input_bytes_ratio",
+        "feat_activation_elements_per_batch",
+        "feat_reduction_axes_count",
         "feat_reduction_work_items",
         "feat_reduction_axes_product",
+        "feat_reduction_input_rank",
+        "feat_reduction_output_rank",
         "ana_calib_total_us",
         "ana_calib_mem_us",
         "ana_calib_compute_us",
     ),
     "compute_dominant": (
+        "batch_size",
         "num_threads",
+        "output_size",
+        "activation_size",
+        "parameter_size",
+        "feat_io_bytes_sum",
+        "feat_output_input_bytes_ratio",
         "feat_gemm_m",
         "feat_gemm_n",
         "feat_gemm_k",
@@ -218,8 +259,6 @@ def resolve_model_group_op_types(feature_branch: str) -> dict[str, tuple[str, ..
 
 def resolve_model_group(feature_branch: str, op_type: str | None) -> str:
     key = "" if op_type is None else str(op_type).strip()
-    if feature_branch == FEATURE_BRANCH_WITH_ANALYTICAL:
-        return resolve_op_class(key)
     for model_group, op_types in resolve_model_group_op_types(feature_branch).items():
         if key in op_types:
             return model_group
