@@ -25,7 +25,19 @@ SUPPORTED_FEATURE_BRANCHES = (
 )
 DEFAULT_FEATURE_BRANCH = FEATURE_BRANCH_WITH_ANALYTICAL
 
+WITH_ANALYTICAL_CATEGORICAL_FEATURES = tuple(SHARED_CATEGORICAL_FEATURES)
+NO_ANALYTICAL_CATEGORICAL_FEATURES = (
+    "op_type",
+    "node_scope",
+    "node_name_normalized",
+    "arch_embedding_size",
+    "arch_mlp_bot",
+    "arch_mlp_top",
+)
+
 EXTRA_FEATURE_DESCRIPTIONS = {
+    "node_scope": "节点所属的图内作用域或模块上下文，近似反映节点位置和调用背景。",
+    "node_name_normalized": "归一化后的节点名，近似反映节点身份和固定 kernel 或 dispatch 模式。",
     "batch_size": "该样本对应的 DLRM batch size。",
     "num_indices_per_lookup": "每次 embedding lookup 的索引数配置。",
     "output_size": "算子输出张量字节量。",
@@ -158,6 +170,10 @@ PER_BRANCH_NUMERIC_FEATURES = {
     FEATURE_BRANCH_WITH_ANALYTICAL: WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES,
     FEATURE_BRANCH_NO_ANALYTICAL: NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES,
 }
+PER_BRANCH_CATEGORICAL_FEATURES = {
+    FEATURE_BRANCH_WITH_ANALYTICAL: WITH_ANALYTICAL_CATEGORICAL_FEATURES,
+    FEATURE_BRANCH_NO_ANALYTICAL: NO_ANALYTICAL_CATEGORICAL_FEATURES,
+}
 PER_BRANCH_MODEL_GROUP_ORDER = {
     FEATURE_BRANCH_WITH_ANALYTICAL: WITH_ANALYTICAL_MODEL_GROUP_ORDER,
     FEATURE_BRANCH_NO_ANALYTICAL: NO_ANALYTICAL_MODEL_GROUP_ORDER,
@@ -180,6 +196,12 @@ def resolve_branch_features(feature_branch: str) -> dict[str, tuple[str, ...]]:
     if feature_branch not in PER_BRANCH_NUMERIC_FEATURES:
         raise ValueError(f"Unsupported feature branch: {feature_branch}")
     return PER_BRANCH_NUMERIC_FEATURES[feature_branch]
+
+
+def resolve_branch_categorical_features(feature_branch: str) -> tuple[str, ...]:
+    if feature_branch not in PER_BRANCH_CATEGORICAL_FEATURES:
+        raise ValueError(f"Unsupported feature branch: {feature_branch}")
+    return PER_BRANCH_CATEGORICAL_FEATURES[feature_branch]
 
 
 def resolve_model_group_order(feature_branch: str) -> tuple[str, ...]:

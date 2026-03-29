@@ -43,7 +43,7 @@
 
 ## 共享类别特征
 
-两个分支都保留：
+`with_analytical` 保留：
 
 | 特征 | 含义 |
 | --- | --- |
@@ -52,10 +52,19 @@
 | `arch_mlp_bot` | bottom MLP 结构配置。 |
 | `arch_mlp_top` | top MLP 结构配置。 |
 
-仍然不使用：
+`with_analytical` 仍然不使用：
 
 - `node_scope`
 - `node_name_normalized`
+
+`no_analytical` 在上面 4 个共享类别特征的基础上，单独回加这 2 个高基数类别特征做受控对照：
+
+| 特征 | 含义 |
+| --- | --- |
+| `node_scope` | 节点所属的图内作用域或模块上下文，近似反映节点位置和调用背景。 |
+| `node_name_normalized` | 归一化后的节点名，近似反映节点身份和固定 kernel/dispatch 模式。 |
+
+这次回加只针对 `no_analytical` 分支，目的就是单独观察这两个节点身份特征能否把 `gather / layout_move / view_meta` 拉回到更接近 baseline 的误差水平。
 
 ## 数值特征定义
 
@@ -109,6 +118,11 @@
 - `comp_feat_*`
 - `ana_cache_fit_level`
 - `ana_expected_latency_ns`
+
+但会额外保留：
+
+- `node_scope`
+- `node_name_normalized`
 
 这个分支的训练组是：
 

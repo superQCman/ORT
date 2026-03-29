@@ -25,8 +25,8 @@ try:  # noqa: E402
         DEFAULT_INPUT_DATASET_DIR,
         FEATURE_BRANCH_NO_ANALYTICAL,
         OP_CLASS_ORDER,
-        SHARED_CATEGORICAL_FEATURES,
         SUPPORTED_FEATURE_BRANCHES,
+        resolve_branch_categorical_features,
         resolve_branch_features,
         resolve_model_group,
         resolve_model_group_op_types,
@@ -42,8 +42,8 @@ except ImportError:  # noqa: E402
         DEFAULT_INPUT_DATASET_DIR,
         FEATURE_BRANCH_NO_ANALYTICAL,
         OP_CLASS_ORDER,
-        SHARED_CATEGORICAL_FEATURES,
         SUPPORTED_FEATURE_BRANCHES,
+        resolve_branch_categorical_features,
         resolve_branch_features,
         resolve_model_group,
         resolve_model_group_op_types,
@@ -130,8 +130,9 @@ def dataset_summary_op_type_map(frame: pd.DataFrame) -> dict[str, str]:
 
 def feature_manifest_payload(model_group: str, feature_branch: str) -> dict[str, Any]:
     branch_features = resolve_branch_features(feature_branch)
+    branch_categorical_features = list(resolve_branch_categorical_features(feature_branch))
     numeric_features = list(branch_features[model_group])
-    categorical_features = list(SHARED_CATEGORICAL_FEATURES)
+    categorical_features = list(branch_categorical_features)
     return {
         "routing_policy": "static_op_type",
         "feature_branch": feature_branch,
@@ -140,7 +141,7 @@ def feature_manifest_payload(model_group: str, feature_branch: str) -> dict[str,
         "categorical_features": categorical_features,
         "numeric_features": numeric_features,
         "analysis_numeric_features": numeric_features,
-        "shared_categorical_features": list(SHARED_CATEGORICAL_FEATURES),
+        "shared_categorical_features": branch_categorical_features,
         "model_group_order": list(resolve_model_group_order(feature_branch)),
         "per_model_group_numeric_features": {key: list(value) for key, value in branch_features.items()},
         "op_type_class_map": {},  # filled by the top-level manifest
@@ -164,6 +165,7 @@ def build_classed_dataset_artifacts(
     datasets_dir = output_dir / "datasets"
     datasets_dir.mkdir(parents=True, exist_ok=True)
     branch_features = resolve_branch_features(feature_branch)
+    branch_categorical_features = tuple(resolve_branch_categorical_features(feature_branch))
     model_group_order = resolve_model_group_order(feature_branch)
     model_group_op_types = resolve_model_group_op_types(feature_branch)
 
@@ -212,7 +214,7 @@ def build_classed_dataset_artifacts(
             for op_type in op_types
         }
         manifest["feature_descriptions"] = {
-            **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in SHARED_CATEGORICAL_FEATURES if key in CLASSED_FEATURE_DESCRIPTIONS},
+            **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in branch_categorical_features if key in CLASSED_FEATURE_DESCRIPTIONS},
             **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in branch_features[model_group] if key in CLASSED_FEATURE_DESCRIPTIONS},
         }
         with (group_dir / "feature_columns.json").open("w", encoding="utf-8") as handle:
@@ -228,7 +230,7 @@ def build_classed_dataset_artifacts(
                 for split_name in ["train", "val", "test"]
             },
             "numeric_features": list(branch_features[model_group]),
-            "categorical_features": list(SHARED_CATEGORICAL_FEATURES),
+            "categorical_features": list(branch_categorical_features),
         }
 
     analytical_feature_descriptions: dict[str, str] = {}
@@ -251,7 +253,7 @@ def build_classed_dataset_artifacts(
             for resolved_group, op_types in model_group_op_types.items()
             for op_type in op_types
         },
-        "shared_categorical_features": list(SHARED_CATEGORICAL_FEATURES),
+        "shared_categorical_features": list(branch_categorical_features),
         "model_group_order": list(model_group_order),
         "per_model_group_numeric_features": {key: list(value) for key, value in branch_features.items()},
         "per_class_numeric_features": {key: list(value) for key, value in branch_features.items()},

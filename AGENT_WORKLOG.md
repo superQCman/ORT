@@ -1344,3 +1344,39 @@ Open risks:
 - I validated dataset generation and training-entry wiring, but did not run the full new five-group training/evaluation loop on this machine because `torch` is not installed in the current environment.
 - `view_meta` still groups four semantically light operators together; if error remains high after this change, the next split candidate is likely `Shape` vs. the pure view operators.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.
+
+## 2026-03-29
+
+Summary:
+- Added a targeted ablation to the `classed_op_mlp` `no_analytical` branch so it regains only the two high-cardinality node identity features from the baseline:
+  - `node_scope`
+  - `node_name_normalized`
+- Kept all numeric feature subsets unchanged so this experiment isolates whether these two categorical features are enough to recover the memory-side groups.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `classed_op_mlp/contracts.py` now resolves categorical features per feature branch:
+  - `with_analytical`: unchanged 4-way categorical contract
+  - `no_analytical`: `op_type`, `node_scope`, `node_name_normalized`, `arch_embedding_size`, `arch_mlp_bot`, `arch_mlp_top`
+- `build_classed_dataset.py` now writes branch-specific categorical feature manifests and summaries instead of assuming a single shared categorical feature list for every branch.
+- The generated `feature_columns.json` for `no_analytical` datasets now includes descriptions for:
+  - `node_scope`
+  - `node_name_normalized`
+- README now documents this as a controlled node-identity ablation intended to test whether `gather`, `layout_move`, and `view_meta` can be pulled closer to the baseline without reintroducing analytical or hardware/context features.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch no_analytical --output-dir /tmp/classed_op_mlp_no_analytical_node_id_smoke`
+- Inspected `/tmp/classed_op_mlp_no_analytical_node_id_smoke/datasets/gather/feature_columns.json` to confirm:
+  - `categorical_features` contains both `node_scope` and `node_name_normalized`
+  - `feature_descriptions` contains explicit meanings for both fields
+
+Open risks:
+- This task only updated the data/manifest contract; it did not run the full training/evaluation loop after reintroducing the two node identity features.
+- The high-cardinality categorical features may improve `gather/layout_move/view_meta`, but they also increase encoded input dimensionality and may overfit specific node identities if the held-out split distribution changes.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.
