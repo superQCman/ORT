@@ -1420,3 +1420,40 @@ Open risks:
 - The new fast path is intended for iteration speed; it deliberately skips or reduces analytical generalization, so it should not replace the full held-out evaluation when producing final analytical-model claims.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py` already had a user/local hidden-layer default change before this task; this update preserved that local default while layering the new fast-run flags on top.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.
+
+## 2026-03-29
+
+Summary:
+- Fixed a `with_analytical` dataset-build bug that made the classed pipeline report all analytical features as missing, even when `analytical_features_full.csv` was complete.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `build_classed_dataset.py` now attaches analytical columns through a dedicated helper that drops any pre-existing analytical columns before merging.
+- This avoids pandas suffix collisions such as `op_class_x/op_class_y`, which previously caused the post-merge missing-value check to think all `97674` rows were missing analytical annotations.
+- `with_analytical` runs can now correctly reuse:
+  - `op_class`
+  - `ana_calib_family`
+  - `ana_calib_total_us`
+  - `ana_calib_mem_us`
+  - `ana_calib_compute_us`
+  - `ana_calib_overhead_us`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch with_analytical --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated --output-dir /tmp/classed_op_mlp_with_analytical_merge_fix_smoke`
+
+Key results:
+- The smoke build completed successfully instead of failing with `analytical_calibrated features are missing for 97674 rows`.
+- The merged dataset now contains valid `op_class`, `ana_calib_family`, and `model_group` values.
+- The with-analytical smoke summary resolved to the expected three groups:
+  - `memory_pure`: `64441` rows
+  - `mixed_balanced`: `23677` rows
+  - `compute_dominant`: `9556` rows
+
+Open risks:
+- This fix covered dataset construction and merge integrity; it did not rerun the full training loop on NPU in this environment.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py` still carries a separate user/local hidden-layer default change in the working tree, which was intentionally preserved.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.

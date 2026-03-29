@@ -101,6 +101,27 @@ def load_analytical_features(analytical_dir: Path) -> pd.DataFrame:
     return frame[[column for column in keep_columns if column in frame.columns]].copy()
 
 
+def attach_analytical_columns(base_frame: pd.DataFrame, analytical_df: pd.DataFrame) -> pd.DataFrame:
+    analytical_columns = [
+        "op_class",
+        "ana_calib_family",
+        "ana_calib_total_us",
+        "ana_calib_mem_us",
+        "ana_calib_compute_us",
+        "ana_calib_overhead_us",
+    ]
+    cleaned_base = base_frame.drop(
+        columns=[column for column in analytical_columns if column in base_frame.columns],
+        errors="ignore",
+    )
+    return cleaned_base.merge(
+        analytical_df,
+        on="row_uid",
+        how="left",
+        validate="one_to_one",
+    )
+
+
 def build_gemm_columns(frame: pd.DataFrame) -> pd.DataFrame:
     base = frame.drop(
         columns=[column for column in frame.columns if column.startswith(("feat_", "ana_", "hw_"))],
@@ -172,20 +193,15 @@ def build_classed_dataset_artifacts(
     base_df = load_dataset(input_data_dir)
     gemm_df = build_gemm_columns(base_df)
     merged = base_df.merge(gemm_df, on="row_uid", how="left", validate="one_to_one")
-    merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)
-    merged["model_group"] = merged["op_type"].map(lambda op_type: resolve_model_group(feature_branch, op_type)).astype(str)
     if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
+        merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)
+        merged["model_group"] = merged["op_type"].map(lambda op_type: resolve_model_group(feature_branch, op_type)).astype(str)
         merged["ana_calib_family"] = "not_used"
     else:
         if analytical_dir is None:
             raise RuntimeError("analytical_dir is required for with_analytical branch")
         analytical_df = load_analytical_features(analytical_dir)
-        merged = merged.merge(
-            analytical_df,
-            on="row_uid",
-            how="left",
-            validate="one_to_one",
-        )
+        merged = attach_analytical_columns(merged, analytical_df)
         missing = int(merged["op_class"].isna().sum()) if "op_class" in merged.columns else len(merged)
         if missing > 0:
             raise RuntimeError(f"analytical_calibrated features are missing for {missing} rows")
