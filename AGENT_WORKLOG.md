@@ -816,3 +816,33 @@ Validation run:
 Open risks:
 - The `tau_start_*` rewrite is mathematically cleaner, but it is still evaluated on the same heavy-op slice; broader regime coverage is still needed before treating the calibrated startup times as globally transferable.
 - `Transpose` and `MatMul` remain the dominant held-out error sources, so the next structural gain still likely comes from explicit contention/context terms rather than further reparameterizing the copy-like bandwidth curve.
+
+## 2026-03-29
+
+Summary:
+- Updated the V3 analytical design document so its main copy-like formulas now match the newer explicit startup-time form:
+  - `BW_eff = BW_inf * s / (BW_inf * tau_start + s)`
+- Replaced the V3 tables and operator-family explanations that previously exposed `B50_copy`, `B50_reduce`, and `B50_gather_row` as primary calibrated parameters.
+- Preserved the half-saturation interpretation as an equivalent secondary quantity:
+  - `B50 = BW_inf * tau_start`
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The V3 document now treats:
+  - `tau_copy_start`
+  - `tau_reduce_start`
+  - `tau_gather_row_start`
+  as the primary interpretable startup parameters for copy-like families.
+- `B50_*` is no longer presented as the main fitted object; it is explicitly documented as an equivalent derived quantity used only when half-saturation intuition is helpful.
+- The operator sections for `Concat`, `ReduceSum`, and `Gather` now explain startup overhead in time units first, then map back to the older `B50` view only as a derived interpretation.
+
+Validation run:
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff --check -- ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md AGENT_WORKLOG.md`
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff -- ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`
+
+Open risks:
+- This update only synchronizes the design document wording; the pure-analytical comparison sections still keep some half-saturation terminology for `M50/N50/K50`, which is intentional because those GEMM occupancy parameters are still best understood as saturation scales rather than startup times.
+- The V3 narrative is now aligned with the newer evaluator, but a future cleanup pass could further unify wording across V3 and V4 so the two documents read as a single evolution path.

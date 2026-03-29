@@ -123,7 +123,7 @@
 | `IssueSlots(T)` | `pipeline_width * f_cpu * 1e3 * T` | `10400 * T slots/us` |
 
 说明：
-
+- `FMA` 全称是Fused Multiply-Add，表示一次同时包含乘法和加法的复合算子。它的峰值吞吐量通常是单纯加法或乘法的两倍，因此 `2 * f_cpu`。
 - `PeakFMA(T)` 用于 `Gemm/MatMul`
 - `PeakAdd(T)` 用于 `ReduceSum`
 - `IssueSlots(T)` 只作为 copy-like kernel 的粗粒度 issue ceiling
@@ -146,10 +146,16 @@
 | 参数类 | 物理含义 |
 | --- | --- |
 | `rho_bw` | 持续有效带宽占峰值带宽的比例 |
-| `B50` | 带宽达到半饱和时所需的块大小 |
+| `tau_start` | kernel 进入 steady-state 前的固定启动时间 |
 | `m_mlp` | 可并发隐藏的 miss 数，或有效 memory-level parallelism |
 | `rho_fma` | 计算核的持续 FMA 利用率 |
 | `tau_launch` | 每个微核、chunk 或 dispatch 的固定启动开销 |
+
+其中 copy-like family 仍可定义等价量：
+
+`B50 = BW_inf * tau_start`
+
+也就是说，`B50` 不是主参数，而是把固定启动时间折算成“等效字节数”后的中间解释量。这样既保留半饱和直觉，又避免把 `B50` 当成神秘阈值直接拟合。
 
 这些参数都能解释为“理想上界与真实执行之间的机制缺口”，而不是神秘常数。
 
@@ -173,12 +179,12 @@
 | 参数 | 含义 | 取值 | 解释 |
 | --- | --- | ---: | --- |
 | `rho_copy_inf` | 大块 copy 的渐近持续带宽比例 | `0.18` | ORT copy path 只能拿到约 `18%` 的 DRAM 峰值 |
-| `B50_copy` | copy 带宽半饱和块大小 | `0 B` | 当前 heavy-op chunk 已经足够大，渐近段直接生效 |
+| `tau_copy_start` | 每个 copy chunk 的固定启动时间 | `0 us` | 当前 heavy-op chunk 已足够大，steady-state copy 直接主导 |
 | `tau_dispatch` | 每个输入块的 dispatch/loop 启动开销 | `20 us` | `Concat` 小而固定的 per-input 管理成本 |
 | `kappa_reduce` | reduction 相对纯 copy 的带宽折损 | `0.5` | 连续 reduce 只有大约一半 copy 效率 |
-| `B50_reduce` | reduction 半饱和块大小 | `0 B` | 当前重负载已处于渐近带宽区间 |
+| `tau_reduce_start` | reduction 流式阶段的固定启动时间 | `0 us` | 当前重负载已处于渐近带宽区间 |
 | `rho_gather_inf` | 大 row gather 的渐近有效带宽比例 | `0.12` | random-row copy 比顺序 copy 更慢 |
-| `B50_gather_row` | gather row 达到半饱和的大小 | `128 B` | 小 row 时每行启动/寻址开销不可忽略 |
+| `tau_gather_row_start` | 每个 gather row 的固定启动时间 | `0.0107 us` | 在当前 `BW_row_inf` 下约折算为 `128 B` 的等效 row 大小 |
 | `m_gather` | gather source miss 的有效并发深度 | `4` | 每线程组约能隐藏 4 个 miss |
 | `rho_fma_inf` | 大 shape GEMM 的渐近 FMA 利用率 | `0.55` | MLAS 相对理论峰值的持续效率 |
 | `M50` | `M` 方向半饱和尺度 | `32` | `M` 太小时 tile 填充不足 |
@@ -194,7 +200,7 @@
 这些参数不是任意自由度，而是被限制在明确语义的物理槽位中：
 
 - `rho_*` 必须在 `(0, 1]` 内
-- `B50_*` 必须是“块大小/问题规模”量纲
+- `tau_start_*` 必须是时间量纲
 - `m_*` 必须是无量纲并发深度
 - `tau_*` 必须是时间量纲
 - `eta_*` 必须解释线程扩展性质
@@ -223,7 +229,9 @@
 
 有效带宽模型：
 
-`BW_copy_eff(chunk_mean) = BW_peak * rho_copy_inf * chunk_mean / (chunk_mean + B50_copy)`
+`BW_copy_inf = BW_peak * rho_copy_inf`
+
+`BW_copy_eff(chunk_mean) = BW_copy_inf * chunk_mean / (BW_copy_inf * tau_copy_start + chunk_mean)`
 
 时延模型：
 
@@ -234,13 +242,14 @@
 - `rho_copy_inf`
   - 表示大块 copy 的渐近效率
   - 反映 ORT copy path、NUMA 局部内存、cache hierarchy、预取和软件循环开销综合后的稳定持续带宽
-- `B50_copy`
-  - 表示块大小尚未足够大时，copy engine 还没有跑满
+- `tau_copy_start`
+  - 表示每个 copy chunk 进入 steady-state 前的固定启动时间
+  - 若需要保留半饱和直觉，可等价写成 `B50_copy = BW_copy_inf * tau_copy_start`
 - `tau_dispatch`
   - 不是任意偏置项
   - 它表示每个输入块都要付出的 loop setup、offset maintenance、dispatch 与边界处理成本
 
-当前重负载下，9 路 chunk 都已经足够大，因此 `B50_copy=0` 合理地表示“已处于带宽饱和区”。这不是过拟合，而是说明这批 heavy concat 不再处于小块 regime。
+当前重负载下，9 路 chunk 都已经足够大，因此 `tau_copy_start=0` 合理地表示“steady-state copy 已直接主导，总时延几乎不再受块内起步损失控制”。这不是过拟合，而是说明这批 heavy concat 不再处于小块 regime。
 
 ### 4.3 `ReduceSum`: 流式读写上的 reduction 惩罚
 
@@ -266,7 +275,9 @@
 
 有效带宽模型：
 
-`BW_reduce_eff(inner) = BW_peak * rho_copy_inf * kappa_reduce * inner / (inner + B50_reduce)`
+`BW_reduce_inf = BW_peak * rho_copy_inf * kappa_reduce`
+
+`BW_reduce_eff(inner) = BW_reduce_inf * inner / (BW_reduce_inf * tau_reduce_start + inner)`
 
 时延模型：
 
@@ -277,10 +288,11 @@
 - `kappa_reduce`
   - 表示“连续 reduce”相对“纯 copy”的额外折损
   - 它不是一个神秘常数，而是在 copy 基线上乘上的 reduction penalty
-- `B50_reduce`
-  - 表示 reduction 长度不足时，accumulator 和 loop setup 还没有被完全摊薄
+- `tau_reduce_start`
+  - 表示 reduction 流式阶段的固定启动时间
+  - 若需要半饱和尺度，可等价写成 `B50_reduce = BW_reduce_inf * tau_reduce_start`
 
-在当前 heavy reduce 里，`nip >= 1500`，已经远大于典型小 reduction 区间，因此 `B50_reduce=0` 仍然合理。
+在当前 heavy reduce 里，`nip >= 1500`，已经远大于典型小 reduction 区间，因此 `tau_reduce_start=0` 仍然合理。
 
 ### 4.4 `Gather`: source miss 与目标 copy 的双机制模型
 
@@ -307,7 +319,9 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 
 行粒度有效带宽：
 
-`BW_gather_eff(row_bytes) = BW_peak * rho_gather_inf * row_bytes / (row_bytes + B50_gather_row)`
+`BW_gather_inf = BW_peak * rho_gather_inf`
+
+`BW_gather_eff(row_bytes) = BW_gather_inf * row_bytes / (BW_gather_inf * tau_gather_row_start + row_bytes)`
 
 源侧 miss 路径：
 
@@ -324,8 +338,9 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 - `rho_gather_inf`
   - 对应“大 row、充足流水化”条件下 gather 所能获得的渐近持续带宽
   - 它自然应低于 `rho_copy_inf`，因为 source 地址不连续
-- `B50_gather_row`
-  - 对应“row 太小时，单次寻址、边界处理和 cacheline 粒度浪费还没被 row payload 覆盖”的临界尺度
+- `tau_gather_row_start`
+  - 对应“row 太小时，单次寻址、边界处理和 cacheline 粒度浪费还没被 row payload 覆盖”的固定启动时间
+  - 在当前校准点下可等价折算成 `B50_gather_row = BW_gather_inf * tau_gather_row_start ≈ 128 B`
 - `m_gather`
   - 对应“random source miss 能被并发隐藏的程度”
   - 这本质上是 memory-level parallelism，不是任意常数
@@ -655,7 +670,7 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 只要把校准限制在少数物理可解释参数上：
 
 - `rho_bw`
-- `B50`
+- `tau_start`
 - `m_mlp`
 - `rho_fma`
 - `tau_launch`
