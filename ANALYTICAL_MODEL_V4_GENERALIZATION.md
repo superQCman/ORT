@@ -10,6 +10,9 @@
 
 - 本文所有 `MAPE` 都是 **held-out test fold** 上计算的，不是 in-sample 误差。
 - 参数校准只使用训练 fold，不使用对应测试 fold 的任何样本。
+- 除 `MAPE` 外，本文还额外报告按真实耗时加权的相对误差：
+  `duration-weighted relative error = sum(|pred-actual|) / sum(actual)`。
+  这个指标会自然提高长时算子的权重，因此更接近“对整体 wall-time 影响有多大”的视角。
 
 ## 2. 可复现实验入口
 
@@ -119,6 +122,19 @@ heavy-op 选择规则：
 2. `leave-one-combo-out`
    每次留出一个 `combo` 做测试，其余 combo 做训练校准。
 
+### 4.4 指标说明
+
+本文同时报告三类聚合指标：
+
+- `mean macro MAPE`
+  - 先按 family 算 `MAPE`，再做不加权平均
+- `row-count-weighted family MAPE`
+  - 按 family 样本数对 `MAPE` 加权
+- `duration-weighted relative error`
+  - 直接按真实 `actual_us` 给每条样本加权
+  - 等价于 `sum(|pred-actual|) / sum(actual)`
+  - 长时算子的误差会被赋予更高权重
+
 ## 5. Held-Out 结果
 
 ### 5.1 Leave-One-Case-Out
@@ -128,25 +144,26 @@ heavy-op 选择规则：
 - test fold mean macro `MAPE = 20.89%`
 - worst-fold macro `MAPE = 22.16%`
 - row-count-weighted family `MAPE = 16.70%`
+- duration-weighted relative error `= 14.44%`
 
-各 family 在测试 fold 上的平均 MAPE：
+各 family 在测试 fold 上的平均误差：
 
-| family | mean test MAPE | median test MAPE | max fold MAPE |
-| --- | ---: | ---: | ---: |
-| `Gather` | `9.82%` | `7.51%` | `14.47%` |
-| `ReduceSum` | `19.51%` | `19.59%` | `22.92%` |
-| `Gemm` | `16.60%` | `17.60%` | `25.04%` |
-| `MatMul` | `28.77%` | `33.02%` | `42.43%` |
-| `Transpose` | `32.31%` | `39.81%` | `49.10%` |
-| `Concat` | `18.35%` | `11.58%` | `38.89%` |
+| family | mean test MAPE | mean duration-weighted RE | median test MAPE | max fold MAPE |
+| --- | ---: | ---: | ---: | ---: |
+| `Gather` | `9.82%` | `10.39%` | `7.51%` | `14.47%` |
+| `ReduceSum` | `19.51%` | `18.99%` | `19.59%` | `22.92%` |
+| `Gemm` | `16.60%` | `16.26%` | `17.60%` | `25.04%` |
+| `MatMul` | `28.77%` | `30.01%` | `33.02%` | `42.43%` |
+| `Transpose` | `32.31%` | `31.53%` | `39.81%` | `49.10%` |
+| `Concat` | `18.35%` | `18.49%` | `11.58%` | `38.89%` |
 
 按 held-out case 看：
 
-| held-out case | macro test MAPE | rows |
-| --- | ---: | ---: |
-| `case_10_2_1` | `18.79%` | 65 |
-| `case_10_4_4` | `22.16%` | 55 |
-| `case_9_4_4` | `21.73%` | 58 |
+| held-out case | macro test MAPE | duration-weighted RE | rows |
+| --- | ---: | ---: | ---: |
+| `case_10_2_1` | `18.79%` | `18.07%` | 65 |
+| `case_10_4_4` | `22.16%` | `10.44%` | 55 |
+| `case_9_4_4` | `21.73%` | `14.00%` | 58 |
 
 ### 5.2 Leave-One-Combo-Out
 
@@ -155,25 +172,26 @@ heavy-op 选择规则：
 - test fold mean macro `MAPE = 15.79%`
 - worst-fold macro `MAPE = 16.80%`
 - row-count-weighted family `MAPE = 11.73%`
+- duration-weighted relative error `= 10.31%`
 
-各 family 在测试 fold 上的平均 MAPE：
+各 family 在测试 fold 上的平均误差：
 
-| family | mean test MAPE | median test MAPE | max fold MAPE |
-| --- | ---: | ---: | ---: |
-| `Gather` | `8.10%` | `7.45%` | `9.49%` |
-| `ReduceSum` | `11.52%` | `10.81%` | `13.71%` |
-| `Gemm` | `11.19%` | `11.43%` | `16.17%` |
-| `MatMul` | `14.96%` | `12.32%` | `20.70%` |
-| `Transpose` | `34.35%` | `34.66%` | `39.68%` |
-| `Concat` | `14.65%` | `14.96%` | `15.68%` |
+| family | mean test MAPE | mean duration-weighted RE | median test MAPE | max fold MAPE |
+| --- | ---: | ---: | ---: | ---: |
+| `Gather` | `8.10%` | `8.14%` | `7.45%` | `9.49%` |
+| `ReduceSum` | `11.52%` | `12.83%` | `10.81%` | `13.71%` |
+| `Gemm` | `11.19%` | `9.93%` | `11.43%` | `16.17%` |
+| `MatMul` | `14.96%` | `16.45%` | `12.32%` | `20.70%` |
+| `Transpose` | `34.35%` | `35.58%` | `34.66%` | `39.68%` |
+| `Concat` | `14.65%` | `21.09%` | `14.96%` | `15.68%` |
 
 按 held-out combo 看：
 
-| held-out combo | macro test MAPE | rows |
-| --- | ---: | ---: |
-| `bs1024_nip1500` | `14.91%` | 54 |
-| `bs1440_nip1700` | `15.66%` | 66 |
-| `bs1888_nip1800` | `16.80%` | 58 |
+| held-out combo | macro test MAPE | duration-weighted RE | rows |
+| --- | ---: | ---: | ---: |
+| `bs1024_nip1500` | `14.91%` | `9.05%` | 54 |
+| `bs1440_nip1700` | `15.66%` | `10.25%` | 66 |
+| `bs1888_nip1800` | `16.80%` | `10.88%` | 58 |
 
 ## 6. 与 In-Sample 结果对比
 
@@ -184,16 +202,17 @@ V3 文档中的 in-sample 结果是：
 
 而这轮真正的 held-out 结果是：
 
-| protocol | mean macro MAPE | weighted family MAPE |
-| --- | ---: | ---: |
-| in-sample prototype | `14.99%` | `11.78%` |
-| leave-one-case-out test | `20.89%` | `16.70%` |
-| leave-one-combo-out test | `15.79%` | `11.73%` |
+| protocol | mean macro MAPE | row-count-weighted family MAPE | duration-weighted RE |
+| --- | ---: | ---: | ---: |
+| in-sample prototype | `14.99%` | `11.78%` | `N/A` |
+| leave-one-case-out test | `20.89%` | `16.70%` | `14.44%` |
+| leave-one-combo-out test | `15.79%` | `11.73%` | `10.31%` |
 
 这个对比说明：
 
 1. `leave-one-combo-out` 与 in-sample 非常接近，说明模型对 batch size / `nip` 变化的外推是稳的。
 2. `leave-one-case-out` 有明显升高，但仍保持在可用区间，说明跨 case 的执行上下文差异确实会带来额外误差。
+3. 按真实耗时加权后，整体误差进一步下降，说明高耗时算子上的拟合质量整体好于单纯样本平均所给出的印象。
 
 ## 7. 参数稳定性分析
 
@@ -243,6 +262,7 @@ V3 文档中的 in-sample 结果是：
 它不是单纯的 in-sample 过拟合。最明显的证据是：
 
 - `leave-one-combo-out` 的 mean macro MAPE 只有 `15.79%`
+- `leave-one-combo-out` 的 duration-weighted relative error 只有 `10.31%`
 - `Gather / ReduceSum / Gemm / Concat` 在两种 held-out 方案上都维持得比较稳
 
 此外，把 copy-like family 的表达从 `B50_*` 改写成显式 `tau_start_*` 后，held-out 结果与上一版几乎等价，说明这次改写主要提升的是参数解释性，而不是靠重新定义参数偷换指标口径。
@@ -256,6 +276,11 @@ V3 文档中的 in-sample 结果是：
 - 某些 kernel 的实际 wall-time 扩展性
 
 因此 `leave-one-case-out` 比 `leave-one-combo-out` 更接近“真正的 deployment 外推”。
+
+从耗时加权视角看，这个结论仍然成立：
+
+- `leave-one-case-out`: `14.44%`
+- `leave-one-combo-out`: `10.31%`
 
 ### 8.3 当前 hardest families 仍然是 `Transpose` 和 `MatMul`
 

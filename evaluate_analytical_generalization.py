@@ -108,6 +108,16 @@ def mape(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(np.abs(pred - target) / denominator))
 
 
+def duration_weighted_relative_error(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    if len(y_true) == 0:
+        return 0.0
+    target = np.asarray(y_true, dtype=float)
+    pred = np.asarray(y_pred, dtype=float)
+    numerator = float(np.sum(np.abs(pred - target)))
+    denominator = float(np.sum(np.clip(target, a_min=1e-9, a_max=None)))
+    return numerator / denominator if denominator > 0.0 else 0.0
+
+
 def fit_latency_us(working_set_bytes: float, row: pd.Series) -> float:
     ws = max(safe_float(working_set_bytes, 0.0), 0.0)
     l1_bytes = max(safe_float(row.get("hw_cache_l1d_active_bytes"), 0.0), 0.0)
@@ -568,6 +578,9 @@ def family_metric_rows(
                 "family": family,
                 "row_count": int(len(family_df)),
                 "mape": mape(family_df["actual_us"].to_numpy(dtype=float), pred),
+                "dwre": duration_weighted_relative_error(family_df["actual_us"].to_numpy(dtype=float), pred),
+                "actual_sum_us": float(family_df["actual_us"].sum()),
+                "abs_error_sum_us": float(np.sum(np.abs(pred - family_df["actual_us"].to_numpy(dtype=float)))),
                 "actual_mean_us": float(family_df["actual_us"].mean()),
                 "pred_mean_us": float(np.mean(pred)),
             }
@@ -609,8 +622,13 @@ def summarize_scheme(metrics_df: pd.DataFrame, split_name: str) -> dict[str, Any
             mean_mape=("mape", "mean"),
             median_mape=("mape", "median"),
             max_mape=("mape", "max"),
+            mean_dwre=("dwre", "mean"),
+            median_dwre=("dwre", "median"),
+            max_dwre=("dwre", "max"),
             folds=("fold", "nunique"),
             total_rows=("row_count", "sum"),
+            total_actual_us=("actual_sum_us", "sum"),
+            total_abs_error_us=("abs_error_sum_us", "sum"),
         )
         .sort_values("family")
     )
@@ -619,10 +637,16 @@ def summarize_scheme(metrics_df: pd.DataFrame, split_name: str) -> dict[str, Any
         .agg(
             macro_mape=("mape", "mean"),
             total_rows=("row_count", "sum"),
+            actual_sum_us=("actual_sum_us", "sum"),
+            abs_error_sum_us=("abs_error_sum_us", "sum"),
         )
         .sort_values("fold")
     )
+    fold_macro["duration_weighted_relative_error"] = (
+        fold_macro["abs_error_sum_us"] / fold_macro["actual_sum_us"].clip(lower=1e-9)
+    )
     weighted = float(np.average(split_df["mape"], weights=split_df["row_count"]))
+    duration_weighted = float(split_df["abs_error_sum_us"].sum() / max(split_df["actual_sum_us"].sum(), 1e-9))
     return {
         "split": split_name,
         "family_summary": family_summary.to_dict(orient="records"),
@@ -630,6 +654,7 @@ def summarize_scheme(metrics_df: pd.DataFrame, split_name: str) -> dict[str, Any
         "macro_mape_mean": float(fold_macro["macro_mape"].mean()),
         "macro_mape_max": float(fold_macro["macro_mape"].max()),
         "weighted_family_mape": weighted,
+        "duration_weighted_relative_error": duration_weighted,
     }
 
 
@@ -671,24 +696,29 @@ def render_markdown(
             lines.append(
                 f"- Row-count-weighted family MAPE: `{test_summary['weighted_family_mape'] * 100.0:.2f}%`"
             )
+            lines.append(
+                f"- Duration-weighted relative error: `{test_summary['duration_weighted_relative_error'] * 100.0:.2f}%`"
+            )
             lines.append("")
             lines.append("### Test Family MAPE")
             lines.append("")
-            lines.append("| family | mean MAPE | median MAPE | max MAPE | folds |")
-            lines.append("| --- | ---: | ---: | ---: | ---: |")
+            lines.append("| family | mean MAPE | mean duration-weighted RE | median MAPE | max MAPE | folds |")
+            lines.append("| --- | ---: | ---: | ---: | ---: | ---: |")
             for row in test_summary["family_summary"]:
                 lines.append(
                     f"| `{row['family']}` | {row['mean_mape'] * 100.0:.2f}% | "
+                    f"{row['mean_dwre'] * 100.0:.2f}% | "
                     f"{row['median_mape'] * 100.0:.2f}% | {row['max_mape'] * 100.0:.2f}% | {int(row['folds'])} |"
                 )
             lines.append("")
             lines.append("### Fold Macro MAPE")
             lines.append("")
-            lines.append("| fold | macro MAPE | rows |")
-            lines.append("| --- | ---: | ---: |")
+            lines.append("| fold | macro MAPE | duration-weighted RE | rows |")
+            lines.append("| --- | ---: | ---: | ---: |")
             for row in test_summary["fold_macro"]:
                 lines.append(
-                    f"| `{row['fold']}` | {row['macro_mape'] * 100.0:.2f}% | {int(row['total_rows'])} |"
+                    f"| `{row['fold']}` | {row['macro_mape'] * 100.0:.2f}% | "
+                    f"{safe_float(row['duration_weighted_relative_error']) * 100.0:.2f}% | {int(row['total_rows'])} |"
                 )
             lines.append("")
 

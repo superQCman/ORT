@@ -919,3 +919,37 @@ Validation run:
 Open risks:
 - The V3 derivation is intentionally compact and does not descend into kernel-internal tile or packing metadata, because those signals are not explicitly available in the current dataset; this keeps the explanation interpretable, but still approximate.
 - The reverted evaluator restores the better empirical baseline, but the longer-term hybrid GEMM idea (`M/N` saturation + explicit `K` packing term) remains open for future testing.
+
+## 2026-03-29
+
+Summary:
+- Added a duration-aware held-out metric to the analytical generalization evaluator so long-running operators contribute more to the overall error summary.
+- The new metric is:
+  - `duration-weighted relative error = sum(|pred-actual|) / sum(actual)`
+- Re-ran the default held-out evaluation and updated the V4 document to report this metric alongside the existing macro `MAPE` and row-count-weighted family `MAPE`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V4_GENERALIZATION.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `evaluate_analytical_generalization.py` now exports, per family and per fold:
+  - `dwre`
+  - `actual_sum_us`
+  - `abs_error_sum_us`
+- Scheme summaries now include:
+  - `duration_weighted_relative_error`
+- Default held-out results now report:
+  - `leave-one-case-out`: duration-weighted relative error `14.44%`
+  - `leave-one-combo-out`: duration-weighted relative error `10.31%`
+- The V4 document now explains the new metric and shows that, when weighting by actual operator time, the overall held-out error is lower than the plain sample-average `MAPE`.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff --check -- evaluate_analytical_generalization.py ANALYTICAL_MODEL_V4_GENERALIZATION.md AGENT_WORKLOG.md`
+
+Open risks:
+- The duration-weighted metric improves deployment relevance, but it is still computed only on the current heavy-op slice; if the evaluation scope broadens to include many short operators, the balance between macro `MAPE` and duration-weighted error will become even more important to interpret jointly.
+- Some family-level means of the duration-weighted metric can exceed the corresponding mean `MAPE`, because the former upweights longer-running examples inside the family rather than averaging all rows equally.
