@@ -226,6 +226,25 @@
 python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py
 ```
 
+如果你现在是想快速验证 `with_analytical` 分支，不想被 analytical generalization 拖慢，推荐直接用：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py \
+  --feature-branch with_analytical \
+  --skip-analytical-generalization \
+  --passes 1
+```
+
+如果已经提前产出了 [analytical_calibrated](/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated) 里的 `analytical_features_full.csv`，可以进一步复用，不再重建：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py \
+  --feature-branch with_analytical \
+  --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated \
+  --reuse-analytical-features \
+  --skip-analytical-generalization
+```
+
 如果要跑“排除 Analytical 影响”的分类版，推荐直接用：
 
 ```bash
@@ -240,6 +259,15 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py \
 - 会跳过 `analytical_calibrated` 的构建和泛化评估
 - 会把原来的 `memory_pure` 再细拆成 `gather / layout_move / view_meta`
 - 最终仍然和 [model_all_no_trace](/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/model_all_no_trace) 做同口径对比
+
+`with_analytical` 分支的快速参数：
+
+- `--skip-analytical-generalization`
+  - 只构建 `ana_calib_*`，跳过最慢的 held-out generalization
+- `--reuse-analytical-features`
+  - 直接复用已有 `analytical_features_full.csv`
+- `--analytical-schemes leave_one_case_out`
+  - 只跑较轻量的 case 级泛化
 
 默认输出目录：
 

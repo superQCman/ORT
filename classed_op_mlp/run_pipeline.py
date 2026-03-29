@@ -63,6 +63,22 @@ def parse_args() -> argparse.Namespace:
         help="Feature branch to run. no_analytical removes ana_calib_* to isolate pure classed MLP behavior.",
     )
     parser.add_argument("--passes", type=int, default=3)
+    parser.add_argument(
+        "--skip-analytical-generalization",
+        action="store_true",
+        help="For with_analytical runs, skip the slow held-out analytical generalization step and only build ana_calib_* features.",
+    )
+    parser.add_argument(
+        "--reuse-analytical-features",
+        action="store_true",
+        help="For with_analytical runs, reuse analytical_features_full.csv from --analytical-dir instead of rebuilding it.",
+    )
+    parser.add_argument(
+        "--analytical-schemes",
+        nargs="+",
+        default=("leave_one_case_out", "leave_one_combo_out"),
+        help="Analytical generalization schemes to run when analytical generalization is enabled.",
+    )
     parser.add_argument("--hidden-layers", default="128,64")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--max-iter", type=int, default=120)
@@ -97,13 +113,32 @@ def main() -> None:
         }
     else:
         analytical_dir.mkdir(parents=True, exist_ok=True)
-        analytical_features = build_full_feature_artifacts(input_csv, analytical_dir, passes=args.passes)
-        analytical_generalization = evaluate_generalization(
-            input_csv,
-            analytical_dir,
-            schemes=["leave_one_case_out", "leave_one_combo_out"],
-            passes=args.passes,
-        )
+        analytical_feature_csv = analytical_dir / "analytical_features_full.csv"
+        if args.reuse_analytical_features:
+            if not analytical_feature_csv.exists():
+                raise FileNotFoundError(
+                    f"--reuse-analytical-features was set, but {analytical_feature_csv} does not exist",
+                )
+            analytical_features = {
+                "reused": True,
+                "feature_csv": str(analytical_feature_csv),
+                "output_dir": str(analytical_dir),
+            }
+        else:
+            analytical_features = build_full_feature_artifacts(input_csv, analytical_dir, passes=args.passes)
+        if args.skip_analytical_generalization:
+            analytical_generalization = {
+                "skipped": True,
+                "reason": "skip_analytical_generalization=True",
+                "requested_schemes": list(args.analytical_schemes),
+            }
+        else:
+            analytical_generalization = evaluate_generalization(
+                input_csv,
+                analytical_dir,
+                schemes=list(args.analytical_schemes),
+                passes=args.passes,
+            )
 
     data_root = output_dir
     dataset_payload = build_classed_dataset_artifacts(

@@ -34,6 +34,17 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Coordinate-descent passes used for both full-data calibration and fold-level evaluation.",
     )
+    parser.add_argument(
+        "--skip-generalization",
+        action="store_true",
+        help="Only build analytical feature artifacts and skip the slow held-out generalization evaluation.",
+    )
+    parser.add_argument(
+        "--schemes",
+        nargs="+",
+        default=("leave_one_case_out", "leave_one_combo_out"),
+        help="Generalization schemes to evaluate when generalization is enabled.",
+    )
     return parser.parse_args()
 
 
@@ -47,12 +58,19 @@ def main() -> None:
         output_dir,
         passes=args.passes,
     )
-    generalization = evaluate_generalization(
-        input_csv,
-        output_dir,
-        schemes=["leave_one_case_out", "leave_one_combo_out"],
-        passes=args.passes,
-    )
+    if args.skip_generalization:
+        generalization = {
+            "skipped": True,
+            "reason": "skip_generalization=True",
+            "requested_schemes": list(args.schemes),
+        }
+    else:
+        generalization = evaluate_generalization(
+            input_csv,
+            output_dir,
+            schemes=list(args.schemes),
+            passes=args.passes,
+        )
 
     payload = {
         "feature_manifest": feature_manifest,

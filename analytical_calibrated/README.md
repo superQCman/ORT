@@ -54,6 +54,22 @@
 python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py
 ```
 
+如果只是想快速产出 `ana_calib_*`，不跑很慢的 held-out 泛化验证，可以直接用：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py \
+  --skip-generalization \
+  --passes 1
+```
+
+如果只想做较轻量的泛化检查，也可以只跑 case 级：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py \
+  --schemes leave_one_case_out \
+  --passes 1
+```
+
 默认输出目录：
 
 ```text

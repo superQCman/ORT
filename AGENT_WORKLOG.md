@@ -1380,3 +1380,43 @@ Open risks:
 - This task only updated the data/manifest contract; it did not run the full training/evaluation loop after reintroducing the two node identity features.
 - The high-cardinality categorical features may improve `gather/layout_move/view_meta`, but they also increase encoded input dimensionality and may overfit specific node identities if the held-out split distribution changes.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.
+
+## 2026-03-29
+
+Summary:
+- Added a fast validation path for the analytical and classed-MLP pipelines so `with_analytical` experiments can reuse `ana_calib_*` without waiting for the full held-out analytical generalization sweep.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `analytical_calibrated/run_pipeline.py` now supports:
+  - `--skip-generalization`
+  - `--schemes ...`
+- `classed_op_mlp/run_pipeline.py` now supports:
+  - `--skip-analytical-generalization`
+  - `--reuse-analytical-features`
+  - `--analytical-schemes ...`
+- This makes a fast `with_analytical` validation path possible:
+  - build or reuse `analytical_features_full.csv`
+  - skip the slow fold-level analytical generalization
+  - continue directly into grouped dataset build, training, and baseline comparison
+- README examples now document:
+  - fast analytical feature-only export
+  - lightweight case-only analytical evaluation
+  - fast `with_analytical` classed-MLP validation using `--skip-analytical-generalization`
+  - reuse of an existing `analytical_features_full.csv` via `--reuse-analytical-features`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py --help`
+
+Open risks:
+- The new fast path is intended for iteration speed; it deliberately skips or reduces analytical generalization, so it should not replace the full held-out evaluation when producing final analytical-model claims.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py` already had a user/local hidden-layer default change before this task; this update preserved that local default while layering the new fast-run flags on top.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.
