@@ -43,6 +43,22 @@ CLASSED_FEATURE_DESCRIPTIONS = {
     **ANALYTICAL_FEATURE_DESCRIPTIONS,
 }
 
+WITH_ANALYTICAL_MODEL_GROUP_OP_TYPES = {
+    "memory_pure": ("Gather", "Transpose", "Concat", "Reshape", "Shape", "Unsqueeze", "Flatten"),
+    "mixed_balanced": ("ReduceSum", "Sigmoid", "Relu", "Add", "Mul"),
+    "compute_dominant": ("Gemm", "MatMul"),
+}
+WITH_ANALYTICAL_MODEL_GROUP_ORDER = tuple(WITH_ANALYTICAL_MODEL_GROUP_OP_TYPES.keys())
+
+NO_ANALYTICAL_MODEL_GROUP_OP_TYPES = {
+    "gather": ("Gather",),
+    "layout_move": ("Concat", "Transpose"),
+    "view_meta": ("Reshape", "Shape", "Unsqueeze", "Flatten"),
+    "mixed_balanced": ("ReduceSum", "Sigmoid", "Relu", "Add", "Mul"),
+    "compute_dominant": ("Gemm", "MatMul"),
+}
+NO_ANALYTICAL_MODEL_GROUP_ORDER = tuple(NO_ANALYTICAL_MODEL_GROUP_OP_TYPES.keys())
+
 WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "memory_pure": (
         "num_threads",
@@ -77,7 +93,7 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
 }
 
 NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
-    "memory_pure": (
+    "gather": (
         "batch_size",
         "num_indices_per_lookup",
         "num_threads",
@@ -88,6 +104,23 @@ NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "feat_output_input_bytes_ratio",
         "feat_lookup_count",
         "feat_output_elements_per_lookup",
+        "feat_output_elements_per_batch",
+    ),
+    "layout_move": (
+        "batch_size",
+        "num_threads",
+        "output_size",
+        "activation_size",
+        "feat_io_bytes_sum",
+        "feat_output_input_bytes_ratio",
+        "feat_output_elements_per_batch",
+    ),
+    "view_meta": (
+        "batch_size",
+        "num_threads",
+        "output_size",
+        "activation_size",
+        "feat_output_input_bytes_ratio",
         "feat_output_elements_per_batch",
     ),
     "mixed_balanced": (
@@ -125,6 +158,14 @@ PER_BRANCH_NUMERIC_FEATURES = {
     FEATURE_BRANCH_WITH_ANALYTICAL: WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES,
     FEATURE_BRANCH_NO_ANALYTICAL: NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES,
 }
+PER_BRANCH_MODEL_GROUP_ORDER = {
+    FEATURE_BRANCH_WITH_ANALYTICAL: WITH_ANALYTICAL_MODEL_GROUP_ORDER,
+    FEATURE_BRANCH_NO_ANALYTICAL: NO_ANALYTICAL_MODEL_GROUP_ORDER,
+}
+PER_BRANCH_MODEL_GROUP_OP_TYPES = {
+    FEATURE_BRANCH_WITH_ANALYTICAL: WITH_ANALYTICAL_MODEL_GROUP_OP_TYPES,
+    FEATURE_BRANCH_NO_ANALYTICAL: NO_ANALYTICAL_MODEL_GROUP_OP_TYPES,
+}
 
 
 def resolve_output_dir(output_dir: str | Path | None, feature_branch: str) -> Path:
@@ -139,3 +180,25 @@ def resolve_branch_features(feature_branch: str) -> dict[str, tuple[str, ...]]:
     if feature_branch not in PER_BRANCH_NUMERIC_FEATURES:
         raise ValueError(f"Unsupported feature branch: {feature_branch}")
     return PER_BRANCH_NUMERIC_FEATURES[feature_branch]
+
+
+def resolve_model_group_order(feature_branch: str) -> tuple[str, ...]:
+    if feature_branch not in PER_BRANCH_MODEL_GROUP_ORDER:
+        raise ValueError(f"Unsupported feature branch: {feature_branch}")
+    return PER_BRANCH_MODEL_GROUP_ORDER[feature_branch]
+
+
+def resolve_model_group_op_types(feature_branch: str) -> dict[str, tuple[str, ...]]:
+    if feature_branch not in PER_BRANCH_MODEL_GROUP_OP_TYPES:
+        raise ValueError(f"Unsupported feature branch: {feature_branch}")
+    return PER_BRANCH_MODEL_GROUP_OP_TYPES[feature_branch]
+
+
+def resolve_model_group(feature_branch: str, op_type: str | None) -> str:
+    key = "" if op_type is None else str(op_type).strip()
+    if feature_branch == FEATURE_BRANCH_WITH_ANALYTICAL:
+        return resolve_op_class(key)
+    for model_group, op_types in resolve_model_group_op_types(feature_branch).items():
+        if key in op_types:
+            return model_group
+    return resolve_op_class(key)

@@ -1288,3 +1288,59 @@ Open risks:
 - This task only established the branchable dataset/training contract; it did not run end-to-end model training on the current machine because `torch` is not installed in this environment.
 - The chosen `no_analytical` feature subsets are intentionally compact and mechanism-driven; they are a strong starting point for the ablation, but they are not yet validated against the final test metrics.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py` default hidden-layer edit, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` contained pre-existing or user-driven worktree changes; this task preserved them and only layered the needed branch support on top.
+
+## 2026-03-29
+
+Summary:
+- Refined the `no_analytical` classed-MLP branch so `memory_pure` is no longer trained as one heterogeneous bucket.
+- The `no_analytical` training route now uses five model groups:
+  - `gather`
+  - `layout_move`
+  - `view_meta`
+  - `mixed_balanced`
+  - `compute_dominant`
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `no_analytical` now uses static `op_type -> model_group` routing:
+  - `Gather -> gather`
+  - `Concat/Transpose -> layout_move`
+  - `Reshape/Shape/Unsqueeze/Flatten -> view_meta`
+  - `ReduceSum/Sigmoid/Relu/Add/Mul -> mixed_balanced`
+  - `Gemm/MatMul -> compute_dominant`
+- The original `op_class` label is still preserved in the merged dataset and combined predictions, so three-class summaries remain available.
+- `build_classed_dataset.py` now exports:
+  - `model_group`
+  - `model_group_order`
+  - `op_type_model_group_map`
+  - `per_model_group_numeric_features`
+- `train_class_models.py` now trains and combines predictions by `model_group` instead of assuming exactly three datasets keyed by `op_class`.
+- The new `no_analytical` memory-side feature subsets are:
+  - `gather`: keep the richer lookup-centric feature set
+  - `layout_move`: focus on bytes, output/input ratio, and batch-scale movement features
+  - `view_meta`: keep a compact low-overhead shape/view feature set
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch no_analytical --output-dir /tmp/classed_op_mlp_no_analytical_split_memory_smoke`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py --feature-branch no_analytical --data-root /tmp/classed_op_mlp_no_analytical_split_memory_smoke --help`
+
+Key results:
+- The new `no_analytical` smoke dataset exports the expected five-group order:
+  - `gather`: `21359` rows
+  - `layout_move`: `13368` rows
+  - `view_meta`: `29714` rows
+  - `mixed_balanced`: `23677` rows
+  - `compute_dominant`: `9556` rows
+- Group-local feature manifests were successfully generated for `gather`, `layout_move`, and `view_meta`, confirming the finer routing and per-group feature contracts are wired through to training.
+
+Open risks:
+- I validated dataset generation and training-entry wiring, but did not run the full new five-group training/evaluation loop on this machine because `torch` is not installed in the current environment.
+- `view_meta` still groups four semantically light operators together; if error remains high after this change, the next split candidate is likely `Shape` vs. the pure view operators.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.

@@ -28,6 +28,9 @@ try:  # noqa: E402
         SHARED_CATEGORICAL_FEATURES,
         SUPPORTED_FEATURE_BRANCHES,
         resolve_branch_features,
+        resolve_model_group,
+        resolve_model_group_op_types,
+        resolve_model_group_order,
         resolve_op_class,
         resolve_output_dir,
     )
@@ -42,6 +45,9 @@ except ImportError:  # noqa: E402
         SHARED_CATEGORICAL_FEATURES,
         SUPPORTED_FEATURE_BRANCHES,
         resolve_branch_features,
+        resolve_model_group,
+        resolve_model_group_op_types,
+        resolve_model_group_order,
         resolve_op_class,
         resolve_output_dir,
     )
@@ -49,7 +55,7 @@ except ImportError:  # noqa: E402
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build three class-specific datasets for the classed single-op MLP pipeline.",
+        description="Build branch-specific grouped datasets for the classed single-op MLP pipeline.",
     )
     parser.add_argument(
         "--input-data-dir",
@@ -122,21 +128,23 @@ def dataset_summary_op_type_map(frame: pd.DataFrame) -> dict[str, str]:
     return dict(zip(mapping["op_type"].astype(str), mapping["op_class"].astype(str)))
 
 
-def feature_manifest_payload(op_class: str, feature_branch: str) -> dict[str, Any]:
+def feature_manifest_payload(model_group: str, feature_branch: str) -> dict[str, Any]:
     branch_features = resolve_branch_features(feature_branch)
-    numeric_features = list(branch_features[op_class])
+    numeric_features = list(branch_features[model_group])
     categorical_features = list(SHARED_CATEGORICAL_FEATURES)
     return {
         "routing_policy": "static_op_type",
         "feature_branch": feature_branch,
         "analytical_enabled": feature_branch != FEATURE_BRANCH_NO_ANALYTICAL,
-        "op_class": op_class,
+        "model_group": model_group,
         "categorical_features": categorical_features,
         "numeric_features": numeric_features,
         "analysis_numeric_features": numeric_features,
         "shared_categorical_features": list(SHARED_CATEGORICAL_FEATURES),
-        "per_class_numeric_features": {key: list(value) for key, value in branch_features.items()},
+        "model_group_order": list(resolve_model_group_order(feature_branch)),
+        "per_model_group_numeric_features": {key: list(value) for key, value in branch_features.items()},
         "op_type_class_map": {},  # filled by the top-level manifest
+        "op_type_model_group_map": {},  # filled by the top-level manifest
         "target_column": TARGET_COLUMN,
         "target_columns": [TARGET_COLUMN] if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else [TARGET_COLUMN, ANALYTICAL_RESIDUAL_TARGET_COLUMN],
         "analytical_feature_columns": [] if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else ["ana_calib_total_us", "ana_calib_mem_us", "ana_calib_compute_us", "ana_calib_overhead_us", "ana_calib_family", "op_class"],
@@ -156,12 +164,15 @@ def build_classed_dataset_artifacts(
     datasets_dir = output_dir / "datasets"
     datasets_dir.mkdir(parents=True, exist_ok=True)
     branch_features = resolve_branch_features(feature_branch)
+    model_group_order = resolve_model_group_order(feature_branch)
+    model_group_op_types = resolve_model_group_op_types(feature_branch)
 
     base_df = load_dataset(input_data_dir)
     gemm_df = build_gemm_columns(base_df)
     merged = base_df.merge(gemm_df, on="row_uid", how="left", validate="one_to_one")
+    merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)
+    merged["model_group"] = merged["op_type"].map(lambda op_type: resolve_model_group(feature_branch, op_type)).astype(str)
     if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
-        merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)
         merged["ana_calib_family"] = "not_used"
     else:
         if analytical_dir is None:
@@ -177,38 +188,46 @@ def build_classed_dataset_artifacts(
         if missing > 0:
             raise RuntimeError(f"analytical_calibrated features are missing for {missing} rows")
         merged["op_class"] = merged["op_class"].fillna("mixed_balanced").astype(str)
+        merged["model_group"] = merged["op_class"].fillna("mixed_balanced").astype(str)
         merged["ana_calib_family"] = merged["ana_calib_family"].fillna("not_used").astype(str)
     merged_path = output_dir / "classed_dataset_full.csv"
     merged.to_csv(merged_path, index=False)
 
-    class_summary: dict[str, Any] = {}
-    for op_class in OP_CLASS_ORDER:
-        class_dir = datasets_dir / op_class
-        class_dir.mkdir(parents=True, exist_ok=True)
-        class_df = merged[merged["op_class"] == op_class].copy()
-        class_df = class_df.sort_values("_source_order", kind="stable").reset_index(drop=True)
+    model_group_summary: dict[str, Any] = {}
+    for model_group in model_group_order:
+        group_dir = datasets_dir / model_group
+        group_dir.mkdir(parents=True, exist_ok=True)
+        group_df = merged[merged["model_group"] == model_group].copy()
+        group_df = group_df.sort_values("_source_order", kind="stable").reset_index(drop=True)
         for split_name in ["train", "val", "test"]:
-            split_df = class_df[class_df["split"] == split_name].copy()
-            split_df.to_csv(class_dir / f"{split_name}.csv", index=False)
-        class_df.to_csv(class_dir / "dataset_full.csv", index=False)
+            split_df = group_df[group_df["split"] == split_name].copy()
+            split_df.to_csv(group_dir / f"{split_name}.csv", index=False)
+        group_df.to_csv(group_dir / "dataset_full.csv", index=False)
 
-        manifest = feature_manifest_payload(op_class, feature_branch)
+        manifest = feature_manifest_payload(model_group, feature_branch)
         manifest["op_type_class_map"] = dict(dataset_summary_op_type_map(merged))
+        manifest["op_type_model_group_map"] = {
+            op_type: resolved_group
+            for resolved_group, op_types in model_group_op_types.items()
+            for op_type in op_types
+        }
         manifest["feature_descriptions"] = {
             **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in SHARED_CATEGORICAL_FEATURES if key in CLASSED_FEATURE_DESCRIPTIONS},
-            **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in branch_features[op_class] if key in CLASSED_FEATURE_DESCRIPTIONS},
+            **{key: CLASSED_FEATURE_DESCRIPTIONS[key] for key in branch_features[model_group] if key in CLASSED_FEATURE_DESCRIPTIONS},
         }
-        with (class_dir / "feature_columns.json").open("w", encoding="utf-8") as handle:
+        with (group_dir / "feature_columns.json").open("w", encoding="utf-8") as handle:
             json.dump(manifest, handle, indent=2, ensure_ascii=False)
 
-        class_summary[op_class] = {
-            "class_dir": str(class_dir),
-            "row_count": int(len(class_df)),
+        model_group_summary[model_group] = {
+            "class_dir": str(group_dir),
+            "op_class": str(group_df["op_class"].iloc[0]) if not group_df.empty else "",
+            "op_types": list(model_group_op_types.get(model_group, ())),
+            "row_count": int(len(group_df)),
             "split_row_counts": {
-                split_name: int((class_df["split"] == split_name).sum())
+                split_name: int((group_df["split"] == split_name).sum())
                 for split_name in ["train", "val", "test"]
             },
-            "numeric_features": list(branch_features[op_class]),
+            "numeric_features": list(branch_features[model_group]),
             "categorical_features": list(SHARED_CATEGORICAL_FEATURES),
         }
 
@@ -227,12 +246,20 @@ def build_classed_dataset_artifacts(
         "baseline_compare_dir": str(BASELINE_COMPARE_DIR),
         "routing_policy": "static_op_type",
         "op_type_class_map": dataset_summary_op_type_map(merged),
+        "op_type_model_group_map": {
+            op_type: resolved_group
+            for resolved_group, op_types in model_group_op_types.items()
+            for op_type in op_types
+        },
         "shared_categorical_features": list(SHARED_CATEGORICAL_FEATURES),
+        "model_group_order": list(model_group_order),
+        "per_model_group_numeric_features": {key: list(value) for key, value in branch_features.items()},
         "per_class_numeric_features": {key: list(value) for key, value in branch_features.items()},
         "feature_descriptions": CLASSED_FEATURE_DESCRIPTIONS,
         "analytical_feature_descriptions": analytical_feature_descriptions,
         "merged_dataset_csv": str(merged_path),
-        "classes": class_summary,
+        "model_groups": model_group_summary,
+        "classes": model_group_summary,
     }
     summary_json = output_dir / "dataset_summary.json"
     with summary_json.open("w", encoding="utf-8") as handle:

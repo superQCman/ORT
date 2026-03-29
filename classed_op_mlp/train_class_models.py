@@ -21,7 +21,7 @@ from analyze_op_type_metrics import (  # noqa: E402
     summarize_frame,
 )
 
-from analytical_calibrated.contracts import BASELINE_COMPARE_DIR, OP_CLASS_ORDER  # noqa: E402
+from analytical_calibrated.contracts import BASELINE_COMPARE_DIR  # noqa: E402
 
 try:  # noqa: E402
     from .contracts import DEFAULT_FEATURE_BRANCH, SUPPORTED_FEATURE_BRANCHES, resolve_output_dir
@@ -31,7 +31,7 @@ except ImportError:  # noqa: E402
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train one MLP per op class and combine their predictions back into full splits.",
+        description="Train one MLP per model group and combine their predictions back into full splits.",
     )
     parser.add_argument(
         "--data-root",
@@ -75,7 +75,8 @@ def load_dataset_summary(data_root: Path) -> dict[str, Any]:
 def combine_predictions(
     data_root: Path,
     model_root: Path,
-    class_summaries: dict[str, Any],
+    model_group_summaries: dict[str, Any],
+    model_group_order: list[str],
 ) -> dict[str, Any]:
     merged_dataset_path = data_root / "classed_dataset_full.csv"
     merged_dataset = pd.read_csv(merged_dataset_path, low_memory=False)
@@ -86,8 +87,8 @@ def combine_predictions(
     split_summaries: dict[str, Any] = {}
     for split_name in ["train", "val", "test"]:
         prediction_parts: list[pd.DataFrame] = []
-        for op_class in OP_CLASS_ORDER:
-            prediction_csv = model_root / op_class / f"predictions_{split_name}.csv"
+        for model_group in model_group_order:
+            prediction_csv = model_root / model_group / f"predictions_{split_name}.csv"
             if not prediction_csv.exists():
                 raise FileNotFoundError(prediction_csv)
             frame = pd.read_csv(prediction_csv, low_memory=False)
@@ -95,7 +96,7 @@ def combine_predictions(
             prediction_parts.append(
                 frame[
                     [column for column in ["row_uid", "target_mode", "target_us", "pred_us", "abs_error_us", "ape"] if column in frame.columns]
-                ].assign(predicted_by_op_class=op_class)
+                ].assign(predicted_by_model_group=model_group)
             )
         merged_predictions = pd.concat(prediction_parts, ignore_index=True)
         if merged_predictions["row_uid"].duplicated().any():
@@ -111,6 +112,7 @@ def combine_predictions(
             "combo",
             "op_type",
             "op_class",
+            "model_group",
         ]
         if "ana_calib_family" in expected.columns:
             expected_columns.append("ana_calib_family")
@@ -146,10 +148,20 @@ def combine_predictions(
         class_csv = combined_dir / f"combined_op_class_metrics_{split_name}.csv"
         class_df.to_csv(class_csv, index=False)
 
+        model_group_rows: list[dict[str, Any]] = []
+        for model_group, group in combined.groupby("model_group", sort=True):
+            row = {"model_group": model_group, **summarize_frame(group)}
+            row["combo_op_type_total_duration_weighted_mape"] = combo_op_type_total_duration_weighted_mape(group)
+            model_group_rows.append(row)
+        model_group_df = pd.DataFrame(model_group_rows).sort_values("model_group").reset_index(drop=True)
+        model_group_csv = combined_dir / f"combined_model_group_metrics_{split_name}.csv"
+        model_group_df.to_csv(model_group_csv, index=False)
+
         split_summaries[split_name] = {
             "combined_predictions_csv": str(combined_csv),
             "op_type_metrics_csv": str(op_type_csv),
             "op_class_metrics_csv": str(class_csv),
+            "model_group_metrics_csv": str(model_group_csv),
             "overall_metrics": overall,
         }
 
@@ -157,7 +169,9 @@ def combine_predictions(
         "data_root": str(data_root),
         "model_root": str(model_root),
         "baseline_compare_dir": str(BASELINE_COMPARE_DIR),
-        "classes": class_summaries,
+        "model_group_order": model_group_order,
+        "model_groups": model_group_summaries,
+        "classes": model_group_summaries,
         "splits": split_summaries,
     }
     with (combined_dir / "combined_metrics_summary.json").open("w", encoding="utf-8") as handle:
@@ -183,12 +197,13 @@ def train_all_classes(
     onnx_opset: int,
 ) -> dict[str, Any]:
     dataset_summary = load_dataset_summary(data_root)
+    model_group_order = list(dataset_summary.get("model_group_order", ["memory_pure", "mixed_balanced", "compute_dominant"]))
     models: dict[str, Any] = {}
     model_root.mkdir(parents=True, exist_ok=True)
 
-    for op_class in OP_CLASS_ORDER:
-        data_dir = data_root / "datasets" / op_class
-        output_dir = model_root / op_class
+    for model_group in model_group_order:
+        data_dir = data_root / "datasets" / model_group
+        output_dir = model_root / model_group
         summary = train_mlp.train_model(
             data_dir=data_dir,
             output_dir=output_dir,
@@ -206,11 +221,12 @@ def train_all_classes(
             export_onnx=export_onnx,
             onnx_opset=onnx_opset,
         )
-        models[op_class] = summary
+        models[model_group] = summary
 
-    combined_payload = combine_predictions(data_root, model_root, models)
+    combined_payload = combine_predictions(data_root, model_root, models, model_group_order)
     payload = {
         "dataset_summary": dataset_summary,
+        "model_group_order": model_group_order,
         "models": models,
         "combined": combined_payload,
     }
