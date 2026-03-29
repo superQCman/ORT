@@ -282,7 +282,50 @@ V3 文档中的 in-sample 结果是：
 - `leave-one-case-out`: `14.44%`
 - `leave-one-combo-out`: `10.31%`
 
-### 8.3 当前 hardest families 仍然是 `Transpose` 和 `MatMul`
+### 8.3 显式硬件子模型应保留，但 `Gather` 重复访问修正暂不采纳
+
+在 V4 之后，我们又对评估脚本补做了一轮变体验证，目的不是继续刷 MAPE，而是回答两个更具体的问题：
+
+1. 是否应该把 `fit(...) / lat(...) / PeakAdd(T) / PeakFMA(T) / IssueSlots(T)` 这套显式硬件子模型保留为正式 analytical 结构？
+2. `Gather` 是否应该从
+   - `T_src = request_rows * cachelines_per_row * lat_src_us / (T * m_gather)`
+   改成
+   - `T_src = unique_rows_est * cachelines_per_row * lat_src_us / (T * m_gather)`？
+
+额外对比了三个 variant：
+
+- `baseline`
+  - 当前正式基线
+- `explicit_no_reuse`
+  - 保留现有误差口径，但显式展开 shared hardware submodel
+- `explicit_unique_reuse`
+  - 在 `explicit_no_reuse` 基础上，再引入 `Gather` 的唯一行 occupancy 近似
+
+结果非常清楚：
+
+- `explicit_no_reuse`
+  - leave-one-case-out: macro `20.89%`, duration-weighted RE `14.44%`
+  - leave-one-combo-out: macro `15.79%`, duration-weighted RE `10.31%`
+- `explicit_unique_reuse`
+  - leave-one-case-out: macro `21.54%`, duration-weighted RE `15.78%`
+  - leave-one-combo-out: macro `15.79%`, duration-weighted RE `10.31%`
+
+因此最终结论是：
+
+- **显式硬件子模型保留**
+  - 因为它提升了公式的可解释性，而且 held-out 结果与基线等价，没有额外退化
+- **`Gather` 重复访问修正暂不采纳**
+  - 因为在当前 heavy-op DLRM 切片中，`request_rows / table_rows` 已经非常大，occupancy 近似给出的 `unique_rows_est / table_rows` 基本恒等于 `1`
+  - source working set tier 几乎仍全部落在 `MEM`
+  - 这意味着唯一行修正没有真正改变 `src_fit`，只改变了 source row 计数；在 leave-one-case-out 上，它反而让 `Gather` 的 held-out 误差从 `9.82% / 10.39%` 恶化到 `13.68% / 14.17%`
+
+所以从正式模型角度，本版本采纳的是：
+
+- `Gather / ReduceSum / Transpose / Concat` 保留显式硬件展开
+- `Gather` 仍使用保守的 `request_rows` source-miss 路径
+- 唯一行 occupancy 近似只保留为一个已验证但未采纳的候选分支
+
+### 8.4 当前 hardest families 仍然是 `Transpose` 和 `MatMul`
 
 它们的 held-out 误差最高：
 
@@ -294,7 +337,7 @@ V3 文档中的 in-sample 结果是：
 
 其中 `Transpose` 已经明显不是纯 bandwidth/stride 两项就能完全解释的对象。
 
-### 8.4 下一步最值得加的不是更多裸参数，而是显式 contention 项
+### 8.5 下一步最值得加的不是更多裸参数，而是显式 contention 项
 
 从切片数据本身可以看到，`case_10_2_1` 基本是串行上下文，而 `case_9_4_4 / case_10_4_4` 往往伴随较高的 `combo_task_parallel_fraction`。这正好对应 `Transpose / MatMul` 在 held-out case 上的误差升高。
 

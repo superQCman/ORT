@@ -265,6 +265,29 @@
 - 输出 accumulator 能在较小工作集内反复复用
 - 真正拖慢它的不是随机 miss，而是“在 copy 基线之上的 reduction 惩罚”
 
+### 4.2.4 Shared Hardware Submodel
+
+为了让各 family 的公式显式绑定到底层硬件，本版本保留一组共享硬件子模型，而不是把这些硬件量全部藏进隐式 helper：
+
+- `fit(bytes)`
+  - 根据 active working-set bytes 与 `L1/L2/L3 active bytes` 的比较来判断当前数据更接近 `L1/L2/L3/MEM` 哪一层
+- `lat(level)`
+  - 根据 `L1/L2/L3 response latency cycles`、`local_mem_delay_ns` 与 `f_cpu` 折算成 `us`
+- `PeakAdd(T)`
+  - 由 `vector_sp_add throughput/cycle`、`SIMD width bits`、`CPU 频率` 和活跃线程数 `T` 显式构成
+- `PeakFMA(T)`
+  - 由 `vector_sp_fma throughput/cycle`、`SIMD width bits`、`CPU 频率` 和活跃线程数 `T` 显式构成
+- `IssueSlots(T)`
+  - 由 `pipeline_width * f_cpu * T` 显式构成
+
+因此：
+
+- `Gather / ReduceSum / Transpose` 至少显式使用 `L1/L2/L3 size` 与 `latency`
+- `ReduceSum / Gemm / MatMul` 至少显式使用 `SIMD width`、`指令 throughput/latency` 和 `CPU 频率`
+- `Concat / ReduceSum / Transpose` 至少显式使用 `pipeline width`
+
+这样做的目的不是让每个算子吃掉所有硬件参数，而是让每个 family 只显式使用与自身瓶颈机制匹配的那部分硬件量。
+
 #### 4.3.2 公式
 
 定义：
@@ -317,6 +340,11 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 - `cachelines_per_row = ceil(row_bytes / cacheline)`
 - `stream_bytes = 2 * output_size + 8 * request_rows`
 
+共享硬件子模型在 `Gather` 中的显式展开为：
+
+- `src_fit = fit(src_working_set_bytes)`
+- `lat_src_us = lat(src_fit)`
+
 行粒度有效带宽：
 
 `BW_gather_inf = BW_peak * rho_gather_inf`
@@ -331,7 +359,20 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 
 `T_gather = max(stream_bytes / BW_gather_eff(row_bytes), T_src)`
 
-其中 `lat_src_us` 由 source row 工作集所在 tier 决定。
+其中 `lat_src_us` 由 source working set 所在 `L1/L2/L3/MEM` tier 显式决定。
+
+本版本最终采纳的 source working set 仍然是保守的请求规模近似，而不是唯一行修正：
+
+- 采纳：`src_working_set_bytes ~= request_rows * row_bytes`
+- 不采纳：`unique_rows_est = table_rows * (1 - exp(-request_rows / table_rows))`
+
+原因不是唯一行公式不合理，而是当前 heavy-op DLRM 切片中：
+
+- `request_rows / table_rows` 已经非常大
+- `unique_rows_est / table_rows ~= 1`
+- source tier 几乎全部仍落在 `MEM`
+
+因此唯一行修正不会实质降低 `src_fit`，只会改变 source row 计数；在 held-out case 上，这个修正并没有带来更好的泛化误差。
 
 #### 4.4.3 解释
 
@@ -344,6 +385,9 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 - `m_gather`
   - 对应“random source miss 能被并发隐藏的程度”
   - 这本质上是 memory-level parallelism，不是任意常数
+- `fit(src_working_set_bytes)` 与 `lat(src_fit)`
+  - 负责把 `L1/L2/L3 size` 和 `L1/L2/L3/MEM latency` 显式融入 `Gather` 的 source miss 路径
+  - 它们决定的不是 row-copy 带宽，而是“每次 source cacheline 访问更像 L2/L3/DRAM 中的哪一层”
 
 这个参数化方式比直接写一个 `8000 bytes/us` 更强，因为它清楚说明了常数来自哪种机制。
 

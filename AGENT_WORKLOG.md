@@ -1122,3 +1122,38 @@ Open risks:
 - On the current heavy-op DLRM slice, `Gather` requests are so large relative to table size that the occupancy estimate saturates to essentially the full table (`unique_rows_est / table_rows ~= 1.0` across the slice). This means the unique-row correction does not reduce the modeled source working set in the regime we currently evaluate.
 - Because the evaluated heavy-op `Gather` rows all remain memory-tier (`gather_src_fit_level = 4`), the explicit reuse correction currently changes the row-count term more than the residency tier, and that shift slightly worsens leave-one-case-out error.
 - V3/V4 documentation was intentionally not updated in this task; if the user wants the explicit hardware submodel written back into the docs, that should be a follow-up scoped change after reviewing these held-out results.
+
+## 2026-03-29
+
+Summary:
+- Wrote the accepted conclusion back into the analytical design docs:
+  - keep the explicit shared hardware submodel
+  - do not adopt the `Gather` unique-row reuse correction into the formal model for the current heavy-op regime
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V4_GENERALIZATION.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- V3 now explicitly documents the shared hardware submodel:
+  - `fit(bytes)`
+  - `lat(level)`
+  - `PeakAdd(T)`
+  - `PeakFMA(T)`
+  - `IssueSlots(T)`
+- V3 `Gather` now explicitly states that:
+  - `L1/L2/L3 size` and `L1/L2/L3/MEM latency` enter through `fit(src_working_set_bytes)` and `lat(src_fit)`
+  - the formal model still uses the conservative `request_rows` source-miss path
+  - the occupancy-style `unique_rows_est` correction was evaluated but not adopted for the current heavy-op DLRM slice
+- V4 now records the post-V4 variant comparison:
+  - `explicit_no_reuse` keeps held-out metrics equal to baseline while improving formula transparency
+  - `explicit_unique_reuse` does not improve the current heavy-op held-out results and is therefore kept only as an explored candidate branch
+
+Validation run:
+- `git -C /data/qc/dlrm/ORT/single_op_stage1_mlp diff --check -- ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md ANALYTICAL_MODEL_V4_GENERALIZATION.md`
+
+Open risks:
+- The non-adoption of the unique-row correction is specific to the current heavy-op slice, where `request_rows / table_rows` is already large enough to saturate the occupancy estimate.
+- If later evaluation expands to lower-lookup or more skewed-index regimes, the `unique_rows_est` branch may become useful again and should be re-tested there rather than treated as permanently invalid.
+- `README.md` and `roofline_op_type_analysis/README.md` were intentionally left out of this task because they already contain unrelated worktree changes.
