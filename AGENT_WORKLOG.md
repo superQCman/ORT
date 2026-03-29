@@ -1207,3 +1207,41 @@ Open risks:
 - The non-adoption of the unique-row correction is specific to the current heavy-op slice, where `request_rows / table_rows` is already large enough to saturate the occupancy estimate.
 - If later evaluation expands to lower-lookup or more skewed-index regimes, the `unique_rows_est` branch may become useful again and should be re-tested there rather than treated as permanently invalid.
 - `README.md` and `roofline_op_type_analysis/README.md` were intentionally left out of this task because they already contain unrelated worktree changes.
+
+## 2026-03-29
+
+Summary:
+- Added a dedicated correlation-analysis utility for the new `analytical_calibrated` pipeline and ran it against the current `artifacts/latest/analytical_calibrated` outputs to explain why the relative-error metrics are so large.
+- Documented the new analysis entrypoint and generated a markdown summary artifact so the worst families and strongest feature/error correlations can be inspected without opening multiple CSV files.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/analyze_correlation.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `analyze_correlation.py` now exports two correlation views:
+  - `raw_feature_*`: correlations between original software/data features and `target_us`, `abs_error_us`, `APE`, and signed relative error
+  - `analytical_component_*`: correlations between `ana_calib_mem_us` / `ana_calib_compute_us` / `ana_calib_overhead_us` and the same error targets
+- The script now writes `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated/correlation_analysis/correlation_summary.md` in addition to the CSV/JSON outputs.
+- The summary makes the current failure mode explicit:
+  - `generic_memory` dominates the inflated relative-error metrics
+  - `Reshape` is the worst offender because the proxy predicts copy-like memory cost while the measured runtime is still only tens of microseconds
+  - `Gather` has a long-tail small-target issue, so mean MAPE is much worse than median APE or duration-weighted RE
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/analyze_correlation.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/analyze_correlation.py`
+
+Key findings:
+- Full-data `memory_pure` duration-weighted relative error is about `40.18%`, but its mean MAPE is inflated to about `689.69x` because `generic_memory` contributes about `1476.36x` mean MAPE by itself.
+- `Reshape` is the dominant structural mismatch:
+  - median actual latency is about `19.5 us`
+  - median analytical prediction is about `50,585.6 us`
+- `Gather` mean MAPE is about `26.74x`, but median APE is only about `0.56x` and duration-weighted relative error is about `30.70%`, which points to distribution skew instead of a universally bad fit.
+- The strongest raw-feature correlation with APE is `feat_io_bytes_sum` (`r ~= 0.775`), and the strongest raw-feature correlations with absolute error are also memory-volume-related terms, which is consistent with the main failure mode being the memory-side proxy design.
+
+Open risks:
+- The current `generic_memory` proxy is too coarse for metadata/view operators like `Reshape` and `Unsqueeze`; if these operators remain in-scope for analytical supervision, they likely need separate near-zero-overhead formulas instead of a shared bandwidth proxy.
+- The correlation analysis is descriptive, not causal. It helps localize the dominant failure modes, but it does not by itself choose the next best formula update.
+- `README.md`, `roofline_op_type_analysis/README.md`, `classed_op_mlp/train_class_models.py`, `data.sh`, and `model.sh` still contain unrelated worktree changes and were intentionally not touched in this task.
