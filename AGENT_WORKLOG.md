@@ -1033,3 +1033,25 @@ Validation run:
 Open risks:
 - The compute proxy comes from existing `ana_compute_ops`, so copy-like operators with negligible modeled FLOPs are intentionally pushed toward the memory-bound side.
 - The ridge-gap heatmap log-compresses very large values for readability, so it should be read as a relative comparison view rather than a raw-magnitude report.
+
+## 2026-03-29
+
+Summary:
+- Improved the readability of `roofline_by_threads.png` by removing the label pile-up in the lower-left corner.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The Roofline scatter plot now detects dense low-intensity / low-performance operator clusters in each thread subplot.
+- Instead of annotating every point in that corner individually, the plot keeps the points in place and renders a compact `Low-intensity cluster` textbox listing the affected `op_type` values.
+- Non-clustered operators such as `Gemm`, `MatMul`, `ReduceSum`, `Sigmoid`, `Add`, and `Mul` still keep direct point labels.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- Visually checked `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/roofline_op_type_analysis/roofline_by_threads.png`
+
+Open risks:
+- The cluster textbox improves readability but intentionally stops distinguishing the exact point-to-label correspondence inside that lower-left pile-up; the exact operator identities remain available in `op_type_thread_summary.csv`.

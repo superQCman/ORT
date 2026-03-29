@@ -376,7 +376,16 @@ def plot_roofline_by_threads(
 
         axis.plot(x_grid, y_roof, color="#2c3e50", linewidth=2.0, label="Roofline ceiling")
 
-        for _, row in thread_df.iterrows():
+        cluster_x_threshold = max(x_min * 20.0, 1e-5)
+        cluster_y_threshold = max(y_min * 25.0, 1e-2)
+        cluster_mask = (
+            pd.to_numeric(thread_df["arithmetic_intensity_ops_per_byte"], errors="coerce").fillna(0.0).le(cluster_x_threshold)
+            & pd.to_numeric(thread_df["achieved_perf_ops_per_us"], errors="coerce").fillna(0.0).le(cluster_y_threshold)
+        )
+        cluster_df = thread_df[cluster_mask].copy()
+        labeled_df = thread_df[~cluster_mask].copy()
+
+        for _, row in labeled_df.iterrows():
             x_value = max(float(row["arithmetic_intensity_ops_per_byte"]), 1e-6)
             y_value = max(float(row["achieved_perf_ops_per_us"]), 1e-3)
             axis.scatter(
@@ -394,6 +403,33 @@ def plot_roofline_by_threads(
                 xytext=(4, 4),
                 textcoords="offset points",
                 fontsize=8.5,
+            )
+
+        if not cluster_df.empty:
+            cluster_labels = (
+                cluster_df.sort_values(["total_actual_us", "op_type"], ascending=[False, True])["op_type"]
+                .astype(str)
+                .tolist()
+            )
+            wrapped_labels: list[str] = []
+            chunk_size = 3
+            for idx in range(0, len(cluster_labels), chunk_size):
+                wrapped_labels.append(", ".join(cluster_labels[idx : idx + chunk_size]))
+            cluster_text = "Low-intensity cluster:\n" + "\n".join(wrapped_labels)
+            axis.text(
+                0.04,
+                0.09,
+                cluster_text,
+                transform=axis.transAxes,
+                fontsize=7.8,
+                va="bottom",
+                ha="left",
+                bbox={
+                    "boxstyle": "round,pad=0.28",
+                    "facecolor": "white",
+                    "alpha": 0.88,
+                    "edgecolor": "#7f8c8d",
+                },
             )
 
         ridge_point = float(pd.to_numeric(thread_df["ridge_point_ops_per_byte"], errors="coerce").median())
