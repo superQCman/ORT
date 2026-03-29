@@ -846,3 +846,44 @@ Validation run:
 Open risks:
 - This update only synchronizes the design document wording; the pure-analytical comparison sections still keep some half-saturation terminology for `M50/N50/K50`, which is intentional because those GEMM occupancy parameters are still best understood as saturation scales rather than startup times.
 - The V3 narrative is now aligned with the newer evaluator, but a future cleanup pass could further unify wording across V3 and V4 so the two documents read as a single evolution path.
+
+## 2026-03-29
+
+Summary:
+- Added an optional GEMM analytical variant to the held-out evaluation script:
+  - `m50_saturation`
+  - `alpha_shape_penalty`
+- The new `alpha_shape_penalty` form keeps the same high-level roofline structure, but replaces `M50/N50/K50` saturation with:
+  - `T_compute = flops / (PeakFMA * rho_fma_inf) + alpha_M / M + alpha_N / N + alpha_K / K`
+- Ran a dedicated held-out generalization test for the new GEMM form in a separate artifact directory so the existing V4 baseline outputs were not overwritten.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `evaluate_analytical_generalization.py` now accepts:
+  - `--gemm-model m50_saturation`
+  - `--gemm-model alpha_shape_penalty`
+- The `alpha_shape_penalty` variant exposes interpretable GEMM shape-penalty parameters:
+  - `alpha_m`
+  - `alpha_n`
+  - `alpha_k`
+- On the current heavy-op held-out slice, this new GEMM formulation generalized worse than the existing `M50/N50/K50` saturation form:
+  - baseline `m50_saturation`
+    - `leave-one-case-out`: mean macro `20.89%`, weighted family `16.70%`
+    - `leave-one-combo-out`: mean macro `15.79%`, weighted family `11.73%`
+  - new `alpha_shape_penalty`
+    - `leave-one-case-out`: mean macro `22.41%`, weighted family `18.63%`
+    - `leave-one-combo-out`: mean macro `19.23%`, weighted family `16.23%`
+- The degradation is concentrated in `Gemm` itself:
+  - `leave-one-case-out` GEMM mean test `MAPE = 25.73%`
+  - `leave-one-combo-out` GEMM mean test `MAPE = 31.83%`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py --gemm-model alpha_shape_penalty --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization_gemm_alpha`
+
+Open risks:
+- The current `alpha_M/M + alpha_N/N + alpha_K/K` penalty is interpretable but appears less stable under held-out combo transfer than the saturation form, likely because it does not constrain shape effects to remain bounded as cleanly as the `M50/N50/K50` parameterization.
+- If we want a more interpretable GEMM model without losing generalization, the next best candidate is probably a hybrid form: keep bounded saturation for `M/N`, but rewrite only the `K` direction as an explicit packing/startup term.
