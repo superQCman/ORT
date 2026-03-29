@@ -418,6 +418,56 @@ Files changed:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_contract.py`
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/dataset_builder.py`
+
+### 2026-03-29 - Add isolated analytical_calibrated and classed_op_mlp pipelines
+
+Request summary:
+- Implement the new three-class single-op modeling plan on top of `dataset_all_no_trace`.
+- Keep the work isolated from the existing main single-MLP pipeline.
+- Add a separate calibrated analytical pipeline, a separate classed-MLP pipeline, feature-definition summaries, analytical generalization evaluation entry points, and baseline comparison entry points against `model_all_no_trace`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/evaluate_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/compare_against_baseline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added `analytical_calibrated/` as a new isolated subproject that:
+  - rebuilds local `feat_*` / `hw_*` / legacy `ana_*` columns from `dataset_all_no_trace`
+  - calibrates heavy-family analytical parameters on the full dataset
+  - exports row-level `ana_calib_total_us`, `ana_calib_mem_us`, `ana_calib_compute_us`, `ana_calib_overhead_us`, `ana_calib_family`, and `op_class`
+  - provides a separate held-out generalization evaluation entry point for `leave_one_case_out` and `leave_one_combo_out`
+- Added `classed_op_mlp/` as a new isolated subproject that:
+  - statically routes `op_type` into `memory_pure`, `mixed_balanced`, and `compute_dominant`
+  - documents the per-class feature meanings in its own README
+  - merges `ana_calib_*` features with a local `feat_gemm_*` rebuild to create class-specific datasets
+  - trains one MLP per class through the existing project-local `train_mlp.py`
+  - recombines class predictions into full split-level prediction tables
+  - adds a baseline-comparison entry point against `artifacts/latest/model_all_no_trace`
+- Kept all new code and documentation inside the two new subdirectories so the existing single-MLP path is unchanged.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/*.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/*.py`
+- `python3 - <<'PY' ... import analytical_calibrated.build_analytical_features ... import analytical_calibrated.evaluate_generalization ... import classed_op_mlp.build_classed_dataset ... PY`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py --input-csv /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace/dataset_full.csv --output-dir /tmp/single_op_analytical_calibrated_smoke`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --input-data-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace --analytical-dir /tmp/single_op_analytical_calibrated_smoke --output-dir /tmp/single_op_classed_dataset_smoke`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/run_pipeline.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/compare_against_baseline.py --help`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py --help`
+
+Open risks:
+- This environment does not currently have `torch` installed, so the new classed MLP training path could not be executed end-to-end in this turn.
+- The full held-out analytical generalization run on the entire `dataset_all_no_trace` surface is implemented, but the full fold sweep was not allowed to finish in this turn; only the feature-export path and dataset-build path were completed end-to-end.
+- The independent repo already has unrelated user modifications in `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md` and `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, so this task intentionally did not edit those files.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py`
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py`
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/infer_mlp_onnx.py`
