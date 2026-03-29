@@ -68,6 +68,17 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Maximum coordinate-descent passes per fold.",
     )
+    parser.add_argument(
+        "--variant",
+        default="baseline",
+        choices=["baseline", "explicit_no_reuse", "explicit_unique_reuse"],
+        help=(
+            "Analytical variant to evaluate. "
+            "'baseline' keeps the current formulas; "
+            "'explicit_no_reuse' expands hardware terms explicitly without Gather reuse correction; "
+            "'explicit_unique_reuse' also switches Gather to unique-row-aware miss counting."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -119,24 +130,61 @@ def duration_weighted_relative_error(y_true: np.ndarray, y_pred: np.ndarray) -> 
 
 
 def fit_latency_us(working_set_bytes: float, row: pd.Series) -> float:
+    level = fit_level(working_set_bytes, row)
+    return latency_from_level(level, row)
+
+
+def fit_level(working_set_bytes: float, row: pd.Series) -> int:
     ws = max(safe_float(working_set_bytes, 0.0), 0.0)
     l1_bytes = max(safe_float(row.get("hw_cache_l1d_active_bytes"), 0.0), 0.0)
     l2_bytes = max(safe_float(row.get("hw_cache_l2_active_bytes"), 0.0), 0.0)
     l3_bytes = max(safe_float(row.get("hw_cache_l3_active_bytes"), 0.0), 0.0)
-    cpu_clock_ghz = max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6)
 
+    if ws <= max(l1_bytes, 1.0):
+        return 1
+    if ws <= max(l2_bytes, 1.0):
+        return 2
+    if ws <= max(l3_bytes, 1.0):
+        return 3
+    return 4
+
+
+def latency_from_level(level: int, row: pd.Series) -> float:
+    cpu_clock_ghz = max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6)
     l1_us = safe_float(row.get("hw_cache_l1d_response_latency_cycles"), 1.0) / cpu_clock_ghz / 1000.0
     l2_us = safe_float(row.get("hw_cache_l2_response_latency_cycles"), 10.0) / cpu_clock_ghz / 1000.0
     l3_us = safe_float(row.get("hw_cache_l3_per_die_response_latency_cycles"), 20.0) / cpu_clock_ghz / 1000.0
     mem_us = safe_float(row.get("hw_memory_local_mem_delay_ns"), 90.0) / 1000.0
-
-    if ws <= max(l1_bytes, 1.0):
+    if int(level) == 1:
         return l1_us
-    if ws <= max(l2_bytes, 1.0):
+    if int(level) == 2:
         return l2_us
-    if ws <= max(l3_bytes, 1.0):
+    if int(level) == 3:
         return l3_us
     return mem_us
+
+
+def issue_slots_per_us(row: pd.Series) -> float:
+    widths = [
+        safe_float(row.get("hw_pipeline_fetch_width"), 4.0),
+        safe_float(row.get("hw_pipeline_decode_width"), 4.0),
+        safe_float(row.get("hw_pipeline_rename_width"), 4.0),
+        safe_float(row.get("hw_pipeline_dispatch_width"), 4.0),
+        safe_float(row.get("hw_pipeline_issue_width"), 4.0),
+        safe_float(row.get("hw_pipeline_commit_width"), 4.0),
+    ]
+    pipeline_width = max(min(widths), 1.0)
+    cpu_clock = max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6)
+    active_cores = max(
+        min(safe_float(row.get("num_threads"), 1.0), safe_float(row.get("hw_core_total_cores"), 24.0)),
+        1.0,
+    )
+    return pipeline_width * cpu_clock * 1e3 * active_cores
+
+
+def add_latency_us(row: pd.Series) -> float:
+    cpu_clock = max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6)
+    return safe_float(row.get("hw_instruction_fp_latency_cycles_vector_sp_add"), 3.0) / cpu_clock / 1000.0
 
 
 def peak_add_ops_per_us(row: pd.Series) -> float:
@@ -229,7 +277,21 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
         row_bytes = safe_float(row.get("output_size"), 0.0) / max(request_rows, 1.0)
         cacheline = max(safe_float(row.get("hw_cache_cacheline_bytes"), 64.0), 1.0)
         cachelines_per_row = math.ceil(row_bytes / cacheline) if row_bytes > 0.0 else 0
-        src_latency_us = fit_latency_us(safe_float(row.get("parameter_size"), 0.0), row)
+        gather_table_rows = 0.0
+        if input_entries:
+            dims0 = [int(dim) for dim in input_entries[0].get("dims", [])]
+            if dims0:
+                gather_table_rows = float(max(dims0[0], 0))
+        gather_requested_rows_capped = min(request_rows, gather_table_rows) if gather_table_rows > 0.0 else request_rows
+        gather_unique_rows_est = (
+            gather_table_rows * (1.0 - math.exp(-request_rows / gather_table_rows))
+            if gather_table_rows > 0.0
+            else request_rows
+        )
+        gather_unique_rows_est = min(max(gather_unique_rows_est, 0.0), gather_requested_rows_capped)
+        gather_src_unique_bytes = gather_unique_rows_est * row_bytes
+        gather_src_fit_level = fit_level(gather_src_unique_bytes, row)
+        src_latency_us = latency_from_level(gather_src_fit_level, row)
 
         transpose_prefix_blocks = 1.0
         if len(output_dims) > 1:
@@ -237,7 +299,18 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
             for dim in output_dims[:-1]:
                 prefix *= int(dim)
             transpose_prefix_blocks = float(prefix)
-        transpose_stride_latency_us = fit_latency_us(output_bytes_sum / max(safe_float(row.get("num_threads"), 1.0), 1.0), row)
+        transpose_stride_latency_us_baseline = fit_latency_us(
+            output_bytes_sum / max(safe_float(row.get("num_threads"), 1.0), 1.0),
+            row,
+        )
+        transpose_suffix_block_bytes = float(output_dims[-1] * output_dtype_bytes) if output_dims else output_bytes_sum
+        transpose_suffix_fit_level = fit_level(transpose_suffix_block_bytes, row)
+        transpose_stride_latency_us = latency_from_level(transpose_suffix_fit_level, row)
+        reduce_acc_bytes_per_thread = max(safe_float(row.get("output_size"), 0.0), 0.0) / max(safe_float(row.get("num_threads"), 1.0), 1.0)
+        reduce_acc_fit_level = fit_level(reduce_acc_bytes_per_thread, row)
+        reduce_acc_latency_us = latency_from_level(reduce_acc_fit_level, row)
+        issue_slots = issue_slots_per_us(row)
+        add_lat_us = add_latency_us(row)
 
         records.append(
             {
@@ -259,9 +332,17 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
                 "input_bytes_sum": input_bytes_sum,
                 "output_bytes_sum": output_bytes_sum,
                 "copy_chunk_mean_bytes": input_bytes_sum / max(float(len(input_entries)), 1.0),
+                "cacheline_bytes": cacheline,
+                "issue_slots_per_us": issue_slots,
+                "add_latency_us": add_lat_us,
                 "gather_row_bytes": row_bytes,
                 "gather_cachelines_per_row": float(cachelines_per_row),
                 "gather_src_latency_us": src_latency_us,
+                "gather_table_rows": gather_table_rows,
+                "gather_requested_rows_capped": gather_requested_rows_capped,
+                "gather_unique_rows_est": gather_unique_rows_est,
+                "gather_src_unique_bytes": gather_src_unique_bytes,
+                "gather_src_fit_level": float(gather_src_fit_level),
                 "gemm_m": float(gemm_m),
                 "gemm_n": float(gemm_n),
                 "gemm_k": float(gemm_k),
@@ -270,7 +351,13 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
                 "matmul_n": float(matmul_n),
                 "matmul_k": float(matmul_k),
                 "transpose_prefix_blocks": transpose_prefix_blocks,
+                "transpose_stride_latency_us_baseline": transpose_stride_latency_us_baseline,
+                "transpose_suffix_block_bytes": transpose_suffix_block_bytes,
+                "transpose_suffix_fit_level": float(transpose_suffix_fit_level),
                 "transpose_stride_latency_us": transpose_stride_latency_us,
+                "reduce_acc_bytes_per_thread": reduce_acc_bytes_per_thread,
+                "reduce_acc_fit_level": float(reduce_acc_fit_level),
+                "reduce_acc_latency_us": reduce_acc_latency_us,
                 "bw_peak_bytes_per_us": max(safe_float(row.get("hw_memory_bandwidth_gb_s_total"), 100.0), 1e-6) * 1e3,
                 "peak_add_ops_per_us": peak_add_ops_per_us(row),
                 "peak_fma_ops_per_us": peak_fma_ops_per_us(row),
@@ -336,17 +423,23 @@ def effective_bandwidth(
     return bw_inf * size / np.clip(bw_inf * tau + size, a_min=1e-6, a_max=None)
 
 
-def predict_concat(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+def predict_concat(frame: pd.DataFrame, params: dict[str, float], variant: str) -> np.ndarray:
     chunk = frame["copy_chunk_mean_bytes"].to_numpy(dtype=float)
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
     stream = (frame["input_bytes_sum"] + frame["output_size"]).to_numpy(dtype=float)
     input_count = frame["input_count"].to_numpy(dtype=float)
     bw_inf = bw_peak * max(params["rho_copy_inf"], 1e-6)
     bw_eff = effective_bandwidth(chunk, bw_inf, params["tau_copy_start"])
-    return stream / np.clip(bw_eff, a_min=1e-6, a_max=None) + input_count * max(params["tau_dispatch"], 0.0)
+    t_stream = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    if variant == "baseline":
+        return t_stream + input_count * max(params["tau_dispatch"], 0.0)
+    cacheline = frame["cacheline_bytes"].to_numpy(dtype=float)
+    issue_slots = frame["issue_slots_per_us"].to_numpy(dtype=float)
+    t_issue = (stream / np.clip(cacheline, a_min=1.0, a_max=None)) / np.clip(issue_slots, a_min=1e-6, a_max=None)
+    return np.maximum(t_stream, t_issue) + input_count * max(params["tau_dispatch"], 0.0)
 
 
-def predict_reduce(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+def predict_reduce(frame: pd.DataFrame, params: dict[str, float], variant: str) -> np.ndarray:
     inner = frame["feat_reduction_axes_product"].to_numpy(dtype=float)
     stream = (frame["activation_size"] + frame["output_size"]).to_numpy(dtype=float)
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
@@ -356,21 +449,49 @@ def predict_reduce(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
     bw_eff = effective_bandwidth(inner, bw_inf, params["tau_reduce_start"])
     t_mem = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
     t_add = add_ops / np.clip(peak_add, a_min=1e-6, a_max=None)
-    return np.maximum(t_mem, t_add)
+    if variant == "baseline":
+        return np.maximum(t_mem, t_add)
+    lanes = np.clip(
+        frame["peak_add_ops_per_us"].to_numpy(dtype=float)
+        / np.clip(frame["num_threads"].to_numpy(dtype=float), a_min=1.0, a_max=None),
+        a_min=1.0,
+        a_max=None,
+    ) / np.clip(frame["bw_peak_bytes_per_us"].to_numpy(dtype=float), a_min=1.0, a_max=None)
+    lanes = np.clip(lanes, a_min=1.0, a_max=64.0)
+    add_lat_us = frame["add_latency_us"].to_numpy(dtype=float)
+    issue_slots = frame["issue_slots_per_us"].to_numpy(dtype=float)
+    cacheline = frame["cacheline_bytes"].to_numpy(dtype=float)
+    acc_lat_us = frame["reduce_acc_latency_us"].to_numpy(dtype=float)
+    t_mem_explicit = t_mem + acc_lat_us
+    t_dep = inner * add_lat_us / lanes
+    t_issue = ((add_ops / lanes) + (stream / np.clip(cacheline, a_min=1.0, a_max=None))) / np.clip(
+        issue_slots,
+        a_min=1e-6,
+        a_max=None,
+    )
+    return np.maximum.reduce([t_mem_explicit, t_add, t_dep, t_issue])
 
 
-def predict_gather(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+def predict_gather(frame: pd.DataFrame, params: dict[str, float], variant: str) -> np.ndarray:
     row_bytes = frame["gather_row_bytes"].to_numpy(dtype=float)
     request_rows = frame["feat_lookup_count"].to_numpy(dtype=float)
     stream = (2.0 * frame["output_size"] + 8.0 * frame["feat_lookup_count"]).to_numpy(dtype=float)
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
     cachelines_per_row = frame["gather_cachelines_per_row"].to_numpy(dtype=float)
-    lat_src_us = frame["gather_src_latency_us"].to_numpy(dtype=float)
     threads = frame["num_threads"].to_numpy(dtype=float)
     bw_inf = bw_peak * max(params["rho_gather_inf"], 1e-6)
     bw_eff = effective_bandwidth(row_bytes, bw_inf, params["tau_gather_row_start"])
     t_bw = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
-    t_src = request_rows * cachelines_per_row * lat_src_us / np.clip(
+    if variant == "baseline":
+        src_rows = request_rows
+        lat_src_us = frame["gather_src_latency_us"].to_numpy(dtype=float)
+    elif variant == "explicit_no_reuse":
+        src_rows = request_rows
+        lat_src_us = frame["gather_src_latency_us"].to_numpy(dtype=float)
+    else:
+        src_rows = frame["gather_unique_rows_est"].to_numpy(dtype=float)
+        lat_src_us = frame["gather_src_latency_us"].to_numpy(dtype=float)
+    t_src = src_rows * cachelines_per_row * lat_src_us / np.clip(
         threads * max(params["m_gather"], 1e-6),
         a_min=1e-6,
         a_max=None,
@@ -417,17 +538,33 @@ def predict_matmul(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
     return t_comp + t_launch
 
 
-def predict_transpose(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+def predict_transpose(frame: pd.DataFrame, params: dict[str, float], variant: str) -> np.ndarray:
     out_bytes = frame["output_size"].to_numpy(dtype=float)
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
     prefix_blocks = frame["transpose_prefix_blocks"].to_numpy(dtype=float)
-    lat_us = frame["transpose_stride_latency_us"].to_numpy(dtype=float)
     threads = frame["num_threads"].to_numpy(dtype=float)
-    copy_us = 2.0 * out_bytes / np.clip(
-        bw_peak * max(params["rho_copy_inf"], 1e-6),
-        a_min=1e-6,
-        a_max=None,
-    )
+    if variant == "baseline":
+        lat_us = frame["transpose_stride_latency_us_baseline"].to_numpy(dtype=float)
+        copy_us = 2.0 * out_bytes / np.clip(
+            bw_peak * max(params["rho_copy_inf"], 1e-6),
+            a_min=1e-6,
+            a_max=None,
+        )
+    else:
+        lat_us = frame["transpose_stride_latency_us_baseline"].to_numpy(dtype=float)
+        t_stream = 2.0 * out_bytes / np.clip(
+            bw_peak * max(params["rho_copy_inf"], 1e-6),
+            a_min=1e-6,
+            a_max=None,
+        )
+        cacheline = frame["cacheline_bytes"].to_numpy(dtype=float)
+        issue_slots = frame["issue_slots_per_us"].to_numpy(dtype=float)
+        t_issue = (2.0 * out_bytes / np.clip(cacheline, a_min=1.0, a_max=None)) / np.clip(
+            issue_slots,
+            a_min=1e-6,
+            a_max=None,
+        )
+        copy_us = np.maximum(t_stream, t_issue)
     stride_us = prefix_blocks * lat_us / np.clip(
         np.power(np.clip(threads, a_min=1.0, a_max=None), max(params["eta_stride"], 0.0))
         * max(params["m_stride"], 1e-6),
@@ -437,36 +574,36 @@ def predict_transpose(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarr
     return copy_us + stride_us
 
 
-def predict_family(frame: pd.DataFrame, family: str, params: dict[str, float]) -> np.ndarray:
+def predict_family(frame: pd.DataFrame, family: str, params: dict[str, float], variant: str) -> np.ndarray:
     if frame.empty:
         return np.zeros(0, dtype=float)
     if family == "Concat":
-        return predict_concat(frame, params)
+        return predict_concat(frame, params, variant)
     if family == "ReduceSum":
-        return predict_reduce(frame, params)
+        return predict_reduce(frame, params, variant)
     if family == "Gather":
-        return predict_gather(frame, params)
+        return predict_gather(frame, params, variant)
     if family == "Gemm":
         return predict_gemm(frame, params)
     if family == "MatMul":
         return predict_matmul(frame, params)
     if family == "Transpose":
-        return predict_transpose(frame, params)
+        return predict_transpose(frame, params, variant)
     raise KeyError(family)
 
 
-def family_mape(frame: pd.DataFrame, family: str, params: dict[str, float]) -> float:
+def family_mape(frame: pd.DataFrame, family: str, params: dict[str, float], variant: str) -> float:
     family_df = frame[frame["family"] == family].copy()
     if family_df.empty:
         return float("nan")
-    pred = predict_family(family_df, family, params)
+    pred = predict_family(family_df, family, params, variant)
     return mape(family_df["actual_us"].to_numpy(dtype=float), pred)
 
 
-def macro_mape(frame: pd.DataFrame, params: dict[str, float], families: list[str] | None = None) -> float:
+def macro_mape(frame: pd.DataFrame, params: dict[str, float], variant: str, families: list[str] | None = None) -> float:
     selected_families = families or FAMILY_ORDER
     scores = [
-        family_mape(frame, family, params)
+        family_mape(frame, family, params, variant)
         for family in selected_families
         if not frame[frame["family"] == family].empty
     ]
@@ -476,7 +613,7 @@ def macro_mape(frame: pd.DataFrame, params: dict[str, float], families: list[str
     return float(np.mean(clean_scores)) if clean_scores else float("nan")
 
 
-def weighted_mape(frame: pd.DataFrame, params: dict[str, float]) -> float:
+def weighted_mape(frame: pd.DataFrame, params: dict[str, float], variant: str) -> float:
     if frame.empty:
         return float("nan")
     preds = np.zeros(len(frame), dtype=float)
@@ -484,7 +621,7 @@ def weighted_mape(frame: pd.DataFrame, params: dict[str, float]) -> float:
         family_mask = frame["family"].eq(family).to_numpy()
         if not np.any(family_mask):
             continue
-        preds[family_mask] = predict_family(frame.loc[family_mask], family, params)
+        preds[family_mask] = predict_family(frame.loc[family_mask], family, params, variant)
     return mape(frame["actual_us"].to_numpy(dtype=float), preds)
 
 
@@ -519,29 +656,29 @@ def coordinate_search(
     return tuned
 
 
-def calibrate_params(train_df: pd.DataFrame, passes: int) -> dict[str, float]:
+def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str) -> dict[str, float]:
     params = default_params()
 
     def copy_objective(trial: dict[str, float]) -> float:
-        return macro_mape(train_df[train_df["family"].isin(COPY_FAMILIES)], trial, COPY_FAMILIES)
+        return macro_mape(train_df[train_df["family"].isin(COPY_FAMILIES)], trial, variant, COPY_FAMILIES)
 
     def concat_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Concat", trial)
+        return family_mape(train_df, "Concat", trial, variant)
 
     def reduce_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "ReduceSum", trial)
+        return family_mape(train_df, "ReduceSum", trial, variant)
 
     def gather_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Gather", trial)
+        return family_mape(train_df, "Gather", trial, variant)
 
     def gemm_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Gemm", trial)
+        return family_mape(train_df, "Gemm", trial, variant)
 
     def matmul_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "MatMul", trial)
+        return family_mape(train_df, "MatMul", trial, variant)
 
     def transpose_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Transpose", trial)
+        return family_mape(train_df, "Transpose", trial, variant)
 
     for _ in range(max(int(passes), 1)):
         before = dict(params)
@@ -560,6 +697,7 @@ def calibrate_params(train_df: pd.DataFrame, passes: int) -> dict[str, float]:
 def family_metric_rows(
     frame: pd.DataFrame,
     params: dict[str, float],
+    variant: str,
     scheme: str,
     fold_name: str,
     split_name: str,
@@ -569,9 +707,10 @@ def family_metric_rows(
         family_df = frame[frame["family"] == family].copy()
         if family_df.empty:
             continue
-        pred = predict_family(family_df, family, params)
+        pred = predict_family(family_df, family, params, variant)
         rows.append(
             {
+                "variant": variant,
                 "scheme": scheme,
                 "fold": fold_name,
                 "split": split_name,
@@ -664,11 +803,13 @@ def render_markdown(
     params_df: pd.DataFrame,
     metrics_df: pd.DataFrame,
     summaries: dict[str, dict[str, Any]],
+    variant: str,
 ) -> str:
     lines: list[str] = []
     lines.append("# Analytical Model Generalization And Calibration Results")
     lines.append("")
     lines.append(f"- Input dataset: `{input_csv}`")
+    lines.append(f"- Analytical variant: `{variant}`")
     lines.append(f"- Heavy-op rows: `{len(heavy_df)}`")
     lines.append(f"- Cases: `{', '.join(EVAL_CASES)}`")
     lines.append(f"- Combos: `{', '.join(EVAL_COMBOS)}`")
@@ -771,10 +912,10 @@ def main() -> None:
 
     for scheme in args.schemes:
         for fold_name, train_df, test_df in build_folds(heavy_df, scheme):
-            params = calibrate_params(train_df, passes=args.passes)
-            param_rows.append({"scheme": scheme, "fold": fold_name, **params})
-            metrics_rows.extend(family_metric_rows(train_df, params, scheme, fold_name, "train"))
-            metrics_rows.extend(family_metric_rows(test_df, params, scheme, fold_name, "test"))
+            params = calibrate_params(train_df, passes=args.passes, variant=args.variant)
+            param_rows.append({"variant": args.variant, "scheme": scheme, "fold": fold_name, **params})
+            metrics_rows.extend(family_metric_rows(train_df, params, args.variant, scheme, fold_name, "train"))
+            metrics_rows.extend(family_metric_rows(test_df, params, args.variant, scheme, fold_name, "test"))
 
         scheme_df = pd.DataFrame([row for row in metrics_rows if row["scheme"] == scheme])
         summary_payload[scheme] = {
@@ -790,7 +931,7 @@ def main() -> None:
     metrics_df.to_csv(output_dir / "fold_family_metrics.csv", index=False)
     with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary_payload, handle, indent=2, ensure_ascii=False)
-    markdown = render_markdown(input_csv, heavy_df, params_df, metrics_df, summary_payload)
+    markdown = render_markdown(input_csv, heavy_df, params_df, metrics_df, summary_payload, args.variant)
     (output_dir / "summary.md").write_text(markdown, encoding="utf-8")
 
     print(markdown)

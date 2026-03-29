@@ -1055,3 +1055,70 @@ Validation run:
 
 Open risks:
 - The cluster textbox improves readability but intentionally stops distinguishing the exact point-to-label correspondence inside that lower-left pile-up; the exact operator identities remain available in `op_type_thread_summary.csv`.
+
+## 2026-03-29
+
+Summary:
+- Implemented the planned explicit hardware-parameterized analytical evaluation variants in `evaluate_analytical_generalization.py`.
+- Added two non-baseline variants:
+  - `explicit_no_reuse`: keeps the current held-out behavior but expands the shared hardware submodel explicitly
+  - `explicit_unique_reuse`: additionally switches `Gather` source-miss counting to a unique-row-aware approximation
+- Kept documentation unchanged in this round on purpose; this task was limited to script-side implementation and validation.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a `--variant` flag to the generalization evaluator:
+  - `baseline`
+  - `explicit_no_reuse`
+  - `explicit_unique_reuse`
+- Expanded the shared hardware submodel into explicit helper functions:
+  - `fit_level(...)`
+  - `latency_from_level(...)`
+  - `peak_add_ops_per_us(...)`
+  - `peak_fma_ops_per_us(...)`
+  - `issue_slots_per_us(...)`
+  - `add_latency_us(...)`
+- Reworked heavy-slice preprocessing to emit explicit intermediate hardware-aware columns, including:
+  - `gather_table_rows`
+  - `gather_unique_rows_est`
+  - `gather_src_unique_bytes`
+  - `gather_src_fit_level`
+  - `gather_src_latency_us`
+  - `reduce_acc_bytes_per_thread`
+  - `reduce_acc_fit_level`
+  - `reduce_acc_latency_us`
+  - `transpose_suffix_block_bytes`
+  - `transpose_suffix_fit_level`
+  - `transpose_stride_latency_us`
+  - `issue_slots_per_us`
+- `Gather` prediction now supports a unique-row-aware source path:
+  - `unique_rows_est = table_rows * (1 - exp(-request_rows / table_rows))`
+  - `T_src = unique_rows_est * cachelines_per_row * lat_src_us / (T * m_gather)`
+- `Concat`, `ReduceSum`, and `Transpose` can now evaluate through explicit hardware-expanded paths without introducing new reuse parameters.
+- Summary markdown now records the analytical variant used for each run.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py --variant baseline --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization_variant_baseline`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py --variant explicit_no_reuse --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization_variant_explicit_no_reuse`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py --variant explicit_unique_reuse --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization_variant_explicit_unique_reuse`
+
+Key results:
+- `explicit_no_reuse` preserved the prior held-out aggregate metrics on the current heavy-op slice:
+  - leave-one-case-out: macro `20.89%`, duration-weighted RE `14.44%`
+  - leave-one-combo-out: macro `15.79%`, duration-weighted RE `10.31%`
+- `explicit_unique_reuse` did not improve the heavy-op held-out results:
+  - leave-one-case-out: macro `21.54%`, duration-weighted RE `15.78%`
+  - leave-one-combo-out: macro `15.79%`, duration-weighted RE `10.31%`
+- The new `Gather` reuse approximation is numerically well-formed:
+  - `unique_rows_est <= request_rows`
+  - `unique_rows_est <= table_rows`
+  - all heavy-op `Gather` rows received non-null `gather_table_rows`, `gather_unique_rows_est`, and `gather_src_fit_level`
+
+Open risks:
+- On the current heavy-op DLRM slice, `Gather` requests are so large relative to table size that the occupancy estimate saturates to essentially the full table (`unique_rows_est / table_rows ~= 1.0` across the slice). This means the unique-row correction does not reduce the modeled source working set in the regime we currently evaluate.
+- Because the evaluated heavy-op `Gather` rows all remain memory-tier (`gather_src_fit_level = 4`), the explicit reuse correction currently changes the row-count term more than the residency tier, and that shift slightly worsens leave-one-case-out error.
+- V3/V4 documentation was intentionally not updated in this task; if the user wants the explicit hardware submodel written back into the docs, that should be a follow-up scoped change after reviewing these held-out results.
