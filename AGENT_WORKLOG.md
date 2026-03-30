@@ -1548,3 +1548,44 @@ Open risks:
 - The script only analyzes already-built dataset group CSVs; it does not read model predictions or infer feature importance from trained MLP weights.
 - Pearson/Spearman can become `NaN` for near-constant analytical proxy columns such as some `Unsqueeze`, `Add`, or `Mul` cases; this is expected and the script preserves those `NaN` values instead of forcing a number.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Extended the reproducible analytical-feature correlation script so grouped Markdown summaries also include MAPE alongside DWRE.
+- Re-ran the `layout_move` analytical correlation analysis to verify the new MAPE output is emitted in both split-level and grouped summaries.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `classed_op_mlp/analyze_analytical_feature_correlation.py` now renders grouped Markdown tables with:
+  - `DWRE`
+  - `MAPE`
+- This applies to:
+  - `## All By <group_col>`
+  - `## Test By <group_col>`
+- Reproducible correlation reports now expose both ranking/correlation metrics and grouped relative-error metrics in one Markdown artifact.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_analytical_5_200_iter --model-group layout_move --feature-cols ana_calib_mem_us --all-breakdown-cols op_type --test-breakdown-cols op_type case_id combo --output-dir /tmp/layout_move_analytical_corr`
+
+Key results:
+- `/tmp/layout_move_analytical_corr/summary.md` now shows MAPE in:
+  - `Split Summary`
+  - `All By op_type`
+  - `Test By op_type`
+  - `Test By case_id`
+  - `Test By combo`
+- For `layout_move` with `ana_calib_mem_us`:
+  - overall `all` MAPE = `59.63%`
+  - overall `test` MAPE = `59.32%`
+  - `Concat` test MAPE = `69.70%`
+  - `Transpose` test MAPE = `40.38%`
+
+Open risks:
+- The grouped MAPE is still based on using the analytical feature itself as a direct latency proxy, not the trained MLP prediction, so it should be interpreted as proxy quality rather than final-model quality.
+- `Concat` and `Transpose` remain structurally different even inside `layout_move`; mem-only analytical features can miss dispatch or other fixed overheads, especially for `Concat`.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.

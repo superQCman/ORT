@@ -216,12 +216,13 @@ def render_markdown(
             continue
         lines.append(f"## All By {group_col}")
         lines.append("")
-        lines.append(f"| {group_col} | feature | rows | Pearson r | Spearman rho | DWRE |")
-        lines.append(f"| --- | --- | ---: | ---: | ---: | ---: |")
+        lines.append(f"| {group_col} | feature | rows | Pearson r | Spearman rho | DWRE | MAPE |")
+        lines.append(f"| --- | --- | ---: | ---: | ---: | ---: | ---: |")
         for _, row in grouped_df.iterrows():
             lines.append(
                 f"| `{row[group_col]}` | `{row['feature']}` | {int(row['rows'])} | "
-                f"{row['pearson_r']:.6f} | {row['spearman_rho']:.6f} | {row['dwre_vs_actual'] * 100.0:.2f}% |"
+                f"{row['pearson_r']:.6f} | {row['spearman_rho']:.6f} | "
+                f"{row['dwre_vs_actual'] * 100.0:.2f}% | {row['mape_vs_actual'] * 100.0:.2f}% |"
             )
         lines.append("")
 
@@ -230,12 +231,13 @@ def render_markdown(
             continue
         lines.append(f"## Test By {group_col}")
         lines.append("")
-        lines.append(f"| {group_col} | feature | rows | Pearson r | Spearman rho | DWRE |")
-        lines.append(f"| --- | --- | ---: | ---: | ---: | ---: |")
+        lines.append(f"| {group_col} | feature | rows | Pearson r | Spearman rho | DWRE | MAPE |")
+        lines.append(f"| --- | --- | ---: | ---: | ---: | ---: | ---: |")
         for _, row in grouped_df.iterrows():
             lines.append(
                 f"| `{row[group_col]}` | `{row['feature']}` | {int(row['rows'])} | "
-                f"{row['pearson_r']:.6f} | {row['spearman_rho']:.6f} | {row['dwre_vs_actual'] * 100.0:.2f}% |"
+                f"{row['pearson_r']:.6f} | {row['spearman_rho']:.6f} | "
+                f"{row['dwre_vs_actual'] * 100.0:.2f}% | {row['mape_vs_actual'] * 100.0:.2f}% |"
             )
         lines.append("")
     return "\n".join(lines) + "\n"
