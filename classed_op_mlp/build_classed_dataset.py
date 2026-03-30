@@ -122,7 +122,7 @@ def attach_analytical_columns(base_frame: pd.DataFrame, analytical_df: pd.DataFr
     )
 
 
-def build_gemm_columns(frame: pd.DataFrame) -> pd.DataFrame:
+def build_refreshed_engineered_columns(frame: pd.DataFrame) -> pd.DataFrame:
     base = frame.drop(
         columns=[column for column in frame.columns if column.startswith(("feat_", "ana_", "hw_"))],
         errors="ignore",
@@ -130,6 +130,8 @@ def build_gemm_columns(frame: pd.DataFrame) -> pd.DataFrame:
     engineered = add_engineered_features(base)
     columns = [
         "row_uid",
+        "feat_lookup_count",
+        "feat_output_elements_per_lookup",
         "feat_gemm_m",
         "feat_gemm_n",
         "feat_gemm_k",
@@ -191,8 +193,23 @@ def build_classed_dataset_artifacts(
     model_group_op_types = resolve_model_group_op_types(feature_branch)
 
     base_df = load_dataset(input_data_dir)
-    gemm_df = build_gemm_columns(base_df)
-    merged = base_df.merge(gemm_df, on="row_uid", how="left", validate="one_to_one")
+    refreshed_engineered_df = build_refreshed_engineered_columns(base_df)
+    merged = base_df.merge(refreshed_engineered_df, on="row_uid", how="left", validate="one_to_one", suffixes=("", "__refreshed"))
+    for column in [
+        "feat_lookup_count",
+        "feat_output_elements_per_lookup",
+        "feat_gemm_m",
+        "feat_gemm_n",
+        "feat_gemm_k",
+        "feat_gemm_mac_count",
+        "feat_gemm_bytes_per_mac",
+    ]:
+        refreshed_column = f"{column}__refreshed"
+        if refreshed_column in merged.columns:
+            merged[column] = pd.to_numeric(merged[refreshed_column], errors="coerce").fillna(
+                pd.to_numeric(merged.get(column), errors="coerce")
+            )
+            merged = merged.drop(columns=[refreshed_column])
     merged["model_group"] = merged["op_type"].map(lambda op_type: resolve_model_group(feature_branch, op_type)).astype(str)
     if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
         merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)

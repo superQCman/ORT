@@ -12,6 +12,7 @@ import pandas as pd
 from feature_engineering import (
     DTYPE_SIZES,
     _infer_gemm_mnk,
+    _infer_gather_request_rows,
     _shape_entries,
     add_operator_hardware_context,
     load_hardware_features,
@@ -273,7 +274,10 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
         gemm_m, gemm_n, gemm_k = _infer_gemm_mnk(input_entries, output_entries)
         batch_count, matmul_m, matmul_n, matmul_k = infer_batched_matmul_dims(input_entries, output_entries)
 
-        request_rows = max(safe_float(row.get("feat_lookup_count"), 0.0), 0.0)
+        configured_request_rows = max(safe_float(row.get("feat_lookup_count"), 0.0), 0.0)
+        request_rows = max(_infer_gather_request_rows(input_entries), 0.0)
+        if request_rows <= 0.0:
+            request_rows = configured_request_rows
         row_bytes = safe_float(row.get("output_size"), 0.0) / max(request_rows, 1.0)
         cacheline = max(safe_float(row.get("hw_cache_cacheline_bytes"), 64.0), 1.0)
         cachelines_per_row = math.ceil(row_bytes / cacheline) if row_bytes > 0.0 else 0
@@ -359,6 +363,11 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
                 "reduce_acc_fit_level": float(reduce_acc_fit_level),
                 "reduce_acc_latency_us": reduce_acc_latency_us,
                 "bw_peak_bytes_per_us": max(safe_float(row.get("hw_memory_bandwidth_gb_s_total"), 100.0), 1e-6) * 1e3,
+                "hw_core_cpu_clock": max(safe_float(row.get("hw_core_cpu_clock"), 2.6), 1e-6),
+                "hw_cache_l1d_response_latency_cycles": max(
+                    safe_float(row.get("hw_cache_l1d_response_latency_cycles"), 1.0),
+                    1e-6,
+                ),
                 "peak_add_ops_per_us": peak_add_ops_per_us(row),
                 "peak_fma_ops_per_us": peak_fma_ops_per_us(row),
             }
@@ -496,7 +505,25 @@ def predict_gather(frame: pd.DataFrame, params: dict[str, float], variant: str) 
         a_min=1e-6,
         a_max=None,
     )
-    return np.maximum(t_bw, t_src)
+    cpu_clock_ghz = np.clip(
+        pd.to_numeric(frame.get("hw_core_cpu_clock", pd.Series(2.6, index=frame.index)), errors="coerce").fillna(2.6).to_numpy(dtype=float),
+        a_min=1e-6,
+        a_max=None,
+    )
+    l1_latency_cycles = np.clip(
+        pd.to_numeric(
+            frame.get("hw_cache_l1d_response_latency_cycles", pd.Series(1.0, index=frame.index)),
+            errors="coerce",
+        ).fillna(1.0).to_numpy(dtype=float),
+        a_min=1e-6,
+        a_max=None,
+    )
+    l1_latency_us = l1_latency_cycles / cpu_clock_ghz / 1000.0
+    tau_floor = 8.0 * np.power(
+        np.clip(lat_src_us / np.clip(l1_latency_us, a_min=1e-9, a_max=None), a_min=1.0, a_max=None),
+        0.75,
+    )
+    return np.maximum.reduce([t_bw, t_src, tau_floor])
 
 
 def predict_gemm(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:

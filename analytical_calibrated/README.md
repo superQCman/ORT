@@ -121,5 +121,5 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/analyze_cor
 ## 说明
 
 - heavy family 的参数语义保持与 [ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md](/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md) 一致。
+- `Gather` 相关 analytical 特征现在优先使用节点自身 `indices` tensor shape 推导出的真实 `request_rows`；只有在 shape 缺失时才回退到旧的全局配置近似。
 - 这里导出的 `ana_calib_*` 才是三分类 MLP 使用的 analytical proxy。
-- 旧主流水线里的 `ana_cache_fit_level`、`ana_expected_latency_ns`、`ana_base_us` 仍然保留在原数据里做参考，但不会直接进入新的分类 MLP。

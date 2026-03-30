@@ -145,6 +145,22 @@ def _entry_num_elements(entry: dict[str, Any]) -> float:
     return float(product)
 
 
+def _entry_request_elements(entry: dict[str, Any]) -> float:
+    dims = [int(dim) for dim in entry.get("dims", [])]
+    if not dims:
+        return 1.0 if int(entry.get("dynamic_dims", 0) or 0) == 0 else 0.0
+    product = 1
+    for dim in dims:
+        product *= int(dim)
+    return float(product)
+
+
+def _infer_gather_request_rows(input_entries: list[dict[str, Any]]) -> float:
+    if len(input_entries) < 2:
+        return 0.0
+    return max(_entry_request_elements(input_entries[1]), 0.0)
+
+
 def _shape_features(shape_text: str | float | int | None, prefix: str) -> dict[str, float]:
     entries = _shape_entries(shape_text)
     if not entries:
@@ -434,7 +450,13 @@ def add_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
     parameter_elements = parameter_bytes / 4.0
     output_elements_per_batch = output_elements / batch_size_safe
     activation_elements_per_batch = activation_elements / batch_size_safe
-    lookup_count = batch_size * out["num_indices_per_lookup"].fillna(0).clip(lower=0)
+    configured_lookup_count = batch_size * out["num_indices_per_lookup"].fillna(0).clip(lower=0)
+    inferred_lookup_count = pd.Series(
+        [_infer_gather_request_rows(entries) for entries in input_shape_entries],
+        index=out.index,
+        dtype=float,
+    )
+    lookup_count = inferred_lookup_count.where(inferred_lookup_count > 0.0, configured_lookup_count)
     lookup_count_safe = lookup_count.clip(lower=1)
     io_bytes = output_bytes + activation_bytes + parameter_bytes
 

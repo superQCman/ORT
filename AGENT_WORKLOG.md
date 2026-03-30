@@ -1695,3 +1695,69 @@ Open risks:
 - The candidate still has not crossed below the current `layout_move` reference MAPE of `32.33%`; the remaining gap is about `0.58` percentage points on the `test` split.
 - The current validation is still offline-only and has not yet been wired into `analytical_calibrated/build_analytical_features.py` or `evaluate_analytical_generalization.py`.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Changed the shared `Gather` feature engineering so `feat_lookup_count` now uses each node's real `request_rows` inferred from its `indices` tensor shape, with a fallback to the old global configuration proxy only when shape data is missing.
+- Updated both analytical paths to use the same real `request_rows` logic and landed the `Gather` level-aware fixed-overhead term described in `ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`.
+- Refreshed `classed_op_mlp` dataset construction so grouped MLP experiments automatically pick up the corrected `Gather` features even when the input dataset artifact still carries the old precomputed `feat_lookup_count`.
+- Cleaned `analytical_calibrated/README.md` to remove the lingering old-`ana_*` note and clarify the new `Gather request_rows` rule.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `feature_engineering.add_engineered_features(...)` now computes:
+  - `feat_lookup_count = num_elements(indices_shape)` for `Gather`
+  - scalar `indices` correctly map to `1`
+  - shape-missing rows fall back to `batch_size * num_indices_per_lookup`
+- `feat_output_elements_per_lookup` now stays consistent with that corrected `feat_lookup_count`.
+- `analytical_calibrated.prepare_heavy_prediction_frame(...)` and `evaluate_analytical_generalization.prepare_heavy_slice(...)` now derive `Gather request_rows` from node-local shape first instead of trusting the precomputed dataset column.
+- `Gather` analytical prediction in both:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+  now uses:
+  - real `request_rows`
+  - unchanged `T_bw` / `T_src` structure
+  - `tau_floor(row) = 8 us * (lat_src_us / lat_L1_us)^0.75`
+  - `T_gather = max(T_bw, T_src, tau_floor(row))`
+- `classed_op_mlp/build_classed_dataset.py` now refreshes the `Gather`-relevant engineered columns from raw shape metadata when exporting grouped datasets, so the grouped MLP branch does not depend on stale `feat_lookup_count` values from old dataset artifacts.
+- `analytical_calibrated/contracts.py` and `analytical_calibrated/README.md` now describe `feat_lookup_count` as real `Gather request_rows`, not the old global `batch_size * num_indices_per_lookup` approximation.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/contracts.py`
+- `python3 - <<'PY' ... add_engineered_features(...) ... PY`
+  - verified representative rows:
+    - `/Gather_8 -> feat_lookup_count = 1`
+    - `/Gather_10 -> feat_lookup_count = 1`
+    - `/Gather_12 -> feat_lookup_count = 36`
+- `python3 - <<'PY' ... build_classed_dataset_artifacts(..., feature_branch='no_analytical') ... PY`
+  - verified grouped dataset export refreshes stale `Gather` feature values from raw shape metadata
+- `python3 - <<'PY' ... rebuild_local_features(...) + prepare_heavy_prediction_frame(...) + _gather_components(...) ... PY`
+  - verified landed analytical `Gather` formula on the existing `test` split
+
+Key results:
+- Corrected `Gather` feature samples:
+  - `/Gather_8`: `feat_lookup_count = 1.0`
+  - `/Gather_10`: `feat_lookup_count = 1.0`
+  - `/Gather_12`: `feat_lookup_count = 36.0`
+- Refreshed grouped dataset smoke under `/tmp/classed_dataset_refresh_smoke` showed:
+  - `/emb_l0/Gather` keeps million-scale request rows
+  - `/Gather_9` is refreshed to `feat_lookup_count = 1.0`
+- Landed analytical `Gather` regression on the current `test` split:
+  - `MAPE = 32.9140%`
+  - `DWRE = 30.5295%`
+  - `MedianAPE = 33.2788%`
+- This matches the previously documented offline candidate and confirms the code path now implements that analytical revision.
+
+Open risks:
+- `analytical_calibrated/README.md` did not actually contain explicit `(移除)` markers; the only cleanup done there was to remove the lingering note about old `ana_cache_fit_level` / `ana_expected_latency_ns` / `ana_base_us` so the file now stays focused on the new analytical pipeline.
+- The landed `Gather` analytical formula is still about `0.58` percentage points above the `layout_move` reference MAPE of `32.33%`.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
