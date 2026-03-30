@@ -1,6 +1,6 @@
 # Classed Op MLP
 
-这个目录实现三分类单算子 MLP 流水线，并支持两条可并行维护的特征分支：
+这个目录实现按算子机理分组的单算子 MLP 流水线，并支持两条可并行维护的特征分支：
 
 - `with_analytical`
   - 保留 `ana_calib_*` analytical proxy
@@ -10,7 +10,7 @@
   - 完全移除 `ana_calib_*`
   - 只使用 `dataset_all_no_trace` 里的原始软件/形状特征与派生 `feat_gemm_*`
   - 目的就是排除 analytical model 的影响，直接观察“纯分类 MLP”是否比单 MLP baseline 更好
-  - 其中 `memory_pure` 会再细拆为 `gather` / `layout_move` / `view_meta`
+  - 分组固定为 `gather / layout_move / view_meta / mixed_balanced / compute_dominant`
 
 输入固定为：
 
@@ -59,6 +59,11 @@
 
 ## 数值特征定义
 
+说明：
+
+- 下表描述的是各组模型真正用于训练的 `numeric_features`。
+- 导出的 grouped dataset CSV 里仍可能保留额外的 `ana_calib_*` 列，供分析、路由和结果检查使用；这些列不等于都会进入该组模型训练。
+
 ### `with_analytical`
 
 这个分支与 `classed_op_mlp_test` 保持相同的 5-way 分桶和相同的 raw 特征，只在每个组上追加 `ana_calib_*`。
@@ -75,10 +80,10 @@
 | `parameter_size` | 参数张量字节量。 |
 | `feat_io_bytes_sum` | 总 I/O 字节量。 |
 | `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
-| `feat_lookup_count` | lookup 次数。 |
-| `feat_output_elements_per_lookup` | 每次 lookup 的输出元素规模。 |
+| `feat_lookup_count` | Gather 的真实请求元素数。优先由节点自身 `indices` tensor shape 推导；只有 shape 缺失时才回退到旧的全局配置近似。 |
+| `feat_output_elements_per_lookup` | 每个真实 Gather request 对应的平均输出元素规模。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
-| `ana_calib_total_us` | 校准 analytical 总时延。 |
+| `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
 | `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
 
 ### `layout_move`
@@ -92,7 +97,7 @@
 | `feat_io_bytes_sum` | 总 I/O 字节量。 |
 | `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
-| `ana_calib_total_us` | 校准 analytical 总时延。 |
+| `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
 | `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
 
 ### `view_meta`
@@ -105,8 +110,8 @@
 | `activation_size` | 输入激活张量字节量。 |
 | `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
-| `ana_calib_total_us` | 校准 analytical 总时延。 |
-| `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
+| `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
+| `ana_calib_mem_us`（移除） | 校准 analytical 访存主项时延。 |
 
 ### `mixed_balanced`
 
@@ -125,7 +130,7 @@
 | `feat_reduction_axes_product` | 被归约维度乘积。 |
 | `feat_reduction_input_rank` | 归约前张量 rank。 |
 | `feat_reduction_output_rank` | 归约后张量 rank。 |
-| `ana_calib_total_us` | 校准 analytical 总时延。 |
+| `ana_calib_total_us` (移除) | 校准 analytical 总时延。 |
 | `ana_calib_mem_us` | 校准 analytical 访存项时延。 |
 | `ana_calib_compute_us` | 校准 analytical 计算项时延。 |
 
@@ -145,7 +150,7 @@
 | `feat_gemm_k` | Gemm/MatMul 的 `K` 维。 |
 | `feat_gemm_mac_count` | 矩阵乘总 MAC 数。 |
 | `feat_gemm_bytes_per_mac` | 每 MAC 对应的字节开销。 |
-| `ana_calib_total_us` | 校准 analytical 总时延。 |
+| `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
 | `ana_calib_compute_us` | 校准 analytical 计算主项时延。 |
 
 ### `no_analytical`
@@ -192,8 +197,8 @@
 | `parameter_size` | 参数张量字节量。 |
 | `feat_io_bytes_sum` | 总 I/O 字节量。 |
 | `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
-| `feat_lookup_count` | lookup 次数。 |
-| `feat_output_elements_per_lookup` | 每次 lookup 的输出元素规模。 |
+| `feat_lookup_count` | Gather 的真实请求元素数。优先由节点自身 `indices` tensor shape 推导；只有 shape 缺失时才回退到旧的全局配置近似。 |
+| `feat_output_elements_per_lookup` | 每个真实 Gather request 对应的平均输出元素规模。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
 
 `layout_move`：

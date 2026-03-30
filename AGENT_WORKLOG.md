@@ -1803,3 +1803,36 @@ Key results:
 Open risks:
 - This task intentionally did not update `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`; the user explicitly asked to keep that document unchanged and instead make the code follow it.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Synchronized `classed_op_mlp/README.md` with the current code contract after the user explicitly asked for the README to reflect the actual feature behavior.
+- Clarified that `feat_lookup_count` keeps the same name but now represents real `Gather request_rows` inferred from the node-local `indices` tensor shape.
+- Clarified that the README feature tables describe model training inputs, while grouped dataset CSVs may still keep extra analytical columns for analysis and routing.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- No runtime code changed in this task.
+- The README now matches the current code in these areas:
+  - the pipeline is described as a 5-way grouped MLP pipeline, not a generic “three-class” setup
+  - `no_analytical` explicitly states the fixed 5 groups
+  - `feat_lookup_count` is documented as real `Gather request_rows`
+  - `feat_output_elements_per_lookup` is documented relative to real request rows
+  - the distinction between training `numeric_features` and extra exported analytical columns is made explicit
+
+Validation run:
+- Manual contract review against:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`
+
+Key results:
+- README wording now reflects that `feat_lookup_count` changed in meaning without changing column name.
+- README wording now reflects that grouped dataset CSVs can contain more columns than the per-group model input contract.
+
+Open risks:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
