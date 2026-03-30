@@ -1507,3 +1507,44 @@ Open risks:
 - The current analytical additions are intentionally compact; if the next run regresses, the likely next step is to ablate which `ana_calib_*` terms help each 5-way group.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py` still carries a separate user/local hidden-layer default change in the working tree, which was intentionally preserved.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Added a reusable analytical-feature correlation analysis script for existing `classed_op_mlp` dataset groups.
+- Used it to validate reproducible `layout_move` correlation outputs directly from an existing artifact directory without regenerating any dataset.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- New script `classed_op_mlp/analyze_analytical_feature_correlation.py` can analyze any existing group under:
+  - `<data-root>/datasets/<model-group>/{train,val,test}.csv`
+- The script supports:
+  - configurable `--feature-cols`
+  - configurable `--target-col`
+  - split-level summary export
+  - all-split grouped breakdown CSVs
+  - test-split grouped breakdown CSVs
+  - Markdown and JSON summaries
+- Default output root is:
+  - `<data-root>/analysis/analytical_feature_correlation/<model-group>/`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_analytical_5_200_iter --model-group layout_move --feature-cols ana_calib_mem_us --all-breakdown-cols op_type --test-breakdown-cols op_type case_id combo --output-dir /tmp/layout_move_analytical_corr`
+
+Key results:
+- The script successfully exported:
+  - `/tmp/layout_move_analytical_corr/split_summary.csv`
+  - `/tmp/layout_move_analytical_corr/all_by_op_type.csv`
+  - `/tmp/layout_move_analytical_corr/test_by_op_type.csv`
+  - `/tmp/layout_move_analytical_corr/test_by_case_id.csv`
+  - `/tmp/layout_move_analytical_corr/test_by_combo.csv`
+- This validated that the one-off analytical-feature correlation checks for `gather`, `compute_dominant`, `mixed_balanced`, `view_meta`, and `layout_move` can now be reproduced from a stable script interface.
+
+Open risks:
+- The script only analyzes already-built dataset group CSVs; it does not read model predictions or infer feature importance from trained MLP weights.
+- Pearson/Spearman can become `NaN` for near-constant analytical proxy columns such as some `Unsqueeze`, `Add`, or `Mul` cases; this is expected and the script preserves those `NaN` values instead of forcing a number.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
