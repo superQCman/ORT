@@ -391,6 +391,95 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 
 这个参数化方式比直接写一个 `8000 bytes/us` 更强，因为它清楚说明了常数来自哪种机制。
 
+#### 4.4.4 候选修订：真实 `request_rows` 与 level-aware fixed overhead
+
+下面这版是 2026-03-30 做的离线候选修订，目的不是立刻改代码，而是先验证 `Gather` 的纯 analytical 结构还有没有继续降 MAPE 的空间。
+
+当前实现里：
+
+- `request_rows = feat_lookup_count = batch_size * num_indices_per_lookup`
+
+这个定义对典型 embedding gather 是合理近似，但对一批非 embedding 的 tiny gather 明显失真。最典型的几类样本是：
+
+- `input_type_shape = [{int64:[2]}, {int64:[]}]`, `output_type_shape = [{int64:[]}]`
+- `input_type_shape = [{int64:[3]}, {int64:[1]}]`, `output_type_shape = [{int64:[1]}]`
+- `input_type_shape = [{float32:[81,1056]}, {int64:[36]}]`, `output_type_shape = [{float32:[36,1056]}]`
+
+这些样本的真实 index 请求元素数分别更接近 `1 / 1 / 36`，但当前 `feat_lookup_count` 会统一落到百万级，导致：
+
+- `row_bytes = output_size / request_rows` 被压到极小
+- `stream_bytes = 2 * output_size + 8 * request_rows` 被严重放大
+- `T_gather` 对 tiny gather 出现系统性结构误判
+
+因此候选修订的第一步不是分类，而是先把 `Gather` 自己的请求规模定义修正为节点真实 shape 所决定的值：
+
+- `request_rows_true = num_elements(indices_shape)`
+- 其中 `indices_shape` 来自 `input_type_shape` 的第二个输入
+
+然后保留当前双机制结构不变，只把其中的 `request_rows` 全部替换为 `request_rows_true`：
+
+- `row_bytes = output_size / max(request_rows_true, 1)`
+- `cachelines_per_row = ceil(row_bytes / cacheline)`
+- `stream_bytes = 2 * output_size + 8 * request_rows_true`
+- `T_src = request_rows_true * cachelines_per_row * lat_src_us / (T * m_gather)`
+- `T_bw = stream_bytes / BW_gather_eff(row_bytes)`
+
+离线验证表明，这一步本身已经能大幅修正 tiny gather 的异常 MAPE：
+
+| 版本 | all MAPE | all DWRE | test MAPE | test DWRE |
+|---|---:|---:|---:|---:|
+| 当前公式 | 2674.08% | 30.70% | 2642.89% | 30.59% |
+| 仅替换为真实 `request_rows` | 57.73% | 30.63% | 57.08% | 30.53% |
+
+这说明 `Gather` 当前最关键的问题之一，不是“大 embedding gather 的主公式完全错误”，而是很多 tiny gather 被错误地套用了全局 batch 级 `lookup_count`。
+
+但只修正 `request_rows` 之后，tiny gather 又会出现另一类系统性低估：`T_bw` 和 `T_src` 都会变得接近 `0 us`，而真实时延通常仍有 `8-30 us` 左右的固定运行时开销。因此离线验证又测试了第二步：在保留当前 `max(T_bw, T_src)` 主结构的同时，补一个可解释的 fixed-overhead 下界。
+
+第一种候选是常数下界：
+
+- `T_gather_candidate = max(T_bw, T_src, tau_floor)`
+- 其中 `tau_floor = 8 us`
+
+结果是：
+
+| 版本 | all MAPE | all DWRE | test MAPE | test DWRE |
+|---|---:|---:|---:|---:|
+| 真实 `request_rows` + 常数 `8 us` floor | 34.89% | 30.63% | 34.45% | 30.53% |
+
+常数下界已经非常有效，但它还不够“层级感知”。因此又进一步验证了一个更可解释的 level-aware floor：
+
+- `lat_L1_us = hw_cache_l1d_response_latency_cycles / cpu_clock / 1000`
+- `tau_floor(row) = 8 us * (lat_src_us / lat_L1_us)^0.75`
+- `T_gather_candidate = max(T_bw, T_src, tau_floor(row))`
+
+这个项的意义是：
+
+- 当 source hit 更接近 `L1` 时，floor 接近一个较小的 L1 级开销
+- 当 source working set 更像 `L2/L3/DRAM` 访问时，floor 会随 `lat_src_us` 自适应放大
+- 仍然只依赖显式的 cache-latency 硬件量，不引入额外黑盒回归特征
+
+这版离线结果是当前最好的纯 analytical 候选：
+
+| 版本 | all MAPE | all DWRE | test MAPE | test DWRE | test MedianAPE |
+|---|---:|---:|---:|---:|---:|
+| 真实 `request_rows` + level-aware floor | 33.39% | 30.63% | 32.91% | 30.53% | 33.28% |
+
+这说明：
+
+1. `Gather` 是否需要先按 `output_size` 分类，其实不是第一优先级
+2. 更高优先级的问题，是把 `request_rows` 改成节点真实 indices shape 所决定的值
+3. 在此基础上，再补一个与 cache latency level 绑定的 fixed-overhead 项，就已经能把 `test MAPE` 从 `2642.89%` 降到 `32.91%`
+
+额外做过的小范围离线搜索还验证了：
+
+- 再把 `tau_floor` 乘一个弱的 `cachelines_per_row^beta` 项并没有继续变好
+- 当前最优点仍然是：
+  - `request_rows = num_elements(indices_shape)`
+  - `tau_floor(row) = 8 us * (lat_src_us / lat_L1_us)^0.75`
+  - 即 `beta = 0`
+
+注意：本节只是记录截至 2026-03-30 的离线候选修订及其效果，尚未同步到 `analytical_calibrated` 的正式代码实现中。
+
 ### 4.5 `Gemm`: tile 饱和不足下的持续 FMA 利用率
 
 #### 4.5.1 内核语义

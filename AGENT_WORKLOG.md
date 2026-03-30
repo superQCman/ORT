@@ -1636,3 +1636,62 @@ Open risks:
 - The suite currently ranks each group's best feature by lowest test MAPE; if a different selection rule is preferred later, such as lowest DWRE or highest Pearson, the script can be extended without changing the per-group CSV contract.
 - `view_meta` and `gather` still show that MAPE can be dominated by many tiny-latency samples, so DWRE and correlation should still be read alongside MAPE.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Documented the current pure-analytical `Gather` repair candidate in `ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md` before any code change.
+- Re-validated the no-code `Gather` offline search to confirm how much MAPE drops from:
+  - replacing global `feat_lookup_count` with true per-node `request_rows`
+  - adding a constant `8 us` floor
+  - replacing that floor with a cache-latency-aware level-sensitive floor
+- Checked whether a further `cachelines_per_row^beta` multiplier improves on the best level-aware floor; it does not.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- No runtime code or data pipeline behavior changed in this task.
+- The analytical design document now records a candidate `Gather` revision that stays fully within the analytical-model scope:
+  - `request_rows = num_elements(indices_shape)` using the actual second `Gather` input shape
+  - keep the existing `T_bw` and `T_src` structure
+  - add an optional level-aware fixed overhead floor:
+    - `tau_floor(row) = 8 us * (lat_src_us / lat_L1_us)^0.75`
+    - `T_gather_candidate = max(T_bw, T_src, tau_floor(row))`
+- The document also explicitly states that this candidate is not yet landed in `analytical_calibrated` code.
+
+Validation run:
+- `python3` offline analysis over `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace/dataset_full.csv` using the existing `Gather` dataset split from `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_analytical_5_200_iter/datasets/gather/`
+- Recomputed four variants on the same `train/val/test/all` split:
+  - current formula
+  - true `request_rows` only
+  - true `request_rows` + constant `8 us` floor
+  - true `request_rows` + level-aware floor
+- Additional offline sweep over:
+  - `tau_floor = tau_ref * (lat_src_us / lat_L1_us)^power * cachelines_per_row^beta`
+  - `tau_ref in {6, 8, 10}`
+  - `power in {0.5, 0.75, 1.0}`
+  - `beta in {-1.0, -0.75, -0.5, -0.25, 0.0, 0.25}`
+
+Key results:
+- `Gather` current formula:
+  - `all MAPE = 2674.08%`, `test MAPE = 2642.89%`
+  - `all DWRE = 30.70%`, `test DWRE = 30.59%`
+- Replacing only `request_rows` with the real indices-shape element count:
+  - `all MAPE = 57.73%`, `test MAPE = 57.08%`
+  - `all DWRE = 30.63%`, `test DWRE = 30.53%`
+- Adding a constant `8 us` floor:
+  - `all MAPE = 34.89%`, `test MAPE = 34.45%`
+  - `all DWRE = 30.63%`, `test DWRE = 30.53%`
+- Best pure-analytical level-aware floor:
+  - `tau_floor(row) = 8 us * (lat_src_us / lat_L1_us)^0.75`
+  - `all MAPE = 33.39%`, `test MAPE = 32.91%`
+  - `all DWRE = 30.63%`, `test DWRE = 30.53%`
+  - `test MedianAPE = 33.28%`
+- Adding an extra `cachelines_per_row^beta` factor did not improve on that point; the best result still occurs at `beta = 0`.
+
+Open risks:
+- The candidate still has not crossed below the current `layout_move` reference MAPE of `32.33%`; the remaining gap is about `0.58` percentage points on the `test` split.
+- The current validation is still offline-only and has not yet been wired into `analytical_calibrated/build_analytical_features.py` or `evaluate_analytical_generalization.py`.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
