@@ -1589,3 +1589,50 @@ Open risks:
 - The grouped MAPE is still based on using the analytical feature itself as a direct latency proxy, not the trained MLP prediction, so it should be interpreted as proxy quality rather than final-model quality.
 - `Concat` and `Transpose` remain structurally different even inside `layout_move`; mem-only analytical features can miss dispatch or other fixed overheads, especially for `Concat`.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Extended the analytical correlation script with a suite mode that can analyze all 5 model groups in one run and export a unified correlation + MAPE summary table.
+- Used the suite mode to generate a persistent consolidated report directly under the existing `classed_op_mlp_test_analytical_5_200_iter` artifact directory.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `classed_op_mlp/analyze_analytical_feature_correlation.py` now supports:
+  - `--model-groups ...`
+  - `--all-model-groups`
+  - `--auto-feature-cols`
+- In suite mode the script:
+  - auto-detects each group's available `ana_calib_*` columns from `feature_columns.json`
+  - runs the per-group analysis into subdirectories
+  - exports a unified:
+    - `suite_split_summary.csv`
+    - `suite_test_summary.csv`
+    - `suite_test_best_feature_summary.csv`
+    - `suite_summary.json`
+    - `suite_summary.md`
+- This makes the 5-group analytical proxy quality comparison reproducible from one command instead of ad hoc per-group runs.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_analytical_5_200_iter --all-model-groups --auto-feature-cols --output-dir /tmp/analytical_feature_correlation_suite`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_analytical_5_200_iter --all-model-groups --auto-feature-cols`
+
+Key results:
+- The consolidated report was written to:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_analytical_5_200_iter/analysis/analytical_feature_correlation_suite/suite_summary.md`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_analytical_5_200_iter/analysis/analytical_feature_correlation_suite/suite_test_best_feature_summary.csv`
+- Best test-time proxy per group by lowest MAPE:
+  - `compute_dominant`: `ana_calib_total_us`, MAPE `9.76%`, DWRE `6.18%`
+  - `gather`: `ana_calib_mem_us`, MAPE `2642.89%`, DWRE `30.59%`
+  - `layout_move`: `ana_calib_total_us`, MAPE `32.33%`, DWRE `53.87%`
+  - `mixed_balanced`: `ana_calib_total_us`, MAPE `54.50%`, DWRE `32.02%`
+  - `view_meta`: `ana_calib_mem_us`, MAPE `149814.59%`, DWRE `182184.64%`
+
+Open risks:
+- The suite currently ranks each group's best feature by lowest test MAPE; if a different selection rule is preferred later, such as lowest DWRE or highest Pearson, the script can be extended without changing the per-group CSV contract.
+- `view_meta` and `gather` still show that MAPE can be dominated by many tiny-latency samples, so DWRE and correlation should still be read alongside MAPE.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
