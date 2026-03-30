@@ -1761,3 +1761,45 @@ Open risks:
 - `analytical_calibrated/README.md` did not actually contain explicit `(移除)` markers; the only cleanup done there was to remove the lingering note about old `ana_cache_fit_level` / `ana_expected_latency_ns` / `ana_base_us` so the file now stays focused on the new analytical pipeline.
 - The landed `Gather` analytical formula is still about `0.58` percentage points above the `layout_move` reference MAPE of `32.33%`.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Aligned the `classed_op_mlp` code contract with the current `classed_op_mlp/README.md` by removing the analytical features that the README already marks as removed in the `with_analytical` branch.
+- Verified the exported per-group `feature_columns.json` manifests now match that README contract exactly.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `with_analytical` branch feature lists now remove:
+  - `gather`: `ana_calib_total_us`
+  - `layout_move`: `ana_calib_total_us`
+  - `view_meta`: `ana_calib_total_us`, `ana_calib_mem_us`
+  - `mixed_balanced`: `ana_calib_total_us`
+  - `compute_dominant`: `ana_calib_total_us`
+- Remaining analytical features by group are now:
+  - `gather`: `ana_calib_mem_us`
+  - `layout_move`: `ana_calib_mem_us`
+  - `view_meta`: none
+  - `mixed_balanced`: `ana_calib_mem_us`, `ana_calib_compute_us`
+  - `compute_dominant`: `ana_calib_compute_us`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `python3 - <<'PY' ... build_classed_dataset_artifacts(..., feature_branch='with_analytical') ... PY`
+  - exported a smoke dataset under `/tmp/classed_op_mlp_manifest_check`
+  - inspected each group's `feature_columns.json`
+
+Key results:
+- Verified manifest numeric features now exactly match the README contract:
+  - `gather`: raw features + `ana_calib_mem_us`
+  - `layout_move`: raw features + `ana_calib_mem_us`
+  - `view_meta`: raw features only
+  - `mixed_balanced`: raw features + `ana_calib_mem_us` + `ana_calib_compute_us`
+  - `compute_dominant`: raw features + `ana_calib_compute_us`
+
+Open risks:
+- This task intentionally did not update `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`; the user explicitly asked to keep that document unchanged and instead make the code follow it.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.

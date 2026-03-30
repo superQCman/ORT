@@ -85,7 +85,6 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "feat_lookup_count",
         "feat_output_elements_per_lookup",
         "feat_output_elements_per_batch",
-        "ana_calib_total_us",
         "ana_calib_mem_us",
     ),
     "layout_move": (
@@ -96,7 +95,6 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "feat_io_bytes_sum",
         "feat_output_input_bytes_ratio",
         "feat_output_elements_per_batch",
-        "ana_calib_total_us",
         "ana_calib_mem_us",
     ),
     "view_meta": (
@@ -106,8 +104,6 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "activation_size",
         "feat_output_input_bytes_ratio",
         "feat_output_elements_per_batch",
-        "ana_calib_total_us",
-        "ana_calib_mem_us",
     ),
     "mixed_balanced": (
         "batch_size",
@@ -123,7 +119,6 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "feat_reduction_axes_product",
         "feat_reduction_input_rank",
         "feat_reduction_output_rank",
-        "ana_calib_total_us",
         "ana_calib_mem_us",
         "ana_calib_compute_us",
     ),
@@ -140,7 +135,6 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "feat_gemm_k",
         "feat_gemm_mac_count",
         "feat_gemm_bytes_per_mac",
-        "ana_calib_total_us",
         "ana_calib_compute_us",
     ),
 }
