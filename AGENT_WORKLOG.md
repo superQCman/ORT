@@ -1836,3 +1836,51 @@ Key results:
 
 Open risks:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-30
+
+Summary:
+- Added a new independent `feature_ablation/` utility so feature-drop experiments can be run against any prepared dataset directory, while still supporting the existing `classed_op_mlp` experiment layout directly.
+- Used that utility on `classed_op_mlp_test_2_analytical_5_200_iter/datasets/gather` to ablate:
+  - `feat_output_elements_per_batch`
+  - `feat_output_elements_per_lookup`
+  - `feat_output_input_bytes_ratio`
+- Reused the current five-class `gather` baseline model for comparison, then retrained a same-config baseline once more to verify there was no environment drift.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/run_feature_ablation.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a reusable ablation entry point that can:
+  - resolve `datasets/<model_group>` and `models/<model_group>` from an existing experiment root
+  - or run directly from an explicit dataset directory plus baseline model directory
+  - generate `baseline`, `drop_<feature>`, and `drop_all_selected` variants automatically
+  - emit per-variant data manifests, trained model artifacts, split-level metric deltas, and row-level paired error deltas versus baseline
+- The new script inherits training hyperparameters from `baseline-model-dir/metrics.json` when available so later ablations stay aligned with the source model configuration.
+
+Validation run:
+- `conda run -n ort python -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/run_feature_ablation.py`
+- `conda run -n ort python /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/run_feature_ablation.py --help`
+- `conda run -n ort python /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/run_feature_ablation.py --source-experiment-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_2_analytical_5_200_iter --model-group gather --ablation-feature feat_output_elements_per_batch --ablation-feature feat_output_elements_per_lookup --ablation-feature feat_output_input_bytes_ratio --train-device auto`
+- `conda run -n ort python /data/qc/dlrm/ORT/single_op_stage1_mlp/feature_ablation/run_feature_ablation.py --source-experiment-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_2_analytical_5_200_iter --model-group gather --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/feature_ablation/classed_op_mlp_test_2_analytical_5_200_iter/gather_baseline_retrained_only --variant-mode custom_only --disable-reuse-source-baseline --train-device auto`
+
+Key results:
+- Source `gather` baseline metrics were reproduced exactly by the retrained baseline, so the ablation comparison is not explained by environment drift.
+- Baseline:
+  - `val_mape = 0.072948`
+  - `test_mape = 0.071707`
+- Single-feature ablation:
+  - dropping `feat_output_input_bytes_ratio` improved `test_mape` to `0.068702` (`-4.19%` relative)
+  - dropping `feat_output_elements_per_lookup` worsened `test_mape` to `0.073574` (`+2.60%` relative)
+  - dropping `feat_output_elements_per_batch` worsened `test_mape` to `0.073782` (`+2.89%` relative)
+- Joint ablation of all three candidate features improved `test_mape` to `0.067919` (`-5.28%` relative), which suggests the two `output_elements_*` features carry useful signal but `feat_output_input_bytes_ratio` is counterproductive in the current `gather` model and the full three-feature bundle is not net-helpful.
+- Experiment outputs were written under:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/feature_ablation/classed_op_mlp_test_2_analytical_5_200_iter/gather`
+
+Open risks:
+- This round used a single seed (`42`) to stay aligned with the current published `gather` model; if the user wants stronger causal confidence, the next step should be repeating the same ablation matrix over several seeds and averaging the deltas.
+- The current script compares direct-us models only; if future classed models switch target mode or loss settings, users should treat this utility as a same-contract ablation tool rather than a cross-training-regime comparison harness.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
