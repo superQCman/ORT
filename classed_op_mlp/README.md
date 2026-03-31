@@ -75,14 +75,15 @@
 | `batch_size` | DLRM batch size。 |
 | `num_indices_per_lookup` | 每次 lookup 的索引数配置。 |
 | `num_threads` | intra-op 线程数。 |
+| `inter_threads` | inter-op 线程数这种静态并发配置。优先从 `logs/<combo>/build_ops.log` 的 `default_inter_threads` 恢复，缺失时回退到 `case_*_run_*_*.sh` 里的 `INTER_THREADS`。 |
 | `output_size` | 输出张量字节量。 |
 | `activation_size` | 输入激活张量字节量。 |
 | `parameter_size` | 参数张量字节量。 |
-| `feat_io_bytes_sum` | 总 I/O 字节量。 |
-| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
+| `feat_io_bytes_sum` | 总 I/O 字节量。（output_size + activation_size + parameter_size） |
+| `feat_output_input_bytes_ratio`（移除） | 输出相对输入的比例。 |
 | `feat_lookup_count` | Gather 的真实请求元素数。优先由节点自身 `indices` tensor shape 推导；只有 shape 缺失时才回退到旧的全局配置近似。 |
-| `feat_output_elements_per_lookup` | 每个真实 Gather request 对应的平均输出元素规模。 |
-| `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
+| `feat_output_elements_per_lookup`（移除） | 每个真实 Gather request 对应的平均输出元素规模。 |
+| `feat_output_elements_per_batch`（移除） | 每个 batch 的输出元素规模。 |
 | `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
 | `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
 
@@ -94,8 +95,8 @@
 | `num_threads` | intra-op 线程数。 |
 | `output_size` | 输出张量字节量。 |
 | `activation_size` | 输入激活张量字节量。 |
-| `feat_io_bytes_sum` | 总 I/O 字节量。 |
-| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
+| `feat_io_bytes_sum` | 总 I/O 字节量。（output_size + activation_size + parameter_size） |
+| `feat_output_input_bytes_ratio`（移除） | 输出相对输入的比例。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
 | `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
 | `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
@@ -108,8 +109,8 @@
 | `num_threads` | intra-op 线程数。 |
 | `output_size` | 输出张量字节量。 |
 | `activation_size` | 输入激活张量字节量。 |
-| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
-| `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
+| `feat_output_input_bytes_ratio`（移除） | 输出相对输入的比例。 |
+| `feat_output_elements_per_batch`（移除） | 每个 batch 的输出元素规模。 |
 | `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
 | `ana_calib_mem_us`（移除） | 校准 analytical 访存主项时延。 |
 
@@ -119,12 +120,13 @@
 | --- | --- |
 | `batch_size` | DLRM batch size。 |
 | `num_threads` | intra-op 线程数。 |
+| `inter_threads` | inter-op 线程数这种静态并发配置。优先从 `logs/<combo>/build_ops.log` 的 `default_inter_threads` 恢复，缺失时回退到 `case_*_run_*_*.sh` 里的 `INTER_THREADS`。 |
 | `output_size` | 输出张量字节量。 |
 | `activation_size` | 输入激活张量字节量。 |
 | `feat_io_bytes_sum` | 总 I/O 字节量。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
 | `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
-| `feat_activation_elements_per_batch` | 每个 batch 的输入激活元素规模。 |
+| `feat_activation_elements_per_batch`（移除） | 每个 batch 的输入激活元素规模。 |
 | `feat_reduction_axes_count` | 被归约轴数量。 |
 | `feat_reduction_work_items` | 归约/聚合类核心工作量。 |
 | `feat_reduction_axes_product` | 被归约维度乘积。 |
@@ -143,8 +145,8 @@
 | `output_size` | 输出张量字节量。 |
 | `activation_size` | 输入激活张量字节量。 |
 | `parameter_size` | 参数张量字节量。 |
-| `feat_io_bytes_sum` | 总 I/O 字节量。 |
-| `feat_output_input_bytes_ratio` | 输出相对输入的比例。 |
+| `feat_io_bytes_sum` | 总 I/O 字节量。（output_size + activation_size + parameter_size） |
+| `feat_output_input_bytes_ratio` （移除）| 输出相对输入的比例。 |
 | `feat_gemm_m` | Gemm/MatMul 的 `M` 维。 |
 | `feat_gemm_n` | Gemm/MatMul 的 `N` 维。 |
 | `feat_gemm_k` | Gemm/MatMul 的 `K` 维。 |
@@ -192,6 +194,7 @@
 | `batch_size` | DLRM batch size。 |
 | `num_indices_per_lookup` | 每次 lookup 的索引数配置。 |
 | `num_threads` | intra-op 线程数。 |
+| `inter_threads` | inter-op 线程数这种静态并发配置。优先从 `logs/<combo>/build_ops.log` 的 `default_inter_threads` 恢复，缺失时回退到 `case_*_run_*_*.sh` 里的 `INTER_THREADS`。 |
 | `output_size` | 输出张量字节量。 |
 | `activation_size` | 输入激活张量字节量。 |
 | `parameter_size` | 参数张量字节量。 |
@@ -207,6 +210,7 @@
 | --- | --- |
 | `batch_size` | DLRM batch size。 |
 | `num_threads` | intra-op 线程数。 |
+| `inter_threads` | inter-op 线程数这种静态并发配置。优先从 `logs/<combo>/build_ops.log` 的 `default_inter_threads` 恢复，缺失时回退到 `case_*_run_*_*.sh` 里的 `INTER_THREADS`。 |
 | `output_size` | 输出张量字节量。 |
 | `activation_size` | 输入激活张量字节量。 |
 | `feat_io_bytes_sum` | 总 I/O 字节量。 |

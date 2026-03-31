@@ -725,6 +725,70 @@ Open risks:
 ## 2026-03-31
 
 Summary:
+- Narrowed the static `inter_threads` feature to only the two groups where it showed clear value:
+  - `gather`
+  - `mixed_balanced`
+- Removed all `numeric_features` that `classed_op_mlp/README.md` already marked as `（移除）`, while keeping those markers in the README itself.
+- Ran a full five-group `with_analytical` experiment against the user-specified baseline `classed_op_mlp_test_2_analytical_5_200_iter`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `inter_threads` is now kept only for:
+  - `gather`
+  - `mixed_balanced`
+- `inter_threads` is now removed from:
+  - `layout_move`
+  - `view_meta`
+  - `compute_dominant`
+- `with_analytical` training contracts were further pruned to match README `（移除）` markers:
+  - `gather`: removed `feat_output_input_bytes_ratio`, `feat_output_elements_per_lookup`, `feat_output_elements_per_batch`
+  - `layout_move`: removed `feat_output_input_bytes_ratio`
+  - `view_meta`: removed `feat_output_input_bytes_ratio`, `feat_output_elements_per_batch`
+  - `mixed_balanced`: removed `feat_activation_elements_per_batch`
+  - `compute_dominant`: removed `feat_output_input_bytes_ratio`
+- `no_analytical` contracts now keep `inter_threads` only for:
+  - `gather`
+  - `mixed_balanced`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch with_analytical --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated_2 --output-dir /tmp/classed_op_mlp_contract_check`
+- `/data/qc/anaconda3/envs/ort/bin/python /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py --feature-branch with_analytical --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated_2 --reuse-analytical-features --skip-analytical-generalization --max-iter 200 --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter`
+
+Key results:
+- Contract check confirmed the new `with_analytical` per-group numeric features are now:
+  - `gather`: `batch_size`, `num_indices_per_lookup`, `num_threads`, `inter_threads`, `output_size`, `activation_size`, `parameter_size`, `feat_io_bytes_sum`, `feat_lookup_count`, `ana_calib_mem_us`
+  - `layout_move`: `batch_size`, `num_threads`, `output_size`, `activation_size`, `feat_io_bytes_sum`, `feat_output_elements_per_batch`, `ana_calib_mem_us`
+  - `view_meta`: `batch_size`, `num_threads`, `output_size`, `activation_size`
+  - `mixed_balanced`: `batch_size`, `num_threads`, `inter_threads`, `output_size`, `activation_size`, `feat_io_bytes_sum`, `feat_output_elements_per_batch`, `feat_output_input_bytes_ratio`, `feat_reduction_axes_count`, `feat_reduction_work_items`, `feat_reduction_axes_product`, `feat_reduction_input_rank`, `feat_reduction_output_rank`, `ana_calib_mem_us`, `ana_calib_compute_us`
+  - `compute_dominant`: `batch_size`, `num_threads`, `output_size`, `activation_size`, `parameter_size`, `feat_io_bytes_sum`, `feat_gemm_m`, `feat_gemm_n`, `feat_gemm_k`, `feat_gemm_mac_count`, `feat_gemm_bytes_per_mac`, `ana_calib_compute_us`
+- Full experiment output was written to:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter`
+- Relative to baseline `classed_op_mlp_test_2_analytical_5_200_iter`, test-set overall metrics improved by:
+  - `MAE`: `12048.28 -> 9345.81 us` (`+22.43%`)
+  - `RMSE`: `37183.67 -> 29660.32 us` (`+20.23%`)
+  - `R2`: `0.986875 -> 0.991649` (`+0.004774`)
+  - `MAPE`: `0.063664 -> 0.056812` (`+10.76%`)
+  - `median_ape`: `0.040674 -> 0.036897` (`+9.29%`)
+  - `combo_op_type_total_duration_weighted_mape`: `0.066960 -> 0.054021` (`+19.32%`)
+- Group-level test improvements versus the same baseline:
+  - `gather`: `MAPE +26.24%`, `MAE +28.94%`
+  - `mixed_balanced`: `MAPE +12.04%`, `MAE +11.92%`
+  - `layout_move`: `MAPE +6.40%`, `MAE +14.00%`
+  - `compute_dominant`: `MAPE +2.76%`, `MAE +2.12%`
+  - `view_meta`: `MAPE -0.54%`, `MAE +0.34%`
+
+Open risks:
+- `view_meta` did not improve on test MAPE; this pruning/inter-threads configuration mainly helped `gather` and `mixed_balanced`, which was the original hypothesis.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-31
+
+Summary:
 - Added a reproducible `classed_op_mlp/inter_threads_eval/` utility for the static `inter_threads` feature experiments.
 - The new utility rebuilds grouped datasets with the current code, inherits baseline hyperparameters from an existing classed-op experiment, retrains selected model groups, and emits baseline-vs-new metric comparisons.
 - Default scope is the two groups the user just validated manually:
