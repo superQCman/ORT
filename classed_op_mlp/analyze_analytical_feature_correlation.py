@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
@@ -55,7 +56,7 @@ def parse_args() -> argparse.Namespace:
         "--model-groups",
         nargs="+",
         default=[],
-        help="Optional list of model groups to analyze together as a suite.",
+        help="Optional suite model groups. Supports space-separated or comma-separated values.",
     )
     parser.add_argument(
         "--all-model-groups",
@@ -99,6 +100,19 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
+
+
+def _split_cli_tokens(values: list[str]) -> list[str]:
+    tokens: list[str] = []
+    for value in values:
+        tokens.extend(token for token in re.split(r"[\s,]+", value.strip()) if token)
+    return tokens
+
+
+def resolve_model_groups(args: argparse.Namespace) -> list[str]:
+    if args.all_model_groups:
+        return list(DEFAULT_MODEL_GROUPS)
+    return _split_cli_tokens(list(args.model_groups))
 
 
 def _safe_numeric(series: pd.Series) -> pd.Series:
@@ -489,12 +503,7 @@ def analyze_suite(
 def main() -> None:
     args = parse_args()
     data_root = Path(args.data_root)
-    if args.all_model_groups:
-        model_groups = list(DEFAULT_MODEL_GROUPS)
-    elif args.model_groups:
-        model_groups = list(args.model_groups)
-    else:
-        model_groups = []
+    model_groups = resolve_model_groups(args)
 
     if model_groups:
         output_dir = (

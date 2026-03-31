@@ -2035,3 +2035,38 @@ Open risks:
 - This round used a single seed (`42`) to stay aligned with the current published `gather` model; if the user wants stronger causal confidence, the next step should be repeating the same ablation matrix over several seeds and averaging the deltas.
 - The current script compares direct-us models only; if future classed models switch target mode or loss settings, users should treat this utility as a same-contract ablation tool rather than a cross-training-regime comparison harness.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-31
+
+Summary:
+- Fixed `classed_op_mlp/analyze_analytical_feature_correlation.py` so suite mode accepts comma-separated `--model-groups` values in addition to space-separated values.
+- Resolved the `FileNotFoundError` where a literal directory name like `gather,layout_move,...` was being looked up under `datasets/`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `--model-groups` now normalizes CLI tokens by splitting on commas and whitespace before suite analysis begins.
+- Commands such as:
+  - `python analyze_analytical_feature_correlation.py --data-root ... --model-groups gather,layout_move,mixed_balanced,compute_dominant --auto-feature-cols`
+  now resolve the four intended dataset groups instead of trying to open one combined manifest path.
+
+Validation run:
+- `python -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `python /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter --model-groups gather,layout_move,mixed_balanced,compute_dominant --auto-feature-cols`
+
+Key results:
+- The previously failing suite command now completes successfully and writes:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter/analysis/analytical_feature_correlation_suite/suite_split_summary.csv`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter/analysis/analytical_feature_correlation_suite/suite_test_summary.csv`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter/analysis/analytical_feature_correlation_suite/suite_summary.md`
+- Auto-detected analytical feature columns resolved as expected per group:
+  - `gather`: `ana_calib_mem_us`
+  - `layout_move`: `ana_calib_mem_us`
+  - `mixed_balanced`: `ana_calib_mem_us`, `ana_calib_compute_us`
+  - `compute_dominant`: `ana_calib_compute_us`
+
+Open risks:
+- The script now accepts comma-separated suite group lists, but the README does not yet spell that out explicitly; users reading only old examples may still assume space-separated input.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
