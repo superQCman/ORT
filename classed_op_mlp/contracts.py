@@ -42,6 +42,7 @@ EXTRA_FEATURE_DESCRIPTIONS = {
     "output_size": "算子输出张量字节量。",
     "activation_size": "算子输入激活张量字节量。",
     "parameter_size": "算子参数张量字节量。",
+    "inter_threads": "该 combo 的静态 inter-op 线程配置。优先从 build_ops.log 的 default_inter_threads 恢复，缺失时回退到 case 启动脚本中的 INTER_THREADS。",
     "feat_activation_elements_per_batch": "每个 batch 对应的输入激活元素规模。",
     "feat_reduction_axes_count": "被归约轴的数量。",
     "feat_reduction_input_rank": "归约前输入张量 rank。",
@@ -77,6 +78,7 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "batch_size",
         "num_indices_per_lookup",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "parameter_size",
@@ -90,6 +92,7 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "layout_move": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "feat_io_bytes_sum",
@@ -100,6 +103,7 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "view_meta": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "feat_output_input_bytes_ratio",
@@ -108,6 +112,7 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "mixed_balanced": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "feat_io_bytes_sum",
@@ -125,6 +130,7 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "compute_dominant": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "parameter_size",
@@ -144,6 +150,7 @@ NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "batch_size",
         "num_indices_per_lookup",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "parameter_size",
@@ -156,6 +163,7 @@ NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "layout_move": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "feat_io_bytes_sum",
@@ -165,6 +173,7 @@ NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "view_meta": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "feat_output_input_bytes_ratio",
@@ -173,6 +182,7 @@ NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "mixed_balanced": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "feat_io_bytes_sum",
@@ -188,6 +198,7 @@ NO_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
     "compute_dominant": (
         "batch_size",
         "num_threads",
+        "inter_threads",
         "output_size",
         "activation_size",
         "parameter_size",

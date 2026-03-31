@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import pandas as pd
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent
+ORT_ROOT = PROJECT_ROOT.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
@@ -51,6 +53,10 @@ except ImportError:  # noqa: E402
         resolve_op_class,
         resolve_output_dir,
     )
+
+
+DEFAULT_INTER_THREADS_RE = re.compile(r'"default_inter_threads"\s*:\s*(?P<value>\d+)')
+INTER_THREADS_ASSIGN_RE = re.compile(r"^\s*INTER_THREADS\s*=\s*(?P<value>\d+)\s*\\?\s*$")
 
 
 def parse_args() -> argparse.Namespace:
@@ -141,6 +147,67 @@ def build_refreshed_engineered_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return engineered[[column for column in columns if column in engineered.columns]].copy()
 
 
+def build_ops_log_path(case_id: str, combo: str) -> Path:
+    return ORT_ROOT / f"sweep_runs_extensible_{case_id}" / "logs" / combo / "build_ops.log"
+
+
+def case_launch_script_path(source_name: str) -> Path:
+    return ORT_ROOT / f"{source_name}.sh"
+
+
+def resolve_static_inter_threads(case_id: str, source_name: str, combo: str) -> float | None:
+    build_log = build_ops_log_path(case_id, combo)
+    if build_log.exists():
+        try:
+            with build_log.open("r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    match = DEFAULT_INTER_THREADS_RE.search(line)
+                    if match is not None:
+                        return float(int(match.group("value")))
+        except OSError:
+            pass
+
+    if source_name:
+        launch_script = case_launch_script_path(source_name)
+        if launch_script.exists():
+            try:
+                with launch_script.open("r", encoding="utf-8", errors="ignore") as handle:
+                    for line in handle:
+                        match = INTER_THREADS_ASSIGN_RE.match(line)
+                        if match is not None:
+                            return float(int(match.group("value")))
+            except OSError:
+                pass
+
+    return None
+
+
+def build_static_thread_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    required = {"row_uid", "case_id", "source_name", "combo"}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise KeyError(f"Missing columns for static thread resolution: {sorted(missing)}")
+
+    keys = (
+        frame[["case_id", "source_name", "combo"]]
+        .fillna("")
+        .astype(str)
+        .drop_duplicates()
+        .reset_index(drop=True)
+    )
+    keys["inter_threads"] = [
+        resolve_static_inter_threads(case_id, source_name, combo)
+        for case_id, source_name, combo in zip(keys["case_id"], keys["source_name"], keys["combo"])
+    ]
+    enriched = frame[["row_uid", "case_id", "source_name", "combo"]].merge(
+        keys,
+        on=["case_id", "source_name", "combo"],
+        how="left",
+        validate="many_to_one",
+    )
+    return enriched[["row_uid", "inter_threads"]].copy()
+
+
 def dataset_summary_op_type_map(frame: pd.DataFrame) -> dict[str, str]:
     mapping = (
         frame[["op_type", "op_class"]]
@@ -210,6 +277,14 @@ def build_classed_dataset_artifacts(
                 pd.to_numeric(merged.get(column), errors="coerce")
             )
             merged = merged.drop(columns=[refreshed_column])
+    static_thread_df = build_static_thread_columns(merged)
+    merged = merged.merge(static_thread_df, on="row_uid", how="left", validate="one_to_one", suffixes=("", "__resolved"))
+    if "inter_threads__resolved" in merged.columns:
+        merged["inter_threads"] = pd.to_numeric(merged["inter_threads__resolved"], errors="coerce").fillna(
+            pd.to_numeric(merged.get("inter_threads"), errors="coerce")
+        )
+        merged = merged.drop(columns=["inter_threads__resolved"])
+    merged["inter_threads"] = pd.to_numeric(merged.get("inter_threads"), errors="coerce").fillna(1.0)
     merged["model_group"] = merged["op_type"].map(lambda op_type: resolve_model_group(feature_branch, op_type)).astype(str)
     if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
         merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)

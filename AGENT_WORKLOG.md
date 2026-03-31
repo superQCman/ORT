@@ -722,6 +722,46 @@ Open risks:
 - This is still a documentation-only update; the code path has not yet been changed to emit the newly described CPU-derived analytical intermediates.
 - The issue-side formulas such as `copy_issue_us` and `issue_us` are intentionally coarse analytical proxies; they summarize pipeline pressure rather than reproducing microarchitectural instruction scheduling exactly.
 
+## 2026-03-31
+
+Summary:
+- Added a new static `inter_threads` feature to the `classed_op_mlp` pipeline so grouped MLP models can consume the ORT sweep-level inter-op thread setting without relying on runtime profile timelines.
+- Recovered `inter_threads` from static sweep artifacts only: first from `logs/<combo>/build_ops.log` via `default_inter_threads`, then from the case launch script `case_*_run_*_*.sh` via `INTER_THREADS` as a fallback.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `classed_op_mlp` grouped dataset export now materializes an `inter_threads` numeric column for every row.
+- `inter_threads` is treated as a static configuration feature, not a runtime profile feature.
+- All five grouped MLP contracts now include `inter_threads` in both branches:
+  - `with_analytical`
+  - `no_analytical`
+- Resolution order for `inter_threads` is:
+  - `sweep_runs_extensible_<case_id>/logs/<combo>/build_ops.log` -> `default_inter_threads`
+  - `<ORT_ROOT>/<source_name>.sh` -> `INTER_THREADS`
+  - fallback default `1.0` if neither source is available
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --feature-branch no_analytical --output-dir /tmp/classed_op_mlp_inter_threads_smoke`
+- `python3 - <<'PY' ... build_static_thread_columns(subset for case_10_4_4/case_9_4_4) ... PY`
+
+Key results:
+- Smoke grouped dataset under `/tmp/classed_op_mlp_inter_threads_smoke` now writes `inter_threads` into `datasets/*/feature_columns.json` and grouped CSVs.
+- Verified `gather` numeric features now include `inter_threads`.
+- Verified static recovery works on known `*_4_*` cases:
+  - `case_10_4_4` -> `inter_threads = 4.0`
+  - `case_9_4_4` -> `inter_threads = 4.0`
+- Verified the grouped `gather/train.csv` now contains a reasonable static-value set such as `1.0`, `3.0`, `4.0`, `6.0`, which matches the expected sweep-level configuration diversity.
+
+Open risks:
+- This change is currently scoped to `classed_op_mlp`; the top-level baseline dataset contract and `dataset_all_no_trace/feature_columns.json` are unchanged unless the user asks to promote `inter_threads` into the main baseline pipeline as well.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md` still has unrelated or user-owned worktree changes and was intentionally left out of this commit, so the code contract is ahead of that document for `inter_threads`.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
 ## 2026-03-29
 
 Summary:
