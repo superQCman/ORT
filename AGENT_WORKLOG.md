@@ -725,6 +725,53 @@ Open risks:
 ## 2026-03-31
 
 Summary:
+- Added a reproducible `classed_op_mlp/inter_threads_eval/` utility for the static `inter_threads` feature experiments.
+- The new utility rebuilds grouped datasets with the current code, inherits baseline hyperparameters from an existing classed-op experiment, retrains selected model groups, and emits baseline-vs-new metric comparisons.
+- Default scope is the two groups the user just validated manually:
+  - `gather`
+  - `mixed_balanced`
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/inter_threads_eval/run_inter_threads_eval.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/inter_threads_eval/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a standalone reproducibility entry point for inter-threads experiments:
+  - default baseline root: `artifacts/latest/classed_op_mlp_test_2_analytical_5_200_iter`
+  - default model groups: `gather`, `mixed_balanced`
+  - default behavior:
+    - rebuild grouped datasets with current `inter_threads` logic
+    - reuse baseline experiment hyperparameters per group
+    - retrain selected groups
+    - write per-group metric comparisons and a suite summary
+- Added a dedicated README in the new directory documenting:
+  - default baseline
+  - one-command reproduction
+  - single-group usage
+  - smoke usage with `--max-iter-override`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/inter_threads_eval/run_inter_threads_eval.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/inter_threads_eval/run_inter_threads_eval.py --help`
+- `/data/qc/anaconda3/envs/ort/bin/python /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/inter_threads_eval/run_inter_threads_eval.py --model-group gather --output-dir /tmp/inter_threads_eval_smoke --max-iter-override 1 --disable-onnx-export`
+
+Key results:
+- The smoke run completed successfully and produced:
+  - `/tmp/inter_threads_eval_smoke/datasets_rebuilt/`
+  - `/tmp/inter_threads_eval_smoke/models/gather/`
+  - `/tmp/inter_threads_eval_smoke/comparison/gather_metric_comparison.csv`
+  - `/tmp/inter_threads_eval_smoke/comparison/gather_summary.json`
+  - `/tmp/inter_threads_eval_smoke/suite_summary.json`
+- The smoke run deliberately used `max_iter=1`, so the metrics themselves are not meaningful; the purpose of the validation was to prove that the rebuild/train/compare workflow is reproducible end-to-end.
+
+Open risks:
+- The script defaults to the current published baseline root `classed_op_mlp_test_2_analytical_5_200_iter`; if the team wants to switch the official baseline later, the default should be updated explicitly rather than assumed.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-31
+
+Summary:
 - Added a new static `inter_threads` feature to the `classed_op_mlp` pipeline so grouped MLP models can consume the ORT sweep-level inter-op thread setting without relying on runtime profile timelines.
 - Recovered `inter_threads` from static sweep artifacts only: first from `logs/<combo>/build_ops.log` via `default_inter_threads`, then from the case launch script `case_*_run_*_*.sh` via `INTER_THREADS` as a fallback.
 
