@@ -139,6 +139,26 @@ Request summary:
 - Evaluate whether hardware-ratio features and stage-2 concurrency/context features can help the single-op MLP.
 - First run target-correlation analysis, then automatically keep the higher-correlation candidates and leave weaker ones for manual review.
 
+### 2026-03-31 - Raise Roofline ceiling line above dense points in thread plot
+
+Request summary:
+- Fix `roofline_by_threads.png` so the compute ceiling line remains visible in the fourth subplot instead of being obscured by the scatter layer.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Raised the Roofline ceiling line to a higher Matplotlib z-order and rendered it after the scatter/annotation layers.
+- Lowered the z-order of points, annotations, cluster callout, and ridge marker so the ceiling line stays visually prominent.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py --output-dir /tmp/roofline_op_type_analysis_check`
+
+Open risks:
+- The visual fix is validated by successful regeneration, but I did not manually inspect the PNG in this turn.
+
 Files changed:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_contract.py`
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`

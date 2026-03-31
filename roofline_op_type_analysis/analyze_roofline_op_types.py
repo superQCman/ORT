@@ -374,8 +374,6 @@ def plot_roofline_by_threads(
         x_grid = np.logspace(np.log10(x_min), np.log10(x_max), 200)
         y_roof = np.minimum(peak_perf, bandwidth * x_grid)
 
-        axis.plot(x_grid, y_roof, color="#2c3e50", linewidth=2.0, label="Roofline ceiling")
-
         cluster_x_threshold = max(x_min * 20.0, 1e-5)
         cluster_y_threshold = max(y_min * 25.0, 1e-2)
         cluster_mask = (
@@ -396,6 +394,7 @@ def plot_roofline_by_threads(
                 alpha=0.9,
                 edgecolors="white",
                 linewidths=0.8,
+                zorder=3,
             )
             axis.annotate(
                 str(row["op_type"]),
@@ -403,6 +402,7 @@ def plot_roofline_by_threads(
                 xytext=(4, 4),
                 textcoords="offset points",
                 fontsize=8.5,
+                zorder=4,
             )
 
         if not cluster_df.empty:
@@ -424,6 +424,7 @@ def plot_roofline_by_threads(
                 fontsize=7.8,
                 va="bottom",
                 ha="left",
+                zorder=2,
                 bbox={
                     "boxstyle": "round,pad=0.28",
                     "facecolor": "white",
@@ -433,7 +434,16 @@ def plot_roofline_by_threads(
             )
 
         ridge_point = float(pd.to_numeric(thread_df["ridge_point_ops_per_byte"], errors="coerce").median())
-        axis.axvline(ridge_point, color="#7f8c8d", linestyle="--", linewidth=1.2, alpha=0.8)
+        axis.axvline(ridge_point, color="#7f8c8d", linestyle="--", linewidth=1.2, alpha=0.8, zorder=2)
+        axis.plot(
+            x_grid,
+            y_roof,
+            color="#2c3e50",
+            linewidth=2.4,
+            label="Roofline ceiling",
+            zorder=5,
+            solid_capstyle="round",
+        )
         axis.set_xscale("log")
         axis.set_yscale("log")
         axis.set_xlim(x_min, x_max)
