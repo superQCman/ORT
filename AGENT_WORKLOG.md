@@ -159,6 +159,27 @@ Validation run:
 Open risks:
 - The visual fix is validated by successful regeneration, but I did not manually inspect the PNG in this turn.
 
+### 2026-03-31 - Expand roofline y-axis to include per-thread ceiling plateau
+
+Request summary:
+- Follow up on the thread-view Roofline plot after the fourth subplot still hid the compute ceiling plateau; make the axis limits include the thread-specific roof value itself.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The shared `y_max` for `roofline_by_threads.png` now considers both achieved scatter performance and the maximum `peak_fp32_ops_per_us` across the plotted thread counts.
+- The horizontal Roofline plateau for higher-thread panels remains inside the visible plotting area instead of being clipped at the top edge.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py --output-dir /tmp/roofline_op_type_analysis_check2`
+- Manually inspected `/tmp/roofline_op_type_analysis_check2/roofline_by_threads.png` and confirmed the `Threads = 4` panel shows the ceiling plateau.
+
+Open risks:
+- The global y-axis now leaves more headroom in lower-thread panels, which slightly compresses their scatter vertically in exchange for consistent visibility across subplots.
+
 Files changed:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_contract.py`
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/feature_engineering.py`

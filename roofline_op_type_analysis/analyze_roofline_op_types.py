@@ -347,10 +347,18 @@ def plot_roofline_by_threads(
 
     x_positive = positive_clip(plot_df["arithmetic_intensity_ops_per_byte"], floor=1e-9)
     y_positive = positive_clip(plot_df["achieved_perf_ops_per_us"], floor=1e-9)
+    roof_positive = positive_clip(
+        row_level[row_level["num_threads"].isin(thread_values)]["peak_fp32_ops_per_us"],
+        floor=1e-9,
+    )
     x_min = max(float(np.min(x_positive)) / 1.5, 1e-6)
     x_max = max(float(np.max(x_positive)) * 1.8, x_min * 10.0)
     y_min = max(float(np.min(y_positive)) / 1.5, 1e-3)
-    y_max = max(float(np.max(y_positive)) * 2.0, y_min * 10.0)
+    y_max = max(
+        float(np.max(y_positive)) * 2.0,
+        float(np.max(roof_positive)) * 1.15,
+        y_min * 10.0,
+    )
 
     num_threads = len(thread_values)
     ncols = 2 if num_threads > 1 else 1
