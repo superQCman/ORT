@@ -1359,6 +1359,65 @@ Open risks:
 - If later evaluation expands to lower-lookup or more skewed-index regimes, the `unique_rows_est` branch may become useful again and should be re-tested there rather than treated as permanently invalid.
 - `README.md` and `roofline_op_type_analysis/README.md` were intentionally left out of this task because they already contain unrelated worktree changes.
 
+## 2026-03-31
+
+Summary:
+- Added a reproducible `MatMul` formulation switch to the analytical generalization evaluator so the current tiny-batched occupancy model can be compared directly against a GEMM-style saturation model.
+- Used the same held-out protocols and calibration procedure to verify whether forcing `MatMul` into a GEMM-like `M/(M+M50) * N/(N+N50) * K/(K+K50)` form hurts generalization.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added CLI flag:
+  - `--matmul-formulation {tiny_occ, gemm_saturation}`
+- `tiny_occ` keeps the current `MatMul` model:
+  - `rho_tiny_eff = rho_tiny_inf * min(M/occ_ref, 1) * min(N/occ_ref, 1) * K/(K + K50_tiny)`
+  - `T_matmul = flops / (PeakFMA(T) * rho_tiny_eff) + ceil(batch_count / T) * tau_micro`
+- `gemm_saturation` replaces it with a GEMM-style saturation model:
+  - `rho_eff = rho_matmul_gemm_inf * M/(M+M50_matmul) * N/(N+N50_matmul) * K/(K+K50_matmul)`
+  - `T_matmul = max(flops / (PeakFMA(T) * rho_eff), mem_bytes / BW_peak)`
+- The coordinate search now tunes the correct parameter set for the chosen `MatMul` formulation.
+- Summary markdown now records the selected `MatMul` formulation and shows the relevant calibrated parameter columns for that formulation.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py --variant baseline --matmul-formulation tiny_occ --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization_matmul_tiny_occ`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py --variant baseline --matmul-formulation gemm_saturation --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization_matmul_gemm_saturation`
+
+Key results:
+- Current dedicated `tiny_occ` formulation:
+  - leave-one-case-out:
+    - overall macro `MAPE = 20.89%`
+    - overall duration-weighted RE `= 14.44%`
+    - `MatMul` mean test `MAPE = 28.77%`
+    - `MatMul` mean test duration-weighted RE `= 30.01%`
+  - leave-one-combo-out:
+    - overall macro `MAPE = 15.79%`
+    - overall duration-weighted RE `= 10.31%`
+    - `MatMul` mean test `MAPE = 14.96%`
+    - `MatMul` mean test duration-weighted RE `= 16.45%`
+- Unified `gemm_saturation` formulation:
+  - leave-one-case-out:
+    - overall macro `MAPE = 21.69%`
+    - overall duration-weighted RE `= 14.44%`
+    - `MatMul` mean test `MAPE = 33.56%`
+    - `MatMul` mean test duration-weighted RE `= 35.43%`
+  - leave-one-combo-out:
+    - overall macro `MAPE = 16.28%`
+    - overall duration-weighted RE `= 10.32%`
+    - `MatMul` mean test `MAPE = 17.88%`
+    - `MatMul` mean test duration-weighted RE `= 20.97%`
+- Conclusion:
+  - Forcing `MatMul` into the GEMM-style saturation form measurably worsens `MatMul` held-out generalization on both protocols.
+  - The current tiny-batched occupancy model remains the better formulation for the present DLRM `/MatMul` regime.
+
+Open risks:
+- The comparison is intentionally scoped to the current heavy `/MatMul` slice where `M=N=9` and `K=200/400`; it should not be over-generalized to arbitrary batched matmul workloads without re-testing.
+- The overall duration-weighted metric barely moves because `MatMul` contributes few rows and not the dominant total duration in this heavy-op slice; the main evidence is the family-level `MatMul` deterioration.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
 ## 2026-03-29
 
 Summary:

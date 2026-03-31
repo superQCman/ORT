@@ -80,6 +80,16 @@ def parse_args() -> argparse.Namespace:
             "'explicit_unique_reuse' also switches Gather to unique-row-aware miss counting."
         ),
     )
+    parser.add_argument(
+        "--matmul-formulation",
+        default="tiny_occ",
+        choices=["tiny_occ", "gemm_saturation"],
+        help=(
+            "MatMul analytical formulation to evaluate. "
+            "'tiny_occ' keeps the current tiny-batched occupancy model; "
+            "'gemm_saturation' replaces it with a GEMM-style M/(M+M50), N/(N+N50), K/(K+K50) saturation model."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -394,6 +404,10 @@ def default_params() -> dict[str, float]:
         "rho_tiny_inf": 0.30,
         "K50_tiny": 0.0,
         "tau_micro": 0.0,
+        "rho_matmul_gemm_inf": 0.30,
+        "M50_matmul": 16.0,
+        "N50_matmul": 16.0,
+        "K50_matmul": 64.0,
         "m_stride": 8.0,
         "eta_stride": 0.0,
     }
@@ -416,6 +430,10 @@ PARAM_GRID: dict[str, list[float]] = {
     "rho_tiny_inf": [0.08, 0.12, 0.18, 0.24, 0.30, 0.40, 0.50, 0.60],
     "K50_tiny": [0.0, 16.0, 32.0, 64.0, 128.0, 256.0],
     "tau_micro": [0.0, 0.25, 0.5, 1.0, 2.0, 4.0],
+    "rho_matmul_gemm_inf": [0.08, 0.12, 0.18, 0.24, 0.30, 0.40, 0.50, 0.60],
+    "M50_matmul": [0.0, 4.0, 8.0, 16.0, 32.0, 64.0],
+    "N50_matmul": [0.0, 4.0, 8.0, 16.0, 32.0, 64.0],
+    "K50_matmul": [0.0, 16.0, 32.0, 64.0, 128.0, 256.0],
     "m_stride": [1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0],
     "eta_stride": [0.0, 0.25, 0.5, 0.75, 1.0],
 }
@@ -545,13 +563,25 @@ def predict_gemm(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
     return np.maximum(t_comp, t_mem)
 
 
-def predict_matmul(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+def predict_matmul(frame: pd.DataFrame, params: dict[str, float], matmul_formulation: str) -> np.ndarray:
     batch_count = frame["matmul_batch_count"].to_numpy(dtype=float)
     m_dim = frame["matmul_m"].to_numpy(dtype=float)
     n_dim = frame["matmul_n"].to_numpy(dtype=float)
     k_dim = frame["matmul_k"].to_numpy(dtype=float)
     flops = 2.0 * batch_count * m_dim * n_dim * k_dim
     peak_fma = frame["peak_fma_ops_per_us"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    mem_bytes = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    if matmul_formulation == "gemm_saturation":
+        rho_eff = (
+            max(params["rho_matmul_gemm_inf"], 1e-6)
+            * m_dim / np.clip(m_dim + max(params["M50_matmul"], 0.0), a_min=1e-6, a_max=None)
+            * n_dim / np.clip(n_dim + max(params["N50_matmul"], 0.0), a_min=1e-6, a_max=None)
+            * k_dim / np.clip(k_dim + max(params["K50_matmul"], 0.0), a_min=1e-6, a_max=None)
+        )
+        t_comp = flops / np.clip(peak_fma * rho_eff, a_min=1e-6, a_max=None)
+        t_mem = mem_bytes / np.clip(bw_peak, a_min=1e-6, a_max=None)
+        return np.maximum(t_comp, t_mem)
     threads = frame["num_threads"].to_numpy(dtype=float)
     occ_ref = max(params["occ_ref"], 1e-6)
     rho_eff = (
@@ -601,7 +631,13 @@ def predict_transpose(frame: pd.DataFrame, params: dict[str, float], variant: st
     return copy_us + stride_us
 
 
-def predict_family(frame: pd.DataFrame, family: str, params: dict[str, float], variant: str) -> np.ndarray:
+def predict_family(
+    frame: pd.DataFrame,
+    family: str,
+    params: dict[str, float],
+    variant: str,
+    matmul_formulation: str,
+) -> np.ndarray:
     if frame.empty:
         return np.zeros(0, dtype=float)
     if family == "Concat":
@@ -613,24 +649,36 @@ def predict_family(frame: pd.DataFrame, family: str, params: dict[str, float], v
     if family == "Gemm":
         return predict_gemm(frame, params)
     if family == "MatMul":
-        return predict_matmul(frame, params)
+        return predict_matmul(frame, params, matmul_formulation)
     if family == "Transpose":
         return predict_transpose(frame, params, variant)
     raise KeyError(family)
 
 
-def family_mape(frame: pd.DataFrame, family: str, params: dict[str, float], variant: str) -> float:
+def family_mape(
+    frame: pd.DataFrame,
+    family: str,
+    params: dict[str, float],
+    variant: str,
+    matmul_formulation: str,
+) -> float:
     family_df = frame[frame["family"] == family].copy()
     if family_df.empty:
         return float("nan")
-    pred = predict_family(family_df, family, params, variant)
+    pred = predict_family(family_df, family, params, variant, matmul_formulation)
     return mape(family_df["actual_us"].to_numpy(dtype=float), pred)
 
 
-def macro_mape(frame: pd.DataFrame, params: dict[str, float], variant: str, families: list[str] | None = None) -> float:
+def macro_mape(
+    frame: pd.DataFrame,
+    params: dict[str, float],
+    variant: str,
+    matmul_formulation: str,
+    families: list[str] | None = None,
+) -> float:
     selected_families = families or FAMILY_ORDER
     scores = [
-        family_mape(frame, family, params, variant)
+        family_mape(frame, family, params, variant, matmul_formulation)
         for family in selected_families
         if not frame[frame["family"] == family].empty
     ]
@@ -640,7 +688,7 @@ def macro_mape(frame: pd.DataFrame, params: dict[str, float], variant: str, fami
     return float(np.mean(clean_scores)) if clean_scores else float("nan")
 
 
-def weighted_mape(frame: pd.DataFrame, params: dict[str, float], variant: str) -> float:
+def weighted_mape(frame: pd.DataFrame, params: dict[str, float], variant: str, matmul_formulation: str) -> float:
     if frame.empty:
         return float("nan")
     preds = np.zeros(len(frame), dtype=float)
@@ -648,7 +696,7 @@ def weighted_mape(frame: pd.DataFrame, params: dict[str, float], variant: str) -
         family_mask = frame["family"].eq(family).to_numpy()
         if not np.any(family_mask):
             continue
-        preds[family_mask] = predict_family(frame.loc[family_mask], family, params, variant)
+        preds[family_mask] = predict_family(frame.loc[family_mask], family, params, variant, matmul_formulation)
     return mape(frame["actual_us"].to_numpy(dtype=float), preds)
 
 
@@ -683,29 +731,35 @@ def coordinate_search(
     return tuned
 
 
-def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str) -> dict[str, float]:
+def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str, matmul_formulation: str) -> dict[str, float]:
     params = default_params()
 
     def copy_objective(trial: dict[str, float]) -> float:
-        return macro_mape(train_df[train_df["family"].isin(COPY_FAMILIES)], trial, variant, COPY_FAMILIES)
+        return macro_mape(
+            train_df[train_df["family"].isin(COPY_FAMILIES)],
+            trial,
+            variant,
+            matmul_formulation,
+            COPY_FAMILIES,
+        )
 
     def concat_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Concat", trial, variant)
+        return family_mape(train_df, "Concat", trial, variant, matmul_formulation)
 
     def reduce_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "ReduceSum", trial, variant)
+        return family_mape(train_df, "ReduceSum", trial, variant, matmul_formulation)
 
     def gather_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Gather", trial, variant)
+        return family_mape(train_df, "Gather", trial, variant, matmul_formulation)
 
     def gemm_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Gemm", trial, variant)
+        return family_mape(train_df, "Gemm", trial, variant, matmul_formulation)
 
     def matmul_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "MatMul", trial, variant)
+        return family_mape(train_df, "MatMul", trial, variant, matmul_formulation)
 
     def transpose_objective(trial: dict[str, float]) -> float:
-        return family_mape(train_df, "Transpose", trial, variant)
+        return family_mape(train_df, "Transpose", trial, variant, matmul_formulation)
 
     for _ in range(max(int(passes), 1)):
         before = dict(params)
@@ -714,7 +768,15 @@ def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str) -> dict[
         params = coordinate_search(["kappa_reduce", "tau_reduce_start"], reduce_objective, params, passes=1)
         params = coordinate_search(["rho_gather_inf", "tau_gather_row_start", "m_gather"], gather_objective, params, passes=1)
         params = coordinate_search(["rho_fma_inf", "M50", "N50", "K50"], gemm_objective, params, passes=1)
-        params = coordinate_search(["occ_ref", "rho_tiny_inf", "K50_tiny", "tau_micro"], matmul_objective, params, passes=1)
+        if matmul_formulation == "gemm_saturation":
+            params = coordinate_search(
+                ["rho_matmul_gemm_inf", "M50_matmul", "N50_matmul", "K50_matmul"],
+                matmul_objective,
+                params,
+                passes=1,
+            )
+        else:
+            params = coordinate_search(["occ_ref", "rho_tiny_inf", "K50_tiny", "tau_micro"], matmul_objective, params, passes=1)
         params = coordinate_search(["m_stride", "eta_stride"], transpose_objective, params, passes=1)
         if params == before:
             break
@@ -725,6 +787,7 @@ def family_metric_rows(
     frame: pd.DataFrame,
     params: dict[str, float],
     variant: str,
+    matmul_formulation: str,
     scheme: str,
     fold_name: str,
     split_name: str,
@@ -734,10 +797,11 @@ def family_metric_rows(
         family_df = frame[frame["family"] == family].copy()
         if family_df.empty:
             continue
-        pred = predict_family(family_df, family, params, variant)
+        pred = predict_family(family_df, family, params, variant, matmul_formulation)
         rows.append(
             {
                 "variant": variant,
+                "matmul_formulation": matmul_formulation,
                 "scheme": scheme,
                 "fold": fold_name,
                 "split": split_name,
@@ -831,12 +895,14 @@ def render_markdown(
     metrics_df: pd.DataFrame,
     summaries: dict[str, dict[str, Any]],
     variant: str,
+    matmul_formulation: str,
 ) -> str:
     lines: list[str] = []
     lines.append("# Analytical Model Generalization And Calibration Results")
     lines.append("")
     lines.append(f"- Input dataset: `{input_csv}`")
     lines.append(f"- Analytical variant: `{variant}`")
+    lines.append(f"- MatMul formulation: `{matmul_formulation}`")
     lines.append(f"- Heavy-op rows: `{len(heavy_df)}`")
     lines.append(f"- Cases: `{', '.join(EVAL_CASES)}`")
     lines.append(f"- Combos: `{', '.join(EVAL_COMBOS)}`")
@@ -907,13 +973,27 @@ def render_markdown(
                 "M50",
                 "N50",
                 "K50",
-                "occ_ref",
-                "rho_tiny_inf",
-                "K50_tiny",
-                "tau_micro",
                 "m_stride",
                 "eta_stride",
             ]
+            if matmul_formulation == "gemm_saturation":
+                param_columns.extend(
+                    [
+                        "rho_matmul_gemm_inf",
+                        "M50_matmul",
+                        "N50_matmul",
+                        "K50_matmul",
+                    ]
+                )
+            else:
+                param_columns.extend(
+                    [
+                        "occ_ref",
+                        "rho_tiny_inf",
+                        "K50_tiny",
+                        "tau_micro",
+                    ]
+                )
             header = "| fold | " + " | ".join(param_columns) + " |"
             divider = "| --- |" + " ---: |" * len(param_columns)
             lines.append(header)
@@ -939,10 +1019,43 @@ def main() -> None:
 
     for scheme in args.schemes:
         for fold_name, train_df, test_df in build_folds(heavy_df, scheme):
-            params = calibrate_params(train_df, passes=args.passes, variant=args.variant)
-            param_rows.append({"variant": args.variant, "scheme": scheme, "fold": fold_name, **params})
-            metrics_rows.extend(family_metric_rows(train_df, params, args.variant, scheme, fold_name, "train"))
-            metrics_rows.extend(family_metric_rows(test_df, params, args.variant, scheme, fold_name, "test"))
+            params = calibrate_params(
+                train_df,
+                passes=args.passes,
+                variant=args.variant,
+                matmul_formulation=args.matmul_formulation,
+            )
+            param_rows.append(
+                {
+                    "variant": args.variant,
+                    "matmul_formulation": args.matmul_formulation,
+                    "scheme": scheme,
+                    "fold": fold_name,
+                    **params,
+                }
+            )
+            metrics_rows.extend(
+                family_metric_rows(
+                    train_df,
+                    params,
+                    args.variant,
+                    args.matmul_formulation,
+                    scheme,
+                    fold_name,
+                    "train",
+                )
+            )
+            metrics_rows.extend(
+                family_metric_rows(
+                    test_df,
+                    params,
+                    args.variant,
+                    args.matmul_formulation,
+                    scheme,
+                    fold_name,
+                    "test",
+                )
+            )
 
         scheme_df = pd.DataFrame([row for row in metrics_rows if row["scheme"] == scheme])
         summary_payload[scheme] = {
@@ -958,7 +1071,15 @@ def main() -> None:
     metrics_df.to_csv(output_dir / "fold_family_metrics.csv", index=False)
     with (output_dir / "summary.json").open("w", encoding="utf-8") as handle:
         json.dump(summary_payload, handle, indent=2, ensure_ascii=False)
-    markdown = render_markdown(input_csv, heavy_df, params_df, metrics_df, summary_payload, args.variant)
+    markdown = render_markdown(
+        input_csv,
+        heavy_df,
+        params_df,
+        metrics_df,
+        summary_payload,
+        args.variant,
+        args.matmul_formulation,
+    )
     (output_dir / "summary.md").write_text(markdown, encoding="utf-8")
 
     print(markdown)
