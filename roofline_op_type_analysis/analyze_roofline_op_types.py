@@ -40,6 +40,7 @@ BOUND_SHORT_LABELS = {
 
 DEFAULT_INPUT_CSV = PROJECT_ROOT / "artifacts" / "latest" / "dataset_all_no_trace" / "dataset_full.csv"
 DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "artifacts" / "latest" / "roofline_op_type_analysis"
+DEFAULT_FONT_SCALE = 1.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,13 +87,31 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional explicit thread values to plot. Defaults to all thread values observed in the data.",
     )
+    parser.add_argument(
+        "--font-scale",
+        type=float,
+        default=DEFAULT_FONT_SCALE,
+        help="Global font scale applied across all plots. Example: 1.3 enlarges titles, labels, ticks, and annotations.",
+    )
     return parser.parse_args()
 
 
-def import_matplotlib_pyplot() -> Any:
+def import_matplotlib_pyplot(font_scale: float = DEFAULT_FONT_SCALE) -> Any:
     import matplotlib
 
     matplotlib.use("Agg")
+    scale = max(float(font_scale), 0.1)
+    matplotlib.rcParams.update(
+        {
+            "font.size": 10.0 * scale,
+            "axes.titlesize": 12.0 * scale,
+            "axes.labelsize": 11.0 * scale,
+            "xtick.labelsize": 10.0 * scale,
+            "ytick.labelsize": 10.0 * scale,
+            "legend.fontsize": 10.0 * scale,
+            "figure.titlesize": 15.0 * scale,
+        }
+    )
     import matplotlib.pyplot as plt
     from matplotlib.colors import TwoSlopeNorm
 
@@ -338,8 +357,9 @@ def plot_roofline_by_threads(
     output_png: Path,
     thread_values: list[int],
     min_optype_count: int,
+    font_scale: float,
 ) -> str | None:
-    plt, _ = import_matplotlib_pyplot()
+    plt, _ = import_matplotlib_pyplot(font_scale=font_scale)
     plot_df = summary_df[summary_df["row_count"] >= int(min_optype_count)].copy()
     plot_df = plot_df[plot_df["num_threads"].isin(thread_values)].copy()
     if plot_df.empty:
@@ -409,7 +429,7 @@ def plot_roofline_by_threads(
                 xy=(x_value, y_value),
                 xytext=(4, 4),
                 textcoords="offset points",
-                fontsize=8.5,
+                fontsize=8.5 * font_scale,
                 zorder=4,
             )
 
@@ -429,7 +449,7 @@ def plot_roofline_by_threads(
                 0.09,
                 cluster_text,
                 transform=axis.transAxes,
-                fontsize=7.8,
+                fontsize=7.8 * font_scale,
                 va="bottom",
                 ha="left",
                 zorder=2,
@@ -459,7 +479,7 @@ def plot_roofline_by_threads(
         axis.grid(True, which="both", linestyle="--", alpha=0.28)
         axis.set_title(
             f"Threads = {thread_value} | ridge = {ridge_point:.3g} ops/byte",
-            fontsize=11,
+            fontsize=11.0 * font_scale,
         )
         axis.set_xlabel("Arithmetic Intensity (ops/byte)")
         axis.set_ylabel("Achieved Performance (ops/us)")
@@ -476,7 +496,7 @@ def plot_roofline_by_threads(
         ]
     ]
     figure.legend(handles=legend_handles, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.99))
-    figure.suptitle("Roofline View By Thread Count", fontsize=14, y=1.02)
+    figure.suptitle("Roofline View By Thread Count", fontsize=14.0 * font_scale, y=1.02)
     figure.tight_layout()
     output_png.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output_png, dpi=180, bbox_inches="tight")
@@ -484,8 +504,13 @@ def plot_roofline_by_threads(
     return str(output_png)
 
 
-def plot_op_type_bound_share(op_type_summary: pd.DataFrame, output_png: Path, min_optype_count: int) -> str | None:
-    plt, _ = import_matplotlib_pyplot()
+def plot_op_type_bound_share(
+    op_type_summary: pd.DataFrame,
+    output_png: Path,
+    min_optype_count: int,
+    font_scale: float,
+) -> str | None:
+    plt, _ = import_matplotlib_pyplot(font_scale=font_scale)
     plot_df = op_type_summary[op_type_summary["row_count"] >= int(min_optype_count)].copy()
     if plot_df.empty:
         return None
@@ -510,7 +535,7 @@ def plot_op_type_bound_share(op_type_summary: pd.DataFrame, output_png: Path, mi
         left += values
 
     axis.set_yticks(y_positions)
-    axis.set_yticklabels(plot_df["op_type"].tolist(), fontsize=9.5)
+    axis.set_yticklabels(plot_df["op_type"].tolist(), fontsize=9.5 * font_scale)
     axis.invert_yaxis()
     axis.set_xlim(0.0, 1.0)
     axis.set_xlabel("Duration Share")
@@ -524,7 +549,7 @@ def plot_op_type_bound_share(op_type_summary: pd.DataFrame, output_png: Path, mi
             index,
             f"{row['headline_bound_label']} | n={int(row['row_count'])}",
             va="center",
-            fontsize=8.5,
+            fontsize=8.5 * font_scale,
         )
 
     figure.tight_layout()
@@ -542,8 +567,9 @@ def plot_ridge_gap_heatmap(
     min_optype_count: int,
     ridge_band_low: float,
     ridge_band_high: float,
+    font_scale: float,
 ) -> str | None:
-    plt, TwoSlopeNorm = import_matplotlib_pyplot()
+    plt, TwoSlopeNorm = import_matplotlib_pyplot(font_scale=font_scale)
     plot_df = summary_df[summary_df["row_count"] >= int(min_optype_count)].copy()
     plot_df = plot_df[plot_df["num_threads"].isin(thread_values)].copy()
     if plot_df.empty:
@@ -573,7 +599,7 @@ def plot_ridge_gap_heatmap(
     axis.set_xticks(np.arange(len(thread_values)))
     axis.set_xticklabels([str(value) for value in thread_values])
     axis.set_yticks(np.arange(len(heat_df.index)))
-    axis.set_yticklabels(heat_df.index.tolist(), fontsize=9)
+    axis.set_yticklabels(heat_df.index.tolist(), fontsize=9.0 * font_scale)
     axis.set_xlabel("num_threads")
     axis.set_title("Aggregated ridge_gap by op_type and thread count")
 
@@ -584,7 +610,15 @@ def plot_ridge_gap_heatmap(
                 continue
             bound_label = classify_scalar(float(gap), low=ridge_band_low, high=ridge_band_high)
             text = f"{BOUND_SHORT_LABELS[bound_label]}\n{float(gap):.2g}"
-            axis.text(col_index, row_index, text, ha="center", va="center", fontsize=7.5, color="black")
+            axis.text(
+                col_index,
+                row_index,
+                text,
+                ha="center",
+                va="center",
+                fontsize=7.5 * font_scale,
+                color="black",
+            )
 
     colorbar = figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
     colorbar.set_label("log10(ridge_gap)")
@@ -644,11 +678,13 @@ def main() -> None:
         output_png=output_dir / "roofline_by_threads.png",
         thread_values=thread_values,
         min_optype_count=int(args.min_optype_count),
+        font_scale=float(args.font_scale),
     )
     bound_share_png = plot_op_type_bound_share(
         op_type_summary=op_type_summary,
         output_png=output_dir / "op_type_bound_share.png",
         min_optype_count=int(args.min_optype_count),
+        font_scale=float(args.font_scale),
     )
     heatmap_png = plot_ridge_gap_heatmap(
         summary_df=op_type_thread_summary,
@@ -658,6 +694,7 @@ def main() -> None:
         min_optype_count=int(args.min_optype_count),
         ridge_band_low=float(args.ridge_band_low),
         ridge_band_high=float(args.ridge_band_high),
+        font_scale=float(args.font_scale),
     )
 
     total_rows = int(len(row_level))
@@ -674,6 +711,7 @@ def main() -> None:
             "high": float(args.ridge_band_high),
         },
         "min_optype_count": int(args.min_optype_count),
+        "font_scale": float(args.font_scale),
         "thread_values": thread_values,
         "total_rows": total_rows,
         "total_duration_us": total_duration_us,

@@ -2170,3 +2170,24 @@ Key results:
 Open risks:
 - The script now accepts comma-separated suite group lists, but the README does not yet spell that out explicitly; users reading only old examples may still assume space-separated input.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-03-31
+
+Summary:
+- Added a global font scaling interface to `roofline_op_type_analysis/analyze_roofline_op_types.py` so all plot text can be enlarged or reduced from one CLI flag.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added `--font-scale` with default `1.0`.
+- The script now applies that scale through shared Matplotlib `rcParams`, so titles, axis labels, tick labels, legends, figure titles, and per-point annotations all enlarge together.
+- The chosen `font_scale` is also recorded in `roofline_summary.json` for reproducibility.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/analyze_roofline_op_types.py --output-dir /tmp/roofline_fontscale_check --font-scale 1.4`
+
+Open risks:
+- Marker sizes and figure canvas size are unchanged, so very large scales such as `--font-scale 2.0` may make dense labels overlap more heavily.
