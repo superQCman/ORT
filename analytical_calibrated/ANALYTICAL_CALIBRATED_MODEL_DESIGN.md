@@ -123,49 +123,116 @@
 
 | 符号 | 定义 | 说明 |
 | --- | --- | --- |
-| `T` | `min(num_threads, total_cores)` | 活跃线程数上限。 |
-| `BW_peak` | `bandwidth_gb_s_total * 1e3` bytes/us | 理想峰值内存带宽。 |
-| `f_cpu` | `cpu frequency` | CPU 主频。 |
-| `cacheline` | `64 bytes` | cacheline 大小。 |
-| `lanes_fp32` | `simd_width_bits / 32` | 每条 SIMD 指令可处理的 fp32 lane 数。 |
-| `lat_L1` / `lat_L2` / `lat_L3` / `lat_MEM` | 各层访问延迟 | 由 profile 与频率共同决定。 |
-| `PeakFMA(T)` | FMA 理论峰值吞吐 | 主要用于 `Gemm/MatMul`。 |
-| `PeakAdd(T)` | 加法理论峰值吞吐 | 主要用于 `ReduceSum`。 |
-| `IssueSlots(T)` | issue ceiling | 作为 copy-like kernel 的粗粒度 issue 上界。 |
+| `T` | `min(num_threads, hw_core_total_cores)` | 活跃线程数上限；所有 throughput 型共享子模型都用这个线程裁剪。 |
+| `BW_peak` | `hw_memory_bandwidth_gb_s_total * 1e3` bytes/us | 理想峰值内存带宽；代码里会对它做 `>= 1e-6` 裁剪。 |
+| `f_cpu` | `hw_core_cpu_clock` GHz | CPU 主频；latency 和 throughput 都显式依赖它。 |
+| `cacheline` | `hw_cache_cacheline_bytes`，默认 `64 bytes` | cacheline 大小；当前主要用于 `Concat` 和 `Gather`。 |
+| `lanes_fp32` | `hw_instruction_simd_width_bits / 32` | 每条 SIMD 指令可处理的 fp32 lane 数，代码里下界裁到 `1.0`。 |
+| `L1_active / L2_active / L3_active` | `hw_cache_l1d_active_bytes / hw_cache_l2_active_bytes / hw_cache_l3_active_bytes` | `fit(bytes)` 的三级 cache 容量阈值。 |
+| `lat_L1 / lat_L2 / lat_L3` | `response_latency_cycles / f_cpu / 1000` us | 各级 cache 命中延迟。 |
+| `lat_MEM` | `hw_memory_local_mem_delay_ns / 1000` us | 本地内存访问延迟。 |
+| `PeakFMA(T)` | `throughput_fma * lanes_fp32 * 2 * f_cpu * 1e3 * T` | FMA 理论峰值吞吐；主要用于 `Gemm/MatMul`。 |
+| `PeakAdd(T)` | `throughput_add * lanes_fp32 * f_cpu * 1e3 * T` | 加法理论峰值吞吐；主要用于 `ReduceSum` 与 `Sigmoid` compute path。 |
+| `IssueSlots(T)` | `min(fetch, decode, rename, dispatch, issue, commit) * f_cpu * 1e3 * T` | copy-like kernel 的粗粒度前端发射上界。 |
 
 ### 3.2 共享硬件子模型
 
 为了避免不同 family 重复定义硬件逻辑，设计上保留以下共享子模型：
 
 - `fit(bytes)`
-  - 根据 working set 与 `L1/L2/L3 active bytes` 的关系判断数据更接近 `L1/L2/L3/MEM` 哪一层
+  - 输入 `working_set_bytes`
+  - 先把 working set 裁到 `>= 0`
+  - 再依次与 `L1_active / L2_active / L3_active` 比较
+  - 返回 `1 / 2 / 3 / 4`，分别对应 `L1 / L2 / L3 / MEM`
 - `lat(level)`
-  - 将 `L1/L2/L3 response latency cycles` 和 `local_mem_delay_ns` 折算成统一延迟量纲
+  - `lat(1) = hw_cache_l1d_response_latency_cycles / f_cpu / 1000`
+  - `lat(2) = hw_cache_l2_response_latency_cycles / f_cpu / 1000`
+  - `lat(3) = hw_cache_l3_per_die_response_latency_cycles / f_cpu / 1000`
+  - `lat(4) = hw_memory_local_mem_delay_ns / 1000`
+  - 统一输出单位是 `us`
+- `BW_eff(size; BW_inf, tau_start)`
+  - `BW_eff = BW_inf * size / (BW_inf * tau_start + size)`
+  - 这是当前所有 bandwidth-saturation 路径共享的半饱和子模型
+  - 当前默认被 `Concat / ReduceSum / Gather / Relu / Add / Mul / Sigmoid` 复用
 - `PeakAdd(T)`
-  - 显式绑定 SIMD 宽度、加法吞吐、频率和线程数
+  - `PeakAdd(T) = throughput_add * lanes_fp32 * f_cpu * 1e3 * T`
+  - 其中 `throughput_add = hw_instruction_fp_throughput_per_cycle_vector_sp_add`
 - `PeakFMA(T)`
-  - 显式绑定 SIMD 宽度、FMA 吞吐、频率和线程数
+  - `PeakFMA(T) = throughput_fma * lanes_fp32 * 2 * f_cpu * 1e3 * T`
+  - 其中额外的 `2` 对应一次 FMA 包含乘和加两类 flop
 - `IssueSlots(T)`
-  - 显式绑定 pipeline width、频率和线程数
+  - `IssueSlots(T) = min(fetch, decode, rename, dispatch, issue, commit) * f_cpu * 1e3 * T`
+  - 各宽度来自 `hw_pipeline_*_width`
+  - 代码里先取这几级前端宽度的最小值，再裁到 `>= 1.0`
+  - 当前默认只有 `Concat` 把它作为主公式的一部分
 
 这样每个 family 只使用与自身瓶颈最相关的硬件量：
 
-- `Gather / ReduceSum / Transpose` 显式依赖 cache tier 与 latency
-- `ReduceSum / Gemm / MatMul` 显式依赖 SIMD 与算术吞吐
-- `Concat / ReduceSum / Transpose` 可以显式依赖 issue/copy 相关上界
+- `Gather / Transpose` 显式依赖 `fit -> lat` 这条 cache-tier / latency 路径
+- `ReduceSum / Gemm / MatMul / Sigmoid` 显式依赖 SIMD 与算术吞吐
+- `Concat / ReduceSum / Relu / Add / Mul / Sigmoid / Transpose` 共享 copy/bandwidth baseline
+- 当前默认只有 `Concat` 显式依赖 `IssueSlots(T)`，`ReduceSum / Transpose` 不再把 issue ceiling 放进主公式
 
 ## 4. 校准参数的语义边界
 
-当前设计只保留少量可解释参数，它们不是自由偏置项，而是机制缺口的压缩表达。
+当前设计里真正参与拟合的参数，全部来自
 
-| 参数类 | 物理含义 |
-| --- | --- |
-| `rho_bw` | 持续有效带宽占峰值带宽的比例 |
-| `tau_start` | kernel 进入 steady-state 前的固定启动时间 |
-| `m_mlp` | 可并发隐藏的 miss 数，或有效 memory-level parallelism |
-| `rho_fma` | 计算核的持续 FMA 利用率 |
-| `tau_launch` | 微核、chunk 或 dispatch 的固定启动开销 |
-| `eta_stride` | stride penalty 的线程扩展性质 |
+- `evaluate_analytical_generalization.py` 中的 `PARAM_SEARCH_SPACE`
+- `fit_family_parameters()` 的按 family coordinate search
+
+这些参数不是自由偏置项，而是机制缺口的压缩表达。共享硬件量来自 profile，不属于拟合对象；只有下表这些参数会在训练切分或 full-data build 时被搜索。
+
+### 4.1 拟合规则
+
+- 所有参数都按离散网格搜索，而不是连续优化
+- 搜索是按 family 分组做 coordinate search
+- 当前默认顺序是：
+  - `Concat`: `rho_copy_inf`, `tau_copy_start`, `tau_dispatch`
+  - `ReduceSum`: `kappa_reduce`, `tau_reduce_start`
+  - `Gather`: `rho_gather_inf`, `tau_gather_row_start`, `m_gather`
+  - `Gemm`: `rho_fma_inf`, `M50`, `N50`, `K50`
+  - `MatMul`: `occ_ref`, `rho_tiny_inf`, `K50_tiny`, `tau_micro`
+  - `Transpose`: `m_stride`, `eta_stride`
+  - `Relu`: `rho_relu_inf`, `tau_relu_start`
+  - `Add`: `rho_add_inf`, `tau_add_start`, `tau_add`
+  - `Mul`: `rho_mul_inf`, `tau_mul_start`, `tau_mul`
+  - `Sigmoid`: `rho_sigmoid_inf`, `tau_sigmoid_start`, `tau_sigmoid`, `rho_sigmoid_compute`
+- `rho_copy_inf` 是共享 copy baseline，所以它虽然通过 `Concat` 目标搜索，但也会被 `ReduceSum` 和 `Transpose` 的默认公式复用
+
+### 4.2 参数清单
+
+| 参数 | 用到的 family | 搜索范围 | 含义 |
+| --- | --- | --- | --- |
+| `rho_copy_inf` | `Concat` 直接使用；`ReduceSum / Transpose` 间接复用 copy baseline | `[0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.26, 0.30]` | 大流量 copy path 的渐近有效带宽比例，单位为峰值带宽占比。 |
+| `tau_copy_start` | `Concat` | `[0.0, 0.0005, 0.001, 0.002, 0.004, 0.008, 0.016, 0.032] us` | concat 单个 chunk 从冷启动到进入 steady-state bandwidth 路径的固定起步成本。 |
+| `tau_dispatch` | `Concat` | `[0.0, 5.0, 10.0, 15.0, 20.0, 30.0, 40.0, 60.0, 80.0] us` | 每一路输入的 dispatch、offset 维护和边界处理开销。 |
+| `kappa_reduce` | `ReduceSum` | `[0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 1.00]` | reduction 流式阶段相对 copy baseline 的持续带宽折损比例。 |
+| `tau_reduce_start` | `ReduceSum` | `[0.0, 0.0005, 0.001, 0.002, 0.004, 0.008, 0.016] us` | reduction bandwidth path 进入 steady-state 前的固定起步成本。 |
+| `rho_gather_inf` | `Gather` | `[0.04, 0.06, 0.08, 0.10, 0.12, 0.15, 0.18, 0.22, 0.26]` | 大 row gather 的渐近有效带宽比例。 |
+| `tau_gather_row_start` | `Gather` | `[0.0, 0.002, 0.004, 0.008, 0.012, 0.016, 0.024, 0.032] us` | row 很小时，单次寻址与粒度浪费带来的固定 row-start 成本。 |
+| `m_gather` | `Gather` | `[1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0]` | source miss 的有效 memory-level parallelism，可理解为可并发隐藏的 miss 数。 |
+| `rho_fma_inf` | `Gemm` | `[0.20, 0.30, 0.40, 0.50, 0.55, 0.60, 0.70, 0.80]` | 大尺寸 GEMM 在 tile 饱和后相对 `PeakFMA(T)` 的持续利用率。 |
+| `M50` | `Gemm` | `[0.0, 8.0, 16.0, 32.0, 64.0, 128.0]` | `M / (M + M50)` 饱和模型的半饱和尺度，单位是矩阵维度大小。 |
+| `N50` | `Gemm` | `[0.0, 8.0, 16.0, 32.0, 64.0]` | `N / (N + N50)` 饱和模型的半饱和尺度，单位是矩阵维度大小。 |
+| `K50` | `Gemm` | `[0.0, 16.0, 32.0, 64.0, 128.0, 256.0]` | `K / (K + K50)` 饱和模型的半饱和尺度，单位是矩阵维度大小。 |
+| `occ_ref` | `MatMul` | `[4.0, 8.0, 12.0, 16.0, 24.0, 32.0]` | tiny matmul 接近微核 occupancy 饱和时的参考维度尺度。 |
+| `rho_tiny_inf` | `MatMul` | `[0.08, 0.12, 0.18, 0.24, 0.30, 0.40, 0.50, 0.60]` | tiny regime 下相对 `PeakFMA(T)` 的渐近持续利用率。 |
+| `K50_tiny` | `MatMul` | `[0.0, 16.0, 32.0, 64.0, 128.0, 256.0]` | tiny matmul 中 `K / (K + K50_tiny)` 的半饱和尺度。 |
+| `tau_micro` | `MatMul` | `[0.0, 0.25, 0.5, 1.0, 2.0, 4.0] us` | 每个 micro-batch 的固定启动成本。 |
+| `m_stride` | `Transpose` | `[0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.50, 0.75, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0]` | stride penalty 的可隐藏并发度；越大表示越多 stride-latency 可以被并发吞掉。 |
+| `eta_stride` | `Transpose` | `[0.0, 0.25, 0.5, 0.75, 1.0]` | stride penalty 随线程数缩放的指数。 |
+| `rho_relu_inf` | `Relu` | `[0.008, 0.010, 0.012, 0.015, 0.020, 0.030, 0.040, 0.060, 0.080, 0.10, 0.12, 0.15, 0.18, 0.20, 0.24, 0.30]` | unary memory path 的渐近有效带宽比例。 |
+| `tau_relu_start` | `Relu` | `[0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0] us` | `Relu` 流式 bandwidth path 的起步成本。 |
+| `rho_add_inf` | `Add` | `[0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.18]` | `Add` 大流量 steady-state 的有效带宽比例。 |
+| `tau_add_start` | `Add` | `[0.0, 0.5, 1.0, 2.0, 4.0, 8.0] us` | `Add` bandwidth path 的起步成本。 |
+| `tau_add` | `Add` | `[0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0, 32.0] us` | `Add` kernel 的固定结构性 overhead。 |
+| `rho_mul_inf` | `Mul` | `[0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.18]` | `Mul` 大流量 steady-state 的有效带宽比例。 |
+| `tau_mul_start` | `Mul` | `[0.0, 0.5, 1.0, 2.0, 4.0, 8.0] us` | `Mul` bandwidth path 的起步成本。 |
+| `tau_mul` | `Mul` | `[0.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0, 32.0] us` | `Mul` kernel 的固定结构性 overhead。 |
+| `rho_sigmoid_inf` | `Sigmoid` | `[0.008, 0.010, 0.012, 0.015, 0.020, 0.030, 0.040, 0.060, 0.080]` | `Sigmoid` memory path 的渐近有效带宽比例。 |
+| `tau_sigmoid_start` | `Sigmoid` | `[0.0, 0.5, 1.0, 2.0, 4.0, 8.0] us` | `Sigmoid` memory path 的起步成本。 |
+| `tau_sigmoid` | `Sigmoid` | `[0.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0] us` | `Sigmoid` kernel 的固定结构性 overhead。 |
+| `rho_sigmoid_compute` | `Sigmoid` | `[1e-6, 2e-6, 5e-6, 1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 3e-3, 4e-3, 5e-3, 6e-3, 8e-3, 1e-2, 1.5e-2, 2e-2]` | 把 `PeakAdd(T)` 缩放成有效 nonlinear compute ceiling 的比例系数。 |
 
 对于 copy-like family，还可以引入一个等价解释量：
 

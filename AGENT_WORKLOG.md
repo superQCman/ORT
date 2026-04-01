@@ -2477,3 +2477,30 @@ Validation run:
 Open risks:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md` and `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md` both had unrelated worktree edits before this task; the commit for this task stages only the new design-doc migration and the rollback hunk, not unrelated edits.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-04-01
+
+Summary:
+- Refined the analytical design document so the shared hardware constants and submodels are spelled out in code-aligned detail, and the fitted-parameter section now lists every searched parameter with its families, search range, and physical meaning.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The design doc now defines `T`, `BW_peak`, `f_cpu`, cache active-byte thresholds, latency terms, `PeakAdd(T)`, `PeakFMA(T)`, and `IssueSlots(T)` using the same quantities and units as the current code.
+- The shared submodel section now explicitly documents `fit(bytes)`, `lat(level)`, and the reused `BW_eff(size; BW_inf, tau_start)` saturation form.
+- The parameter-boundary section now records every searched parameter from `PARAM_SEARCH_SPACE`, including:
+  - which family uses it
+  - the discrete search grid
+  - the intended physical interpretation
+- The family-to-hardware summary in section 3 now matches the current default exported formulas: `Gather/Transpose` use `fit -> lat`, `Sigmoid` shares arithmetic throughput with `ReduceSum`, and only `Concat` keeps `IssueSlots(T)` in its default top-level formula.
+
+Validation run:
+- Manual doc review against:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+
+Open risks:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md` already had unrelated worktree edits outside the updated section 3-4 range; the commit for this task stages only the new shared-submodel and parameter-boundary updates, not unrelated edits.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
