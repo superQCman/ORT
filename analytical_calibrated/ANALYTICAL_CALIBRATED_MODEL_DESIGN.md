@@ -6,6 +6,8 @@
 
 这里不再讨论“纯 Analytical Model 组”，也不保留任何量化误差结果。重点不是对比实验结论，而是把当前这套可解释校准方案整理成一份结构更清晰、逻辑更连贯的设计文档。
 
+本文默认对齐当前 `analytical_calibrated/build_analytical_features.py` 导出的 `ana_calib_*` 公式口径；`evaluate_analytical_generalization.py` 中仅用于试验或对比的额外 `variant` 分支，不作为这里的默认设计定义。
+
 当前覆盖的 heavy-op family 为：
 
 - `Gather`
@@ -167,18 +169,20 @@
 - `chunk_mean = input_bytes_sum / input_count`
 - `BW_copy_inf = BW_peak * rho_copy_inf`
 - `BW_copy_eff(chunk_mean) = BW_copy_inf * chunk_mean / (BW_copy_inf * tau_copy_start + chunk_mean)`
+- `T_issue = (stream_bytes / cacheline) / IssueSlots(T)`
 
 #### 时延模型
 
-`T_concat = stream_bytes / BW_copy_eff(chunk_mean) + input_count * tau_dispatch`
+`T_concat = max(stream_bytes / BW_copy_eff(chunk_mean), T_issue) + input_count * tau_dispatch`
 
 #### 解释
 
 - `rho_copy_inf` 表示 ORT copy path 在大块 steady-state 下的有效持续带宽比例
 - `tau_copy_start` 表示单个 chunk 进入 steady-state 前的固定起步成本
+- `T_issue` 表示 copy loop 至少还要受到 cacheline 粒度访存发射与前端 issue ceiling 的约束
 - `tau_dispatch` 表示每路输入的 offset 维护、dispatch 与边界处理成本
 
-因此，`Concat` 的慢并不来自算术，而来自 copy efficiency 与 per-input 管理开销。
+因此，`Concat` 的慢并不来自算术，而来自 copy efficiency、issue ceiling 与 per-input 管理开销。
 
 ### 5.2 `ReduceSum`: 流式读写上的 reduction 惩罚
 
@@ -199,7 +203,7 @@
 - `stream_bytes = activation_size + output_size`
 - `add_ops = feat_reduction_work_items`
 - `inner = feat_reduction_axes_product`
-- `BW_reduce_inf = BW_peak * rho_copy_inf`
+- `BW_reduce_inf = BW_peak * rho_copy_inf * kappa_reduce`
 - `BW_reduce_eff(inner) = BW_reduce_inf * inner / (BW_reduce_inf * tau_reduce_start + inner)`
 
 #### 时延模型
@@ -210,7 +214,9 @@
 
 - `feat_reduction_work_items` 对应输出元素总工作量
 - `feat_reduction_axes_product` 对应每个输出元素的内循环规模
+- `kappa_reduce` 表示 reduction 流式阶段相对纯 copy 基线的持续带宽折损
 - `tau_reduce_start` 表示 reduction 流式阶段的起步成本
+- 当前导出 `ana_calib_*` 的实现保持这条 baseline `max(mem, compute)` 结构，不再叠加额外的依赖或 issue 修正项
 
 这个 family 的关键不是单纯“读写多少字节”，而是 reduction 内循环对流式带宽的折损程度。
 
@@ -238,10 +244,15 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 - `bytes_per_index = sizeof(int64)`
 - `index_read_bytes = bytes_per_index * request_rows_true`
 - `stream_bytes = src_read_bytes + dst_write_bytes + index_read_bytes`
+- `table_rows = source_tensor_dim0`
+- `unique_rows_est = table_rows * (1 - exp(-request_rows_true / table_rows))`
+- `src_working_set_bytes = unique_rows_est * row_bytes`
 - `src_fit = fit(src_working_set_bytes)`
 - `lat_src_us = lat(src_fit)`
+- `l1_latency_us = lat(L1)`
 - `BW_gather_inf = BW_peak * rho_gather_inf`
 - `BW_gather_eff(row_bytes) = BW_gather_inf * row_bytes / (BW_gather_inf * tau_gather_row_start + row_bytes)`
+- `tau_floor = 8 * max(lat_src_us / l1_latency_us, 1) ^ 0.75`
 
 #### 时延模型
 
@@ -256,10 +267,13 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 - `bytes_per_index` 表示单个 index 元素的字节宽度；当前这里默认对应 `int64`
 - `index_read_bytes` 表示读取 index tensor 本身的开销
 - `stream_bytes` 因此被显式拆成“源数据读 + 目标数据写 + index 读”三部分，而不是用没有语义的常数直接相加
+- `unique_rows_est` 用 occupancy 形式近似 source table 中真正触达的不同 row 数，只用于估计 source working set 落在哪一级 cache / memory
+- 实际实现里 `unique_rows_est` 还会被裁到 `[0, min(request_rows_true, table_rows)]`，而在缺少 `table_rows` 时回退为 `request_rows_true`
 - `rho_gather_inf` 表示大 row gather 的渐近持续带宽比例
 - `tau_gather_row_start` 表示 row 太小时单次寻址与粒度浪费的固定启动成本
 - `m_gather` 表示 source miss 的有效 memory-level parallelism
-- `fit(src_working_set_bytes)` 与 `lat(src_fit)` 显式决定 source path 更接近哪一级缓存或内存延迟
+- `fit(src_working_set_bytes)` 与 `lat(src_fit)` 显式决定 source path 更接近哪一级缓存或内存延迟；当前代码里 miss 次数项仍保持 `request_rows_true`
+- `tau_floor` 是一个随 source tier 变大的 level-aware 下界，用来避免超小 row 在模型里被压得不合理地过低
 
 这里 `Gather` 的关键不只是“搬了多少字节”，而是 row 粒度、source tier 和 miss 并发隐藏能力三者共同决定 wall time。
 
@@ -341,16 +355,20 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 #### 定义
 
 - `out_bytes = output_size`
-- `prefix_blocks = product(prefix_dims_before_contiguous_suffix)`
+- `prefix_blocks = product(output_dims[:-1])`
+- `suffix_block_bytes = output_dims[-1] * bytes_per_element`
+- `stride_fit = fit(suffix_block_bytes)`
+- `lat_stride_us = lat(stride_fit)`
 
 #### 时延模型
 
-`T_transpose = 2 * out_bytes / (BW_peak * rho_copy_inf) + prefix_blocks * lat_src_us / (T ^ eta_stride * m_stride)`
+`T_transpose = 2 * out_bytes / (BW_peak * rho_copy_inf) + prefix_blocks * lat_stride_us / (T ^ eta_stride * m_stride)`
 
 #### 解释
 
 - 第一项表示 copy 主体
-- 第二项表示 stride-heavy 额外 penalty
+- 第二项表示每个 prefix block 都要支付一次 contiguous suffix block 的 stride-heavy 额外 penalty
+- `lat_stride_us` 当前按 suffix block working set 的 `fit -> lat` 路径决定，而不是旧版按整体 per-thread working set 估计
 - `m_stride` 表示 stride miss 的可隐藏并发度
 - `eta_stride` 表示这部分 penalty 随线程扩展的有效程度
 

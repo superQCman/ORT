@@ -82,6 +82,32 @@ This project is a self-contained single-operator latency modeling pipeline for O
 - After each completed modification in this directory, create a git commit in the independent repository rooted at `/data/qc/dlrm/ORT/single_op_stage1_mlp`.
 - Do not commit project changes into the parent `ORT` repository.
 
+### 2026-04-01 - Align calibrated analytical design doc with exported analytical formulas
+
+Request summary:
+- Cross-check `analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md` against the current analytical model implementation.
+- Update the document where it no longer matched the exported `ana_calib_*` path.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Documentation now explicitly states that its default reference is the exported `analytical_calibrated/build_analytical_features.py` formula path, not evaluator-only experimental `variant` branches.
+- `Concat` section now matches code by documenting the `issue_slots`-limited `max(stream, issue)` memory term before adding `tau_dispatch`.
+- `ReduceSum` section now includes `kappa_reduce` in `BW_reduce_inf` and clarifies that the exported analytical path keeps the baseline `max(mem, compute)` structure.
+- `Gather` section now documents the unique-row-derived source working-set fit, the level-aware `tau_floor`, and the fact that source miss count still uses `request_rows_true`.
+- `Transpose` section now matches the suffix-block `fit -> lat` stride-latency path used by the current implementation.
+
+Validation run:
+- Manually cross-checked the updated formulas against:
+  - `evaluate_analytical_generalization.py`
+  - `analytical_calibrated/build_analytical_features.py`
+- Reviewed the resulting Markdown diff to confirm the documented formulas now match the exported analytical path.
+
+Open risks:
+- The design document now matches the exported `ana_calib_*` implementation, but `evaluate_analytical_generalization.py` still contains auxiliary experimental `variant` branches that are intentionally not fully described here.
+
 ### 2026-04-01 - Align layout_move and ReduceSum analytical formulas with design doc
 
 Request summary:
