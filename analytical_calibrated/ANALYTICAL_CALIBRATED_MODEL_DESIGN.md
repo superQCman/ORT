@@ -2,16 +2,20 @@
 
 ## 摘要
 
-这份文档只保留 `single_op_stage1_mlp` 中可解释校准 analytical model 的设计内容，用来说明这套模型为什么存在、依赖哪些共享硬件量、每个 heavy-op family 的机制假设是什么，以及这些公式应该如何理解。
+这份文档只保留 `single_op_stage1_mlp` 中可解释校准 analytical model 的设计内容，用来说明这套模型为什么存在、依赖哪些共享硬件量、每个 calibrated family 的机制假设是什么，以及这些公式应该如何理解。
 
 这里不再讨论“纯 Analytical Model 组”，也不保留任何量化误差结果。重点不是对比实验结论，而是把当前这套可解释校准方案整理成一份结构更清晰、逻辑更连贯的设计文档。
 
 本文默认对齐当前 `analytical_calibrated/build_analytical_features.py` 导出的 `ana_calib_*` 公式口径；`evaluate_analytical_generalization.py` 中仅用于试验或对比的额外 `variant` 分支，不作为这里的默认设计定义。
 
-当前覆盖的 heavy-op family 为：
+当前覆盖的 calibrated family 为：
 
 - `Gather`
 - `ReduceSum`
+- `Relu`
+- `Add`
+- `Mul`
+- `Sigmoid`
 - `Gemm`
 - `MatMul`
 - `Transpose`
@@ -41,12 +45,15 @@
 
 ### 1.2 适用范围
 
-当前文档聚焦的对象是 ORT DLRM 中机制相对稳定、且值得单独建模的 heavy-op family。
+当前文档聚焦的对象是 ORT DLRM 中机制相对稳定、且值得单独建模的 analytical family。
 
 这些算子之所以单独建模，是因为它们的主瓶颈比较明确，但又不能用单一 `bytes / BW_peak` 或 `flops / PeakFMA` 近似覆盖：
 
 - `Concat` 更接近大块 copy 加 dispatch
 - `ReduceSum` 更接近连续流式读写上的 reduction 惩罚
+- `Relu` 更接近 unary elementwise 的 memory-dominant 流式 kernel
+- `Add / Mul` 更接近 binary elementwise micro-kernel
+- `Sigmoid` 同时包含流式访存和非线性逐元素计算
 - `Gather` 同时包含 source miss 与 output copy
 - `Gemm` 受 tile 饱和和 packing 摊销影响明显
 - `MatMul` 是 tiny batched matmul，不适合用大 GEMM 思路直接套
@@ -71,6 +78,8 @@
 
 之所以单独强调这个切片，是因为这些样本的形状结构和执行行为足够集中，适合先把 family-level 机制公式收敛稳定。
 
+与此同时，`mixed_balanced` 中已经被单独建模的 `Relu / Add / Mul / Sigmoid` 也纳入这份设计说明；它们不属于最初的 heavy-op 切片重点，但已经成为当前 `ana_calib_*` 导出路径的一部分。
+
 ### 2.3 family 语义概览
 
 - `Gather`
@@ -79,6 +88,18 @@
 - `ReduceSum`
   - 主要是 `[B, nip, K] -> [B, K]`
   - 核心是流式累加而不是随机访问
+- `Relu`
+  - 主要是 unary elementwise activation
+  - 当前实现按 memory-dominant 的流式读写 kernel 建模
+- `Add`
+  - 主要是 binary elementwise 加法
+  - 当前实现显式保留小流量带宽效率和固定 kernel overhead
+- `Mul`
+  - 主要是 binary elementwise 乘法
+  - 机制与 `Add` 类似，但保留独立校准参数
+- `Sigmoid`
+  - 主要是 unary nonlinear activation
+  - 需要同时考虑流式访存路径和逐元素非线性 compute 路径
 - `Gemm`
   - 主要是 DLRM bottom/top MLP 中的大矩阵乘
 - `MatMul`
@@ -220,7 +241,116 @@
 
 这个 family 的关键不是单纯“读写多少字节”，而是 reduction 内循环对流式带宽的折损程度。
 
-### 5.3 `Gather`: source miss + output copy 的双机制模型
+### 5.3 `Relu / Add / Mul / Sigmoid`: mixed_balanced 中的 op-aware elementwise 子模型
+
+#### 机制假设
+
+这 4 个算子都属于逐元素 kernel，但不能再统一塞回旧的 `generic_mixed` fallback。
+
+当前实现显式区分：
+
+- `Relu`
+  - unary elementwise
+  - 主要受流式读写支配
+- `Add / Mul`
+  - binary elementwise
+  - 除了流式读写，还要显式保留小 kernel 的固定 overhead
+- `Sigmoid`
+  - unary nonlinear
+  - 同时受流式访存和逐元素非线性 compute 限制
+
+因此，这个 family 在设计上不再追求统一的 `mem_us / compute_us` 两分法，而是按 `op_type` 分流后分别输出自己的 `ana_calib_total_us`。
+
+#### `Relu` 定义
+
+- `stream_bytes = feat_io_bytes_sum`
+- `BW_relu_inf = BW_peak * rho_relu_inf`
+- `BW_relu_eff(stream_bytes) = BW_relu_inf * stream_bytes / (BW_relu_inf * tau_relu_start + stream_bytes)`
+
+#### `Relu` 时延模型
+
+`T_relu = stream_bytes / BW_relu_eff(stream_bytes)`
+
+#### `Relu` 解释
+
+- `Relu` 当前被当成 memory-dominant unary kernel
+- `rho_relu_inf` 表示大流量 steady-state 下的有效持续带宽比例
+- `tau_relu_start` 表示小流量时进入 steady-state 前的固定启动成本
+- 当前导出实现里：
+  - `ana_calib_total_us = T_relu`
+  - `ana_calib_mem_us = T_relu`
+  - `ana_calib_compute_us = 0`
+  - `ana_calib_overhead_us = 0`
+
+#### `Add` 定义
+
+- `stream_bytes = feat_io_bytes_sum`
+- `BW_add_inf = BW_peak * rho_add_inf`
+- `BW_add_eff(stream_bytes) = BW_add_inf * stream_bytes / (BW_add_inf * tau_add_start + stream_bytes)`
+
+#### `Add` 时延模型
+
+`T_add = tau_add + stream_bytes / BW_add_eff(stream_bytes)`
+
+#### `Add` 解释
+
+- `Add` 按 binary elementwise micro-kernel 建模
+- `rho_add_inf` 表示大流量下加法 kernel 的渐近有效带宽比例
+- `tau_add_start` 表示小流量带宽路径的起步成本
+- `tau_add` 表示 kernel 固定结构性 overhead
+- 当前导出实现里：
+  - `ana_calib_total_us = T_add`
+  - `ana_calib_mem_us = stream_bytes / BW_add_eff(stream_bytes)`
+  - `ana_calib_compute_us = 0`
+  - `ana_calib_overhead_us = tau_add`
+
+#### `Mul` 定义
+
+- `stream_bytes = feat_io_bytes_sum`
+- `BW_mul_inf = BW_peak * rho_mul_inf`
+- `BW_mul_eff(stream_bytes) = BW_mul_inf * stream_bytes / (BW_mul_inf * tau_mul_start + stream_bytes)`
+
+#### `Mul` 时延模型
+
+`T_mul = tau_mul + stream_bytes / BW_mul_eff(stream_bytes)`
+
+#### `Mul` 解释
+
+- `Mul` 与 `Add` 的结构类似，但保留独立的 `rho_mul_inf / tau_mul_start / tau_mul`
+- 这样可以显式表达乘法 kernel 与加法 kernel 在 steady-state 效率和固定开销上的差异
+- 当前导出实现里：
+  - `ana_calib_total_us = T_mul`
+  - `ana_calib_mem_us = stream_bytes / BW_mul_eff(stream_bytes)`
+  - `ana_calib_compute_us = 0`
+  - `ana_calib_overhead_us = tau_mul`
+
+#### `Sigmoid` 定义
+
+- `stream_bytes = feat_io_bytes_sum`
+- `output_elements = output_size / bytes_per_element`
+- `BW_sigmoid_inf = BW_peak * rho_sigmoid_inf`
+- `BW_sigmoid_eff(stream_bytes) = BW_sigmoid_inf * stream_bytes / (BW_sigmoid_inf * tau_sigmoid_start + stream_bytes)`
+- `PeakSigmoidEff(T) = PeakAdd(T) * rho_sigmoid_compute`
+
+#### `Sigmoid` 时延模型
+
+`T_sigmoid = tau_sigmoid + max(stream_bytes / BW_sigmoid_eff(stream_bytes), output_elements / PeakSigmoidEff(T))`
+
+#### `Sigmoid` 解释
+
+- `Sigmoid` 不能近似成纯 memory path，因为逐元素非线性计算本身也可能成为主项
+- `rho_sigmoid_inf` 与 `tau_sigmoid_start` 控制流式访存路径
+- `rho_sigmoid_compute` 把 `PeakAdd(T)` 缩放成有效的 nonlinear per-element compute ceiling
+- `tau_sigmoid` 表示固定 kernel overhead
+- 当前导出实现里：
+  - `ana_calib_total_us = T_sigmoid`
+  - `ana_calib_mem_us = stream_bytes / BW_sigmoid_eff(stream_bytes)`
+  - `ana_calib_compute_us = output_elements / PeakSigmoidEff(T)`
+  - `ana_calib_overhead_us = tau_sigmoid`
+
+这一组小算子的关键不是追求一个统一 family 公式，而是保留 op-aware 子模型，让 `mixed_balanced` 最终以按 `op_type` 分流后的 `ana_calib_total_us` 作为稳定 proxy。
+
+### 5.4 `Gather`: source miss + output copy 的双机制模型
 
 #### 机制假设
 
@@ -277,7 +407,7 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 
 这里 `Gather` 的关键不只是“搬了多少字节”，而是 row 粒度、source tier 和 miss 并发隐藏能力三者共同决定 wall time。
 
-### 5.4 `Gemm`: tile 饱和不足下的持续 FMA 利用率
+### 5.5 `Gemm`: tile 饱和不足下的持续 FMA 利用率
 
 #### 机制假设
 
@@ -311,7 +441,7 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 
 因此，`Gemm` 的误差主要不是 roofline 结构完全错，而是需要显式描述 shape saturation 对 sustained efficiency 的影响。
 
-### 5.5 `MatMul`: tiny batched kernel 的 occupancy 模型
+### 5.6 `MatMul`: tiny batched kernel 的 occupancy 模型
 
 #### 机制假设
 
@@ -338,7 +468,7 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 
 因此，`MatMul` 需要把 tiny regime 单独建模，而不是当作小一号的普通 `Gemm`。
 
-### 5.6 `Transpose`: 流式搬运叠加 stride penalty
+### 5.7 `Transpose`: 流式搬运叠加 stride penalty
 
 #### 机制假设
 

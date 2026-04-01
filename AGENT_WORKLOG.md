@@ -2447,3 +2447,33 @@ Key results:
 Open risks:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md` already had separate user-owned worktree edits outside the newly documented formula section; the commit for this task stages only the new analytical-model explanation hunk, not unrelated edits.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+
+## 2026-04-01
+
+Summary:
+- Reverted the previous placement of the `Relu / Add / Mul / Sigmoid` analytical-model explanation from `classed_op_mlp/analyze_analytical_feature_correlation.md` and moved that content into the analytical design document where it belongs.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The analytical design doc now includes the current op-aware calibrated formulas for:
+  - `Relu`
+  - `Add`
+  - `Mul`
+  - `Sigmoid`
+- The design doc front matter now reflects that these elementwise submodels are part of the current calibrated family set.
+- The correlation-analysis usage doc is rolled back so it no longer carries duplicated analytical-design content.
+
+Validation run:
+- Manual doc review against:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`
+
+Open risks:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md` and `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md` both had unrelated worktree edits before this task; the commit for this task stages only the new design-doc migration and the rollback hunk, not unrelated edits.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
