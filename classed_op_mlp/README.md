@@ -66,7 +66,7 @@
 
 ### `with_analytical`
 
-这个分支与 `classed_op_mlp_test` 保持相同的 5-way 分桶和相同的 raw 特征，只在每个组上追加 `ana_calib_*`。
+这个分支与 `classed_op_mlp_test` 保持相同的 5-way 分桶和相同的 raw 特征，但只保留已经通过 proxy 质量验证的 analytical 输入列。
 
 ### `gather`
 
@@ -98,8 +98,8 @@
 | `feat_io_bytes_sum` | 总 I/O 字节量。（output_size + activation_size + parameter_size） |
 | `feat_output_input_bytes_ratio`（移除） | 输出相对输入的比例。 |
 | `feat_output_elements_per_batch` | 每个 batch 的输出元素规模。 |
-| `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
-| `ana_calib_mem_us` | 校准 analytical 访存主项时延。 |
+| `ana_calib_total_us` | 校准 analytical 总时延。当前 `layout_move` 组使用它作为统一 proxy，以同时覆盖 `Concat` 的 dispatch/overhead 和 tuned `Transpose`。 |
+| `ana_calib_mem_us`（移除） | 校准 analytical 访存主项时延。 |
 
 ### `view_meta`
 
@@ -132,9 +132,9 @@
 | `feat_reduction_axes_product` | 被归约维度乘积。 |
 | `feat_reduction_input_rank` | 归约前张量 rank。 |
 | `feat_reduction_output_rank` | 归约后张量 rank。 |
-| `ana_calib_total_us` (移除) | 校准 analytical 总时延。 |
-| `ana_calib_mem_us` | 校准 analytical 访存项时延。 |
-| `ana_calib_compute_us` | 校准 analytical 计算项时延。 |
+| `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
+| `ana_calib_mem_us`（移除） | 当前 mixed_balanced 组不再把该 proxy 作为训练输入，因为它未通过 active-input MAPE `<30%` 的验证门槛。 |
+| `ana_calib_compute_us`（移除） | 当前 mixed_balanced 组不再把该 proxy 作为训练输入，因为它未通过 active-input MAPE `<30%` 的验证门槛。 |
 
 ### `compute_dominant`
 
@@ -311,6 +311,14 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py \
   - 直接复用已有 `analytical_features_full.csv`
 - `--analytical-schemes leave_one_case_out`
   - 只跑较轻量的 case 级泛化
+
+active analytical input 的单 CSV 验证命令：
+
+```bash
+python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/validate_active_analytical_inputs.py \
+  --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_5_analytical_5_200_iter \
+  --output-csv /tmp/classed_active_analytical_validation.csv
+```
 
 默认输出目录：
 
