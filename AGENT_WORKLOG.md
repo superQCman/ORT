@@ -82,7 +82,24 @@ This project is a self-contained single-operator latency modeling pipeline for O
 - After each completed modification in this directory, create a git commit in the independent repository rooted at `/data/qc/dlrm/ORT/single_op_stage1_mlp`.
 - Do not commit project changes into the parent `ORT` repository.
 
-## Change History
+### 2026-04-01 - Document analytical feature correlation script
+
+Request summary:
+- Add a standalone Markdown document under `classed_op_mlp` that explains the purpose, implementation flow, and usage of `analyze_analytical_feature_correlation.py`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a dedicated Chinese documentation file for the analytical correlation analysis script.
+- Documented the script's inputs, CLI parameters, single-group and suite workflows, output artifacts, and example commands.
+
+Validation run:
+- Documentation-only change. Verified the new Markdown file was created in the expected directory.
+
+Open risks:
+- The documentation reflects the current script implementation and may need同步更新 if the CLI parameters or output file names change later.
 
 ### 2026-03-26 - Initial project snapshot and workflow guardrails
 
