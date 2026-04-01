@@ -233,7 +233,11 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 - `request_rows_true = num_elements(indices_shape)`
 - `row_bytes = output_size / request_rows_true`
 - `cachelines_per_row = ceil(row_bytes / cacheline)`
-- `stream_bytes = 2 * output_size + 8 * request_rows_true`
+- `src_read_bytes = output_size`
+- `dst_write_bytes = output_size`
+- `bytes_per_index = sizeof(int64)`
+- `index_read_bytes = bytes_per_index * request_rows_true`
+- `stream_bytes = src_read_bytes + dst_write_bytes + index_read_bytes`
 - `src_fit = fit(src_working_set_bytes)`
 - `lat_src_us = lat(src_fit)`
 - `BW_gather_inf = BW_peak * rho_gather_inf`
@@ -247,6 +251,11 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 
 #### 解释
 
+- `src_read_bytes` 表示从 source tensor/table 读取 payload 的字节量
+- `dst_write_bytes` 表示把 gather 结果写入 output tensor 的字节量
+- `bytes_per_index` 表示单个 index 元素的字节宽度；当前这里默认对应 `int64`
+- `index_read_bytes` 表示读取 index tensor 本身的开销
+- `stream_bytes` 因此被显式拆成“源数据读 + 目标数据写 + index 读”三部分，而不是用没有语义的常数直接相加
 - `rho_gather_inf` 表示大 row gather 的渐近持续带宽比例
 - `tau_gather_row_start` 表示 row 太小时单次寻址与粒度浪费的固定启动成本
 - `m_gather` 表示 source miss 的有效 memory-level parallelism

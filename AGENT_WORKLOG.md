@@ -82,6 +82,26 @@ This project is a self-contained single-operator latency modeling pipeline for O
 - After each completed modification in this directory, create a git commit in the independent repository rooted at `/data/qc/dlrm/ORT/single_op_stage1_mlp`.
 - Do not commit project changes into the parent `ORT` repository.
 
+### 2026-04-01 - Clarify Gather byte accounting symbols in analytical doc
+
+Request summary:
+- Replace the literal constants in the `Gather` `stream_bytes` formula inside the calibrated analytical design note with explicit symbolic byte terms.
+- Align the nearby explanation text so the byte accounting is self-explanatory.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The `Gather` section now expands `stream_bytes` into `src_read_bytes`, `dst_write_bytes`, `bytes_per_index`, and `index_read_bytes`.
+- The surrounding explanation now explicitly states that total stream traffic is decomposed into source read, destination write, and index read.
+
+Validation run:
+- Documentation-only change. Verified the target section was updated in the analytical design document.
+
+Open risks:
+- The notation is clearer, but it still assumes the current index dtype is `int64`; if a future variant uses a different index dtype, the documentation should be updated to reflect that.
+
 ### 2026-04-01 - Refactor calibrated analytical model document
 
 Request summary:
