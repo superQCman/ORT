@@ -17,6 +17,11 @@
 
 - `../artifacts/latest/classed_op_mlp_test_analytical_5_200_iter`
 
+```
+通过--data-root参数可以指定其他输入目录，例如：
+--data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter
+```
+
 脚本默认会从这里读取：
 
 - `datasets/<model_group>/train.csv`
@@ -45,7 +50,6 @@
 - `ana_calib_mem_us`
 - `ana_calib_compute_us`
 - `ana_calib_total_us`
-
 
 ## 实现逻辑
 

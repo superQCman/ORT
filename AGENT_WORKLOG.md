@@ -2448,7 +2448,6 @@ Open risks:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md` already had separate user-owned worktree edits outside the newly documented formula section; the commit for this task stages only the new analytical-model explanation hunk, not unrelated edits.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
 
-
 ## 2026-04-01
 
 Summary:
@@ -2504,3 +2503,44 @@ Validation run:
 Open risks:
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md` already had unrelated worktree edits outside the updated section 3-4 range; the commit for this task stages only the new shared-submodel and parameter-boundary updates, not unrelated edits.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-04-01
+
+Summary:
+- Rewrote the analytical-model introduction into thesis-ready Chinese prose and added a new paper-style markdown note that argues the per-operator analytical models in a formal structure.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_MODEL_PAPER_WRITEUP.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a standalone paper-oriented write-up that can be copied into the thesis body.
+- The new note reorganizes the analytical model narrative into:
+  - motivation
+  - shared notation and hardware submodels
+  - unified output decomposition
+  - per-operator analysis, formulation, and justification
+- The covered operator families are:
+  - `Gather`
+  - `ReduceSum`
+  - `Relu`
+  - `Add`
+  - `Mul`
+  - `Sigmoid`
+  - `Gemm`
+  - `MatMul`
+  - `Transpose`
+  - `Concat`
+- The prose is aligned to the current exported calibrated formulas in:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+
+Validation run:
+- Manual doc review against:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+
+Open risks:
+- The new file is thesis-oriented prose rather than an implementation spec, so if the exported formulas change later, this paper note should be updated together with the design doc.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.

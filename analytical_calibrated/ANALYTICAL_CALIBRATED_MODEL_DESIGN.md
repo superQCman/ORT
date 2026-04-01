@@ -258,6 +258,8 @@
 - `BW_copy_inf = BW_peak * rho_copy_inf`
 - `BW_copy_eff(chunk_mean) = BW_copy_inf * chunk_mean / (BW_copy_inf * tau_copy_start + chunk_mean)`
 - `T_issue = (stream_bytes / cacheline) / IssueSlots(T)`
+  - concat算子引入IssueSlots(T)的主要原因是它的 copy-loop 行为会受到 cacheline 粒度访存发射和前端 issue ceiling 的双重约束，尤其在 chunk 很小时，issue ceiling 可能成为更紧的上界。
+  - 每个 cacheline 的处理都依赖前端持续发射 load/store loop
 
 #### 时延模型
 
@@ -558,8 +560,10 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 - `lat_stride_us = lat(stride_fit)`
 
 #### 时延模型
+`copy_us = 2 * out_bytes / (BW_peak * rho_copy_inf)`
+`stride_us = prefix_blocks * lat_stride_us / (T ^ eta_stride * m_stride)`
 
-`T_transpose = 2 * out_bytes / (BW_peak * rho_copy_inf) + prefix_blocks * lat_stride_us / (T ^ eta_stride * m_stride)`
+`T_transpose = copy_us + stride_us = 2 * out_bytes / (BW_peak * rho_copy_inf) + prefix_blocks * lat_stride_us / (T ^ eta_stride * m_stride)`
 
 #### 解释
 

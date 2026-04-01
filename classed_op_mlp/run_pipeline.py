@@ -79,7 +79,7 @@ def parse_args() -> argparse.Namespace:
         default=("leave_one_case_out", "leave_one_combo_out"),
         help="Analytical generalization schemes to run when analytical generalization is enabled.",
     )
-    parser.add_argument("--hidden-layers", default="128,64")
+    parser.add_argument("--hidden-layers", default="128,128,128,128,128")
     parser.add_argument("--batch-size", type=int, default=1024)
     parser.add_argument("--max-iter", type=int, default=120)
     parser.add_argument("--alpha", type=float, default=1e-4)

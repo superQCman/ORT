@@ -127,6 +127,8 @@
 - `PeakFMA(T)` 用于 `Gemm/MatMul`
 - `PeakAdd(T)` 用于 `ReduceSum`
 - `IssueSlots(T)` 只作为 copy-like kernel 的粗粒度 issue ceiling
+- `Th_*` 是指令集吞吐，从硬件profile中直接获取
+- `lanes_fp32` 是每条指令能同时处理的 float32 数量，由 SIMD 宽度决定(simd_width_bits / 32)
 
 ## 3. 建模原则
 
@@ -298,7 +300,7 @@
 
 有效带宽模型：
 
-`BW_reduce_inf = BW_peak * rho_copy_inf * kappa_reduce`
+`BW_reduce_inf = BW_peak * rho_copy_inf`
 
 `BW_reduce_eff(inner) = BW_reduce_inf * inner / (BW_reduce_inf * tau_reduce_start + inner)`
 
@@ -307,10 +309,12 @@
 `T_reduce = max(stream_bytes / BW_reduce_eff(inner), add_ops / PeakAdd(T))`
 
 #### 4.3.3 解释
-
-- `kappa_reduce`
-  - 表示“连续 reduce”相对“纯 copy”的额外折损
-  - 它不是一个神秘常数，而是在 copy 基线上乘上的 reduction penalty
+```
+input  = [B, nip, K]
+output = [B, K]
+```
+- `feat_reduction_work_items` 是 reduction 的总工作量，等价于 `B * K`，也是输出张量的元素数量
+- `feat_reduction_axes_product` 是 reduction 内核的“内循环规模”，等价于 `nip`，也是每个输出元素需要累加的输入数量
 - `tau_reduce_start`
   - 表示 reduction 流式阶段的固定启动时间
   - 若需要半饱和尺度，可等价写成 `B50_reduce = BW_reduce_inf * tau_reduce_start`
@@ -335,10 +339,11 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 
 定义：
 
-- `request_rows = feat_lookup_count`
-- `row_bytes = output_size / request_rows`
+- `request_rows_true = num_elements(indices_shape)`(其中 `indices_shape` 来自 `input_type_shape` 的第二个输入)
+- `row_bytes = output_size / request_rows_true`
 - `cachelines_per_row = ceil(row_bytes / cacheline)`
-- `stream_bytes = 2 * output_size + 8 * request_rows`
+- `stream_bytes = 2 * output_size + 8(int64) * request_rows_true`
+  - 一次读 source row，一次写 output，以及读 index tensor
 
 共享硬件子模型在 `Gather` 中的显式展开为：
 
@@ -351,13 +356,31 @@ embedding gather 不能被视为单纯的 `bytes / BW`。它同时包含：
 
 `BW_gather_eff(row_bytes) = BW_gather_inf * row_bytes / (BW_gather_inf * tau_gather_row_start + row_bytes)`
 
+BW_gather_eff(row_bytes)公式推导：
+假设取一行row的时间可以写成：
+```
+T_row = tau_gather_row_start + row_bytes / BW_gather_inf
+```
+然后把有效带宽定义为：
+```
+BW_gather_eff(row_bytes) = row_bytes / T_row
+```
+把T_row代入上式得到：
+```
+BW_gather_eff(row_bytes) = row_bytes / (tau_gather_row_start + row_bytes / BW_gather_inf)
+```
+化简后得到：
+```
+BW_gather_eff(row_bytes) = BW_gather_inf * row_bytes / (BW_gather_inf * tau_gather_row_start + row_bytes)
+```
+---
 源侧 miss 路径：
 
 `T_src = request_rows * cachelines_per_row * lat_src_us / (T * m_gather)`
 
 整体时延：
 
-`T_gather = max(stream_bytes / BW_gather_eff(row_bytes), T_src)`
+`T_gather = max(stream_bytes / BW_gather_eff(row_bytes), T_src, tau_floor)`
 
 其中 `lat_src_us` 由 source working set 所在 `L1/L2/L3/MEM` tier 显式决定。
 

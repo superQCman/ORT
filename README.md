@@ -48,11 +48,11 @@ Analytical 设计文档：
 | `output_size` | 算子输出张量总字节数。 |
 | `activation_size` | 算子 activation 相关内存规模，通常可理解为输入/中间激活占用的总字节数。 |
 | `parameter_size` | 算子参数或权重占用的总字节数。 |
-| `load_store_ratio` | load 指令与 store 指令的比例，用来描述访存读写倾向。 |
+| `load_store_ratio (Trace)` | load 指令与 store 指令的比例，用来描述访存读写倾向。 |
 | `feat_io_bytes_sum` | `output_size + activation_size + parameter_size`，表示整体 I/O/工作集规模。 |
 | `feat_output_input_bytes_ratio` | 输出规模与输入规模的比值，近似描述该算子的“扩张/压缩”程度。 |
-| `feat_memops_per_inst` | 每条指令对应的平均内存访问次数，约等于 `(loads + stores) / instructions`。 |
-| `feat_insts_per_thread` | 平均每个线程承担的指令数，约等于 `instructions / threads`。 |
+| `feat_memops_per_inst (Trace)` | 每条指令对应的平均内存访问次数，约等于 `(loads + stores) / instructions`。 |
+| `feat_insts_per_thread (Trace)` | 平均每个线程承担的指令数，约等于 `instructions / threads`。 |
 | `feat_lookup_count` | `batch_size * num_indices_per_lookup`，只对 `Gather` 类算子非零。 |
 | `feat_output_elements_per_lookup` | 平均每次 lookup 产生多少输出元素，只对 `Gather` 类算子非零。 |
 | `feat_output_elements_per_batch` | 平均每个 batch 样本对应的输出元素数。 |
@@ -64,13 +64,13 @@ Analytical 设计文档：
 | `feat_reduction_work_items` | 估算的归约工作量，近似表示需要被合并的元素规模。 |
 | `reuse_time_mean` | 平均复用时间，反映同一数据再次被访问前隔了多久。 |
 | `reuse_distance_mean` | 平均复用距离，反映两次复用之间跨过了多少访问。 |
-| `reuse_distance_unique_cache_lines_per_k_accesses` | 每千次访问涉及的唯一 cache line 数量，反映局部性强弱。 |
-| `opc_branch_ratio` | branch 类指令占比。 |
-| `opc_fp_math_ratio` | 浮点数学指令占比。 |
-| `opc_load_ratio` | load 类指令占比。 |
-| `opc_math_ratio` | 数学运算类指令占比。 |
-| `opc_simd_ratio` | SIMD/向量指令占比。 |
-| `opc_store_ratio` | store 类指令占比。 |
+| `reuse_distance_unique_cache_lines_per_k_accesses (Trace)` | 每千次访问涉及的唯一 cache line 数量，反映局部性强弱。 |
+| `opc_branch_ratio (Trace)` | branch 类指令占比。 |
+| `opc_fp_math_ratio (Trace)` | 浮点数学指令占比。 |
+| `opc_load_ratio (Trace)` | load 类指令占比。 |
+| `opc_math_ratio (Trace)` | 数学运算类指令占比。 |
+| `opc_simd_ratio (Trace)` | SIMD/向量指令占比。 |
+| `opc_store_ratio (Trace)` | store 类指令占比。 |
 | `hw_ratio_working_set_to_l1d_active_bytes` | 算子工作集字节数与当前活跃 L1D 容量的比值，用软件工作集和硬件容量比值来表达压力。 |
 | `hw_ratio_working_set_to_l2_active_bytes` | 算子工作集字节数与当前活跃 L2 容量的比值。 |
 | `hw_ratio_working_set_to_l3_active_bytes` | 算子工作集字节数与当前活跃 L3 容量的比值。 |
