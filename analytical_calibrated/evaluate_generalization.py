@@ -30,6 +30,7 @@ try:  # noqa: E402
         GENERIC_MEMORY_OP_TYPES,
         GENERIC_MIXED_OP_TYPES,
         HEAVY_FAMILIES,
+        OP_AWARE_LIGHT_OP_TYPES,
     )
 except ImportError:  # noqa: E402
     from build_analytical_features import (
@@ -43,6 +44,7 @@ except ImportError:  # noqa: E402
         GENERIC_MEMORY_OP_TYPES,
         GENERIC_MIXED_OP_TYPES,
         HEAVY_FAMILIES,
+        OP_AWARE_LIGHT_OP_TYPES,
     )
 
 
@@ -161,6 +163,7 @@ def render_markdown(
     lines.append("")
     lines.append(f"- Input dataset: `{input_csv}`")
     lines.append(f"- Heavy families: `{', '.join(HEAVY_FAMILIES)}`")
+    lines.append(f"- Op-aware light families: `{', '.join(OP_AWARE_LIGHT_OP_TYPES)}`")
     lines.append(f"- Generic memory proxy: `{', '.join(GENERIC_MEMORY_OP_TYPES)}`")
     lines.append(f"- Generic mixed proxy: `{', '.join(GENERIC_MIXED_OP_TYPES)}`")
     lines.append("")
@@ -234,13 +237,34 @@ def evaluate_generalization(
 
     for scheme in schemes:
         for fold_name, heavy_train_df, heavy_test_df in analytical_eval.build_folds(heavy_df, scheme):
-            params = analytical_eval.calibrate_params(heavy_train_df, passes=passes, variant="baseline")
+            params = analytical_eval.calibrate_params(
+                heavy_train_df,
+                passes=passes,
+                variant="baseline",
+                matmul_formulation="tiny_occ",
+            )
             param_rows.append({"scheme": scheme, "fold": fold_name, **params})
             heavy_metric_rows.extend(
-                analytical_eval.family_metric_rows(heavy_train_df, params, "baseline", scheme, fold_name, "train")
+                analytical_eval.family_metric_rows(
+                    heavy_train_df,
+                    params,
+                    "baseline",
+                    "tiny_occ",
+                    scheme,
+                    fold_name,
+                    "train",
+                )
             )
             heavy_metric_rows.extend(
-                analytical_eval.family_metric_rows(heavy_test_df, params, "baseline", scheme, fold_name, "test")
+                analytical_eval.family_metric_rows(
+                    heavy_test_df,
+                    params,
+                    "baseline",
+                    "tiny_occ",
+                    scheme,
+                    fold_name,
+                    "test",
+                )
             )
 
             if scheme == "leave_one_case_out":
@@ -250,7 +274,8 @@ def evaluate_generalization(
             rebuilt_test = rebuilt_df[test_mask].copy()
             heavy_test_prepared = heavy_df[heavy_df["row_uid"].astype(str).isin(rebuilt_test["row_uid"].astype(str))].copy()
             fold_features = add_calibrated_analytical_columns(rebuilt_test, heavy_test_prepared, params)
-            light_test = fold_features[fold_features["ana_calib_family"].astype(str).isin(["generic_memory", "generic_mixed"])].copy()
+            light_family_names = {"generic_memory", "generic_mixed", *OP_AWARE_LIGHT_OP_TYPES}
+            light_test = fold_features[fold_features["ana_calib_family"].astype(str).isin(light_family_names)].copy()
             if not light_test.empty:
                 group_df = group_metrics(light_test, ["op_class", "op_type"])
                 group_df["scheme"] = scheme

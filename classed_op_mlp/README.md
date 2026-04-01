@@ -68,6 +68,12 @@
 
 这个分支与 `classed_op_mlp_test` 保持相同的 5-way 分桶和相同的 raw 特征，但只保留已经通过 proxy 质量验证的 analytical 输入列。
 
+其中 `mixed_balanced` 使用的是一个异构组统一的 `ana_calib_total_us` proxy：
+
+- `ReduceSum` 继续走原有 calibrated reduction 公式
+- `Relu / Add / Mul / Sigmoid` 改为各自的 op-aware analytical 子模型
+- 因此这个组不再强求统一的 `mem_us / compute_us` 两分法，而是直接用更稳定的总时延 proxy
+
 ### `gather`
 
 | 特征 | 含义 |
@@ -132,9 +138,9 @@
 | `feat_reduction_axes_product` | 被归约维度乘积。 |
 | `feat_reduction_input_rank` | 归约前张量 rank。 |
 | `feat_reduction_output_rank` | 归约后张量 rank。 |
-| `ana_calib_total_us`（移除） | 校准 analytical 总时延。 |
-| `ana_calib_mem_us`（移除） | 当前 mixed_balanced 组不再把该 proxy 作为训练输入，因为它未通过 active-input MAPE `<30%` 的验证门槛。 |
-| `ana_calib_compute_us`（移除） | 当前 mixed_balanced 组不再把该 proxy 作为训练输入，因为它未通过 active-input MAPE `<30%` 的验证门槛。 |
+| `ana_calib_total_us` | 校准 analytical 总时延。当前 mixed_balanced 组使用它作为统一 proxy，以同时覆盖 `ReduceSum` 和 `Relu / Add / Mul / Sigmoid` 的 op-aware 子模型。 |
+| `ana_calib_mem_us`（移除） | mixed_balanced 是异构组；虽然导出 CSV 仍保留该列做分析，但它不再作为统一训练输入。 |
+| `ana_calib_compute_us`（移除） | mixed_balanced 是异构组；虽然导出 CSV 仍保留该列做分析，但它不再作为统一训练输入。 |
 
 ### `compute_dominant`
 

@@ -2354,3 +2354,63 @@ Validation run:
 
 Open risks:
 - Marker sizes and figure canvas size are unchanged, so very large scales such as `--font-scale 2.0` may make dense labels overlap more heavily.
+
+## 2026-04-01
+
+Summary:
+- Added op-aware calibrated analytical submodels for the `mixed_balanced` small operators without splitting `ReduceSum` into a separate class.
+- Restored `ana_calib_total_us` as the active analytical input for `classed_op_mlp/mixed_balanced` once the new proxy cleared the `<30%` MAPE gate.
+- Rebuilt analytical features, regenerated grouped datasets and active analytical correlation reports, and retrained the 5-way classed MLP stack on the updated contract.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/evaluate_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `Relu`, `Add`, `Mul`, and `Sigmoid` no longer fall back to the old `generic_mixed` proxy.
+- `Relu` now uses an op-aware streaming bandwidth model, `Add`/`Mul` use `overhead + bandwidth` micro-kernel models, and `Sigmoid` uses `overhead + max(mem, nonlinear-compute)` with calibrated compute efficiency.
+- `analytical_calibrated` now calibrates and exports these four light families together with the previous heavy families.
+- `classed_op_mlp/mixed_balanced` now consumes `ana_calib_total_us` as its single analytical input, while `ana_calib_mem_us` and `ana_calib_compute_us` remain analysis-only for that heterogeneous group.
+- `analytical_calibrated/evaluate_generalization.py` was also updated so its fold evaluation can reuse the new calibration signature and include the op-aware light families in light-side summaries.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/evaluate_generalization.py /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/validate_active_analytical_inputs.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated_5 --passes 5`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --input-data-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated_5 --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter --feature-branch with_analytical`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter --model-groups gather,layout_move,mixed_balanced,compute_dominant --auto-feature-cols --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter/analysis/active_analytical_feature_correlation_suite`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/validate_active_analytical_inputs.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter --output-csv /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter/analysis/active_input_analytical_validation.csv`
+- `conda run -n ort python /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/train_class_models.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter/models --hidden-layers 128,128,128,128,128 --batch-size 1024 --max-iter 200 --alpha 1e-4 --learning-rate-init 1e-3 --seed 42 --train-device auto --npu-device-id 0 --early-stopping-patience 12 --onnx-opset 17`
+
+Key results:
+- New analytical feature artifacts:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated_5`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter`
+- Active analytical input validation now passes for every active input:
+  - `gather / ana_calib_mem_us = 17.73%`
+  - `layout_move / ana_calib_total_us = 26.00%`
+  - `mixed_balanced / ana_calib_total_us = 25.17%`
+  - `compute_dominant / ana_calib_compute_us = 9.77%`
+- `mixed_balanced` analytical correlation improved from the previous `~54.5%` mem-proxy regime to:
+  - `train MAPE = 25.04%`
+  - `val MAPE = 25.57%`
+  - `test MAPE = 25.17%`
+- `mixed_balanced` test per-op MAPE now reads:
+  - `ReduceSum = 22.02%`
+  - `Add = 23.31%`
+  - `Mul = 19.86%`
+  - `Sigmoid = 11.75%`
+  - `Relu = 37.68%`
+- Despite `Relu` still being the weakest op-specific proxy, the heterogeneous group-level target was met and the restored `mixed_balanced` model stayed strong after retraining:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter/models/mixed_balanced/metrics.json`
+  - `test_mape = 0.062514`
+
+Open risks:
+- `Relu` remains the worst per-op analytical proxy inside `mixed_balanced` at roughly `37.7%` test MAPE; the group-level target is satisfied, but if future work requires every op to be `<30%`, `Relu` still needs a better kernel model.
+- `analytical_calibrated/evaluate_generalization.py` was only minimally updated for compatibility and reuse; if users start depending on its Markdown summaries for publication-quality light-family reporting, it may deserve a dedicated cleanup pass.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.

@@ -24,6 +24,13 @@
 - `Transpose`
 - `Concat`
 
+精细公式 light family：
+
+- `Relu`
+- `Add`
+- `Mul`
+- `Sigmoid`
+
 通用 proxy：
 
 - `generic_memory`
@@ -31,11 +38,6 @@
   - `Shape`
   - `Unsqueeze`
   - `Flatten`
-- `generic_mixed`
-  - `Relu`
-  - `Add`
-  - `Mul`
-  - `Sigmoid`
 
 ## 输出特征含义
 

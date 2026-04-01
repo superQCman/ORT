@@ -41,18 +41,20 @@ HEAVY_FAMILIES = (
     "Transpose",
     "Concat",
 )
+OP_AWARE_LIGHT_OP_TYPES = (
+    "Relu",
+    "Add",
+    "Mul",
+    "Sigmoid",
+)
+CALIBRATED_FAMILIES = HEAVY_FAMILIES + OP_AWARE_LIGHT_OP_TYPES
 GENERIC_MEMORY_OP_TYPES = (
     "Reshape",
     "Shape",
     "Unsqueeze",
     "Flatten",
 )
-GENERIC_MIXED_OP_TYPES = (
-    "Relu",
-    "Add",
-    "Mul",
-    "Sigmoid",
-)
+GENERIC_MIXED_OP_TYPES: tuple[str, ...] = ()
 
 SHARED_CATEGORICAL_FEATURES = (
     "op_type",

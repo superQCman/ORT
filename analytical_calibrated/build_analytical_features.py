@@ -32,12 +32,14 @@ try:  # noqa: E402
     from .contracts import (
         ANALYTICAL_FEATURE_COLUMNS,
         ANALYTICAL_FEATURE_DESCRIPTIONS,
+        CALIBRATED_FAMILIES,
         DEFAULT_INPUT_CSV,
         DEFAULT_OUTPUT_DIR,
         FEATURE_DESCRIPTIONS,
         GENERIC_MEMORY_OP_TYPES,
         GENERIC_MIXED_OP_TYPES,
         HEAVY_FAMILIES,
+        OP_AWARE_LIGHT_OP_TYPES,
         OP_CLASS_ORDER,
         OP_TYPE_CLASS_MAP,
         resolve_op_class,
@@ -46,12 +48,14 @@ except ImportError:  # noqa: E402
     from contracts import (
         ANALYTICAL_FEATURE_COLUMNS,
         ANALYTICAL_FEATURE_DESCRIPTIONS,
+        CALIBRATED_FAMILIES,
         DEFAULT_INPUT_CSV,
         DEFAULT_OUTPUT_DIR,
         FEATURE_DESCRIPTIONS,
         GENERIC_MEMORY_OP_TYPES,
         GENERIC_MIXED_OP_TYPES,
         HEAVY_FAMILIES,
+        OP_AWARE_LIGHT_OP_TYPES,
         OP_CLASS_ORDER,
         OP_TYPE_CLASS_MAP,
         resolve_op_class,
@@ -105,21 +109,21 @@ def infer_batched_matmul_dims(
     return analytical_eval.infer_batched_matmul_dims(input_entries, output_entries)
 
 
-def _heavy_family_for_row(row: pd.Series) -> str:
+def _calibrated_family_for_row(row: pd.Series) -> str:
     op_type = str(row.get("op_type", "")).strip()
-    if op_type in HEAVY_FAMILIES:
+    if op_type in CALIBRATED_FAMILIES:
         return op_type
     return ""
 
 
 def prepare_heavy_prediction_frame(frame: pd.DataFrame) -> pd.DataFrame:
-    heavy_source = frame[frame["op_type"].astype(str).isin(HEAVY_FAMILIES)].copy()
+    heavy_source = frame[frame["op_type"].astype(str).isin(CALIBRATED_FAMILIES)].copy()
     if heavy_source.empty:
         return pd.DataFrame()
 
     records: list[dict[str, Any]] = []
     for _, row in heavy_source.iterrows():
-        family = _heavy_family_for_row(row)
+        family = _calibrated_family_for_row(row)
         if not family:
             continue
         input_entries = _shape_entries(row.get("input_type_shape"))
@@ -189,6 +193,7 @@ def prepare_heavy_prediction_frame(frame: pd.DataFrame) -> pd.DataFrame:
                 "activation_size": max(analytical_eval.safe_float(row.get("activation_size"), 0.0), 0.0),
                 "parameter_size": max(analytical_eval.safe_float(row.get("parameter_size"), 0.0), 0.0),
                 "feat_io_bytes_sum": max(analytical_eval.safe_float(row.get("feat_io_bytes_sum"), 0.0), 0.0),
+                "output_elements": output_bytes_sum / max(float(output_dtype_bytes), 1.0),
                 "feat_lookup_count": request_rows,
                 "feat_reduction_axes_product": max(analytical_eval.safe_float(row.get("feat_reduction_axes_product"), 0.0), 0.0),
                 "feat_reduction_work_items": max(analytical_eval.safe_float(row.get("feat_reduction_work_items"), 0.0), 0.0),
@@ -373,6 +378,56 @@ def _transpose_components(frame: pd.DataFrame, params: dict[str, float]) -> tupl
     return total_us, mem_us, compute_us, overhead_us
 
 
+def _relu_components(frame: pd.DataFrame, params: dict[str, float]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    mem_us = analytical_eval.predict_relu(frame, params)
+    total_us = mem_us.copy()
+    compute_us = np.zeros(len(frame), dtype=float)
+    overhead_us = np.zeros(len(frame), dtype=float)
+    return total_us, mem_us, compute_us, overhead_us
+
+
+def _add_components(frame: pd.DataFrame, params: dict[str, float]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    stream = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    bw_inf = bw_peak * max(params["rho_add_inf"], 1e-6)
+    bw_eff = analytical_eval.effective_bandwidth(stream, bw_inf, params["tau_add_start"])
+    mem_us = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    overhead_us = np.full(len(frame), max(params["tau_add"], 0.0), dtype=float)
+    compute_us = np.zeros(len(frame), dtype=float)
+    total_us = mem_us + overhead_us
+    return total_us, mem_us, compute_us, overhead_us
+
+
+def _mul_components(frame: pd.DataFrame, params: dict[str, float]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    stream = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    bw_inf = bw_peak * max(params["rho_mul_inf"], 1e-6)
+    bw_eff = analytical_eval.effective_bandwidth(stream, bw_inf, params["tau_mul_start"])
+    mem_us = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    overhead_us = np.full(len(frame), max(params["tau_mul"], 0.0), dtype=float)
+    compute_us = np.zeros(len(frame), dtype=float)
+    total_us = mem_us + overhead_us
+    return total_us, mem_us, compute_us, overhead_us
+
+
+def _sigmoid_components(frame: pd.DataFrame, params: dict[str, float]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    stream = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    output_elements = frame["output_elements"].to_numpy(dtype=float)
+    peak_add = frame["peak_add_ops_per_us"].to_numpy(dtype=float)
+    bw_inf = bw_peak * max(params["rho_sigmoid_inf"], 1e-6)
+    bw_eff = analytical_eval.effective_bandwidth(stream, bw_inf, params["tau_sigmoid_start"])
+    mem_us = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    compute_us = output_elements / np.clip(
+        peak_add * max(params["rho_sigmoid_compute"], 1e-9),
+        a_min=1e-6,
+        a_max=None,
+    )
+    overhead_us = np.full(len(frame), max(params["tau_sigmoid"], 0.0), dtype=float)
+    total_us = overhead_us + np.maximum(mem_us, compute_us)
+    return total_us, mem_us, compute_us, overhead_us
+
+
 def predict_heavy_family_components(
     frame: pd.DataFrame,
     family: str,
@@ -390,6 +445,14 @@ def predict_heavy_family_components(
         return _matmul_components(frame, params)
     if family == "Transpose":
         return _transpose_components(frame, params)
+    if family == "Relu":
+        return _relu_components(frame, params)
+    if family == "Add":
+        return _add_components(frame, params)
+    if family == "Mul":
+        return _mul_components(frame, params)
+    if family == "Sigmoid":
+        return _sigmoid_components(frame, params)
     raise KeyError(family)
 
 
@@ -418,7 +481,7 @@ def add_calibrated_analytical_columns(
 
     if not heavy_prepared_df.empty:
         heavy_parts: list[pd.DataFrame] = []
-        for family in HEAVY_FAMILIES:
+        for family in CALIBRATED_FAMILIES:
             family_df = heavy_prepared_df[heavy_prepared_df["family"] == family].copy()
             if family_df.empty:
                 continue
@@ -453,7 +516,7 @@ def add_calibrated_analytical_columns(
                         out[column] = pd.to_numeric(out[heavy_column], errors="coerce").fillna(out[column])
                     out = out.drop(columns=[heavy_column])
 
-    memory_mask = out["op_type"].astype(str).isin(GENERIC_MEMORY_OP_TYPES)
+    memory_mask = out["op_type"].astype(str).isin(GENERIC_MEMORY_OP_TYPES) & out["ana_calib_family"].eq("unassigned")
     out.loc[memory_mask, "ana_calib_total_us"] = pd.to_numeric(
         out.loc[memory_mask, "ana_mem_bw_time_us"],
         errors="coerce",
@@ -463,7 +526,7 @@ def add_calibrated_analytical_columns(
     out.loc[memory_mask, "ana_calib_overhead_us"] = 0.0
     out.loc[memory_mask, "ana_calib_family"] = "generic_memory"
 
-    mixed_mask = out["op_type"].astype(str).isin(GENERIC_MIXED_OP_TYPES)
+    mixed_mask = out["op_type"].astype(str).isin(GENERIC_MIXED_OP_TYPES) & out["ana_calib_family"].eq("unassigned")
     if mixed_mask.any():
         mem_us = pd.to_numeric(out.loc[mixed_mask, "ana_mem_bw_time_us"], errors="coerce").fillna(0.0)
         compute_ops = pd.to_numeric(out.loc[mixed_mask, "ana_compute_ops"], errors="coerce").fillna(0.0)
@@ -544,6 +607,8 @@ def build_full_feature_artifacts(
         "input_csv": str(input_csv),
         "output_dir": str(output_dir),
         "heavy_families": list(HEAVY_FAMILIES),
+        "calibrated_families": list(CALIBRATED_FAMILIES),
+        "op_aware_light_families": list(OP_AWARE_LIGHT_OP_TYPES),
         "generic_proxy_op_types": {
             "memory_pure": list(GENERIC_MEMORY_OP_TYPES),
             "mixed_balanced": list(GENERIC_MIXED_OP_TYPES),

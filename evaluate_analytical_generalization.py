@@ -65,7 +65,9 @@ DEFAULT_OUTPUT_DIR = (
 
 EVAL_CASES = ["case_9_4_4", "case_10_2_1", "case_10_4_4"]
 EVAL_COMBOS = ["bs1024_nip1500", "bs1440_nip1700", "bs1888_nip1800"]
-FAMILY_ORDER = ["Gather", "ReduceSum", "Gemm", "MatMul", "Transpose", "Concat"]
+HEAVY_FAMILY_ORDER = ["Gather", "ReduceSum", "Gemm", "MatMul", "Transpose", "Concat"]
+LIGHT_FAMILY_ORDER = ["Relu", "Add", "Mul", "Sigmoid"]
+FAMILY_ORDER = HEAVY_FAMILY_ORDER + LIGHT_FAMILY_ORDER
 COPY_FAMILIES = ["Concat", "ReduceSum", "Transpose"]
 
 
@@ -256,7 +258,7 @@ def peak_fma_ops_per_us(row: pd.Series) -> float:
     return throughput * lanes * 2.0 * cpu_clock * 1e3 * active_cores
 
 
-def heavy_family_name(row: pd.Series) -> str:
+def analytical_family_name(row: pd.Series) -> str:
     op_type = str(row.get("op_type", ""))
     node_name = str(row.get("node_name", ""))
     if op_type == "Gather" and safe_float(row.get("output_size"), 0.0) > 1e8:
@@ -271,6 +273,8 @@ def heavy_family_name(row: pd.Series) -> str:
         return "Transpose"
     if node_name == "/Concat":
         return "Concat"
+    if op_type in LIGHT_FAMILY_ORDER:
+        return op_type
     return ""
 
 
@@ -297,7 +301,7 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
     dataset = dataset[
         dataset["case_id"].astype(str).isin(EVAL_CASES) & dataset["combo"].astype(str).isin(EVAL_COMBOS)
     ].copy()
-    dataset["family"] = dataset.apply(heavy_family_name, axis=1)
+    dataset["family"] = dataset.apply(analytical_family_name, axis=1)
     dataset = dataset[dataset["family"] != ""].copy()
     dataset["actual_us"] = pd.to_numeric(dataset["label_operator_actual_dur_us"], errors="coerce").fillna(0.0)
 
@@ -369,6 +373,7 @@ def prepare_heavy_slice(input_csv: Path) -> pd.DataFrame:
                 "activation_size": max(safe_float(row.get("activation_size"), 0.0), 0.0),
                 "parameter_size": max(safe_float(row.get("parameter_size"), 0.0), 0.0),
                 "feat_io_bytes_sum": max(safe_float(row.get("feat_io_bytes_sum"), 0.0), 0.0),
+                "output_elements": output_bytes_sum / max(float(output_dtype_bytes), 1.0),
                 "feat_lookup_count": request_rows,
                 "feat_reduction_axes_product": max(safe_float(row.get("feat_reduction_axes_product"), 0.0), 0.0),
                 "feat_reduction_work_items": max(safe_float(row.get("feat_reduction_work_items"), 0.0), 0.0),
@@ -436,6 +441,18 @@ def default_params() -> dict[str, float]:
         "tau_micro": 0.0,
         "m_stride": 8.0,
         "eta_stride": 0.0,
+        "rho_relu_inf": 0.02,
+        "tau_relu_start": 0.0,
+        "rho_add_inf": 0.05,
+        "tau_add_start": 0.0,
+        "tau_add": 8.0,
+        "rho_mul_inf": 0.04,
+        "tau_mul_start": 0.0,
+        "tau_mul": 12.0,
+        "rho_sigmoid_inf": 0.04,
+        "tau_sigmoid_start": 0.0,
+        "tau_sigmoid": 20.0,
+        "rho_sigmoid_compute": 1e-4,
     }
 
 
@@ -458,6 +475,18 @@ PARAM_GRID: dict[str, list[float]] = {
     "tau_micro": [0.0, 0.25, 0.5, 1.0, 2.0, 4.0],
     "m_stride": [0.01, 0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20, 0.25, 0.50, 0.75, 1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0],
     "eta_stride": [0.0, 0.25, 0.5, 0.75, 1.0],
+    "rho_relu_inf": [0.008, 0.010, 0.012, 0.015, 0.020, 0.030, 0.040, 0.060, 0.080, 0.10, 0.12, 0.15, 0.18, 0.20, 0.24, 0.30],
+    "tau_relu_start": [0.0, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0],
+    "rho_add_inf": [0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.18],
+    "tau_add_start": [0.0, 0.5, 1.0, 2.0, 4.0, 8.0],
+    "tau_add": [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0, 32.0],
+    "rho_mul_inf": [0.01, 0.02, 0.03, 0.05, 0.08, 0.12, 0.18],
+    "tau_mul_start": [0.0, 0.5, 1.0, 2.0, 4.0, 8.0],
+    "tau_mul": [0.0, 4.0, 6.0, 8.0, 10.0, 12.0, 16.0, 20.0, 24.0, 32.0],
+    "rho_sigmoid_inf": [0.008, 0.010, 0.012, 0.015, 0.020, 0.030, 0.040, 0.060, 0.080],
+    "tau_sigmoid_start": [0.0, 0.5, 1.0, 2.0, 4.0, 8.0],
+    "tau_sigmoid": [0.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0, 28.0, 32.0, 40.0],
+    "rho_sigmoid_compute": [1e-6, 2e-6, 5e-6, 1e-5, 2e-5, 5e-5, 1e-4, 2e-4, 5e-4, 1e-3, 2e-3, 3e-3, 4e-3, 5e-3, 6e-3, 8e-3, 1e-2, 1.5e-2, 2e-2],
 }
 
 
@@ -625,6 +654,46 @@ def predict_transpose(frame: pd.DataFrame, params: dict[str, float], variant: st
     return copy_us + stride_us
 
 
+def predict_relu(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    stream = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    bw_inf = bw_peak * max(params["rho_relu_inf"], 1e-6)
+    bw_eff = effective_bandwidth(stream, bw_inf, params["tau_relu_start"])
+    return stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+
+
+def predict_add(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    stream = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    bw_inf = bw_peak * max(params["rho_add_inf"], 1e-6)
+    bw_eff = effective_bandwidth(stream, bw_inf, params["tau_add_start"])
+    return max(params["tau_add"], 0.0) + stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+
+
+def predict_mul(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    stream = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    bw_inf = bw_peak * max(params["rho_mul_inf"], 1e-6)
+    bw_eff = effective_bandwidth(stream, bw_inf, params["tau_mul_start"])
+    return max(params["tau_mul"], 0.0) + stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+
+
+def predict_sigmoid(frame: pd.DataFrame, params: dict[str, float]) -> np.ndarray:
+    stream = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
+    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
+    output_elements = frame["output_elements"].to_numpy(dtype=float)
+    peak_add = frame["peak_add_ops_per_us"].to_numpy(dtype=float)
+    bw_inf = bw_peak * max(params["rho_sigmoid_inf"], 1e-6)
+    bw_eff = effective_bandwidth(stream, bw_inf, params["tau_sigmoid_start"])
+    t_mem = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    t_compute = output_elements / np.clip(
+        peak_add * max(params["rho_sigmoid_compute"], 1e-9),
+        a_min=1e-6,
+        a_max=None,
+    )
+    return max(params["tau_sigmoid"], 0.0) + np.maximum(t_mem, t_compute)
+
+
 def predict_family(
     frame: pd.DataFrame,
     family: str,
@@ -646,6 +715,14 @@ def predict_family(
         return predict_matmul(frame, params, matmul_formulation)
     if family == "Transpose":
         return predict_transpose(frame, params, variant)
+    if family == "Relu":
+        return predict_relu(frame, params)
+    if family == "Add":
+        return predict_add(frame, params)
+    if family == "Mul":
+        return predict_mul(frame, params)
+    if family == "Sigmoid":
+        return predict_sigmoid(frame, params)
     raise KeyError(family)
 
 
@@ -725,7 +802,12 @@ def coordinate_search(
     return tuned
 
 
-def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str, matmul_formulation: str) -> dict[str, float]:
+def calibrate_params(
+    train_df: pd.DataFrame,
+    passes: int,
+    variant: str,
+    matmul_formulation: str = "tiny_occ",
+) -> dict[str, float]:
     params = default_params()
 
     def copy_objective(trial: dict[str, float]) -> float:
@@ -755,6 +837,18 @@ def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str, matmul_f
     def transpose_objective(trial: dict[str, float]) -> float:
         return family_mape(train_df, "Transpose", trial, variant, matmul_formulation)
 
+    def relu_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Relu", trial, variant, matmul_formulation)
+
+    def add_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Add", trial, variant, matmul_formulation)
+
+    def mul_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Mul", trial, variant, matmul_formulation)
+
+    def sigmoid_objective(trial: dict[str, float]) -> float:
+        return family_mape(train_df, "Sigmoid", trial, variant, matmul_formulation)
+
     for _ in range(max(int(passes), 1)):
         before = dict(params)
         params = coordinate_search(["rho_copy_inf", "tau_copy_start"], copy_objective, params, passes=1)
@@ -764,6 +858,15 @@ def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str, matmul_f
         params = coordinate_search(["rho_fma_inf", "M50", "N50", "K50"], gemm_objective, params, passes=1)
         params = coordinate_search(["occ_ref", "rho_tiny_inf", "K50_tiny", "tau_micro"], matmul_objective, params, passes=1)
         params = coordinate_search(["m_stride", "eta_stride"], transpose_objective, params, passes=1)
+        params = coordinate_search(["rho_relu_inf", "tau_relu_start"], relu_objective, params, passes=1)
+        params = coordinate_search(["rho_add_inf", "tau_add_start", "tau_add"], add_objective, params, passes=1)
+        params = coordinate_search(["rho_mul_inf", "tau_mul_start", "tau_mul"], mul_objective, params, passes=1)
+        params = coordinate_search(
+            ["rho_sigmoid_inf", "tau_sigmoid_start", "tau_sigmoid", "rho_sigmoid_compute"],
+            sigmoid_objective,
+            params,
+            passes=1,
+        )
         if params == before:
             break
     return params

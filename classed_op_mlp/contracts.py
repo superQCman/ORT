@@ -115,6 +115,7 @@ WITH_ANALYTICAL_PER_CLASS_NUMERIC_FEATURES = {
         "feat_reduction_axes_product",
         "feat_reduction_input_rank",
         "feat_reduction_output_rank",
+        "ana_calib_total_us",
     ),
     "compute_dominant": (
         "batch_size",
