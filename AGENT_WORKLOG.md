@@ -82,6 +82,28 @@ This project is a self-contained single-operator latency modeling pipeline for O
 - After each completed modification in this directory, create a git commit in the independent repository rooted at `/data/qc/dlrm/ORT/single_op_stage1_mlp`.
 - Do not commit project changes into the parent `ORT` repository.
 
+### 2026-04-01 - Refactor calibrated analytical model document
+
+Request summary:
+- Restructure `ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md` into a new standalone Markdown document under `analytical_calibrated`.
+- Keep only the explainable calibrated analytical model content.
+- Remove the pure analytical section, all quantitative error data, and repetitive or logically inconsistent passages.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a new analytical_calibrated design document focused only on the calibrated analytical model.
+- Reorganized the content around design goals, shared hardware submodels, parameter semantics, and per-family mechanisms.
+- Removed the pure analytical comparison track and all explicit quantitative error results from the new document.
+
+Validation run:
+- Documentation-only change. Verified the new Markdown file was created under `analytical_calibrated`.
+
+Open risks:
+- The new design document is intentionally a cleaned and refocused narrative, not a literal one-to-one mirror of the old note, so future code or README updates should keep the terminology aligned.
+
 ### 2026-04-01 - Document analytical feature correlation script
 
 Request summary:
