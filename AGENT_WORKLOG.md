@@ -82,6 +82,42 @@ This project is a self-contained single-operator latency modeling pipeline for O
 - After each completed modification in this directory, create a git commit in the independent repository rooted at `/data/qc/dlrm/ORT/single_op_stage1_mlp`.
 - Do not commit project changes into the parent `ORT` repository.
 
+### 2026-04-01 - Align layout_move and ReduceSum analytical formulas with design doc
+
+Request summary:
+- Align `Concat`, `ReduceSum`, and `Transpose` implementation with the calibrated analytical design note.
+- Rebuild analytical features, rerun classed-op analytical correlation analysis, and compare with the existing `classed_op_mlp_test_3_analytical_5_200_iter` analysis outputs.
+- Remove redundant analytical branches and unused parameters while preserving the exported `ana_calib_*` contract.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `Concat` now uses the explicit issue-limited copy ceiling in both the evaluator and exported analytical feature path.
+- `Transpose` now uses the suffix-block fit-based stride latency path described in the design doc instead of the previous baseline-per-thread working-set latency.
+- `ReduceSum` stays on the documented baseline `max(mem, compute)` formulation, and the evaluator/export paths now match on that definition.
+- Removed redundant evaluator-only formula branches and unused MatMul saturation parameters that were no longer part of the exported analytical path.
+- Simplified `build_analytical_features.py` by dropping the no-op `--variant` CLI parameter and unused prepared fields.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py --input-csv /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace/dataset_full.csv --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated --passes 3`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --input-data-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace --analytical-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/analytical_calibrated --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter --feature-branch with_analytical`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.py --data-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_3_analytical_5_200_iter --model-groups layout_move mixed_balanced --output-dir /tmp/classed_op_corr_after_alignment`
+
+Observed comparison against prior baseline analysis:
+- `layout_move` test Pearson improved from `0.858180` to `0.570139`? No overall improvement; aggregate Pearson worsened while `DWRE` improved from `55.97%` to `54.14%` and `MAPE` improved from `59.96%` to `59.32%`.
+- By op type in `layout_move` test:
+  - `Concat` stayed effectively unchanged at `DWRE 41.62% / MAPE 69.70%`.
+  - `Transpose` Pearson improved strongly (`0.558662` -> `0.957364`), but `DWRE` worsened (`61.31%` -> `64.18%`) and `MAPE` worsened (`40.38%` -> `42.19%`).
+- `mixed_balanced` / `ReduceSum` results stayed unchanged, confirming the cleanup did not change that analytical path.
+
+Open risks:
+- `Transpose` is now more doc-consistent but regressed on absolute error metrics even though correlation improved, so this path likely needs further formula refinement before replacing the previous baseline artifacts.
+- The classed dataset rebuild command resolves the provided output root to the next versioned artifact directory (`classed_op_mlp_test_4_analytical_5_200_iter`), while the correlation check here was intentionally run directly against the requested data-root for comparison.
+
 ### 2026-04-01 - Clarify Gather byte accounting symbols in analytical doc
 
 Request summary:

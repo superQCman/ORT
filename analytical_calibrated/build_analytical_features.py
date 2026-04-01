@@ -78,12 +78,6 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Coordinate-descent passes used when fitting heavy-family parameters on the full dataset.",
     )
-    parser.add_argument(
-        "--variant",
-        default="baseline",
-        choices=["baseline"],
-        help="Analytical variant used for the exported row-level features.",
-    )
     return parser.parse_args()
 
 
@@ -170,10 +164,6 @@ def prepare_heavy_prediction_frame(frame: pd.DataFrame) -> pd.DataFrame:
                 prefix *= int(dim)
             transpose_prefix_blocks = float(prefix)
 
-        transpose_stride_latency_us_baseline = analytical_eval.fit_latency_us(
-            output_bytes_sum / max(analytical_eval.safe_float(row.get("num_threads"), 1.0), 1.0),
-            row,
-        )
         transpose_suffix_block_bytes = float(output_dims[-1] * output_dtype_bytes) if output_dims else output_bytes_sum
         transpose_suffix_fit_level = analytical_eval.fit_level(transpose_suffix_block_bytes, row)
         transpose_stride_latency_us = analytical_eval.latency_from_level(transpose_suffix_fit_level, row)
@@ -208,7 +198,6 @@ def prepare_heavy_prediction_frame(frame: pd.DataFrame) -> pd.DataFrame:
                 "copy_chunk_mean_bytes": input_bytes_sum / max(float(len(input_entries)), 1.0),
                 "cacheline_bytes": cacheline,
                 "issue_slots_per_us": issue_slots,
-                "add_latency_us": add_lat_us,
                 "gather_row_bytes": row_bytes,
                 "gather_cachelines_per_row": float(cachelines_per_row),
                 "gather_src_latency_us": src_latency_us,
@@ -225,9 +214,6 @@ def prepare_heavy_prediction_frame(frame: pd.DataFrame) -> pd.DataFrame:
                 "matmul_n": float(matmul_n),
                 "matmul_k": float(matmul_k),
                 "transpose_prefix_blocks": transpose_prefix_blocks,
-                "transpose_stride_latency_us_baseline": transpose_stride_latency_us_baseline,
-                "transpose_suffix_block_bytes": transpose_suffix_block_bytes,
-                "transpose_suffix_fit_level": float(transpose_suffix_fit_level),
                 "transpose_stride_latency_us": transpose_stride_latency_us,
                 "reduce_acc_bytes_per_thread": reduce_acc_bytes_per_thread,
                 "reduce_acc_fit_level": float(reduce_acc_fit_level),
@@ -252,7 +238,11 @@ def _concat_components(frame: pd.DataFrame, params: dict[str, float]) -> tuple[n
     input_count = frame["input_count"].to_numpy(dtype=float)
     bw_inf = bw_peak * max(params["rho_copy_inf"], 1e-6)
     bw_eff = analytical_eval.effective_bandwidth(chunk, bw_inf, params["tau_copy_start"])
-    mem_us = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    t_stream = stream / np.clip(bw_eff, a_min=1e-6, a_max=None)
+    cacheline = frame["cacheline_bytes"].to_numpy(dtype=float)
+    issue_slots = frame["issue_slots_per_us"].to_numpy(dtype=float)
+    t_issue = (stream / np.clip(cacheline, a_min=1.0, a_max=None)) / np.clip(issue_slots, a_min=1e-6, a_max=None)
+    mem_us = np.maximum(t_stream, t_issue)
     overhead_us = input_count * max(params["tau_dispatch"], 0.0)
     compute_us = np.zeros(len(frame), dtype=float)
     total_us = mem_us + overhead_us
@@ -364,7 +354,7 @@ def _transpose_components(frame: pd.DataFrame, params: dict[str, float]) -> tupl
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
     prefix_blocks = frame["transpose_prefix_blocks"].to_numpy(dtype=float)
     threads = frame["num_threads"].to_numpy(dtype=float)
-    lat_us = frame["transpose_stride_latency_us_baseline"].to_numpy(dtype=float)
+    lat_us = frame["transpose_stride_latency_us"].to_numpy(dtype=float)
     copy_us = 2.0 * out_bytes / np.clip(
         bw_peak * max(params["rho_copy_inf"], 1e-6),
         a_min=1e-6,
@@ -515,7 +505,12 @@ def build_full_feature_artifacts(
     raw_df = pd.read_csv(input_csv, low_memory=False)
     rebuilt_df = rebuild_local_features(raw_df)
     heavy_prepared_df = prepare_heavy_prediction_frame(rebuilt_df)
-    full_params = analytical_eval.calibrate_params(heavy_prepared_df, passes=passes, variant="baseline")
+    full_params = analytical_eval.calibrate_params(
+        heavy_prepared_df,
+        passes=passes,
+        variant="baseline",
+        matmul_formulation="tiny_occ",
+    )
     feature_df = add_calibrated_analytical_columns(rebuilt_df, heavy_prepared_df, full_params)
 
     feature_columns = [

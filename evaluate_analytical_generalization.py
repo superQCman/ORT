@@ -1,3 +1,33 @@
+"""分析脚本：评估分析型 heavy-op 时延模型在留出泛化场景下的效果。
+
+主要作用：
+- 从数据集 CSV 中筛选重算子样本（Gather / ReduceSum / Gemm / MatMul / Transpose / Concat）。
+- 为各类算子构造分析型特征，如带宽、缓存层级、访存延迟、FMA 吞吐、MatMul/GEMM 维度等。
+- 在训练折上用坐标搜索标定各算子族的分析模型参数。
+- 在留一 case 和留一 combo 两种泛化划分下评估模型效果。
+- 输出重算子切片、每折参数、每族指标、JSON 汇总和 Markdown 报告。
+
+典型用法：
+- 使用默认输入和输出目录运行：
+  python evaluate_analytical_generalization.py
+- 仅执行 leave-one-case-out：
+  python evaluate_analytical_generalization.py --schemes leave_one_case_out
+- 切换分析变体：
+  python evaluate_analytical_generalization.py --variant explicit_unique_reuse
+- 切换 MatMul 公式：
+  python evaluate_analytical_generalization.py --matmul-formulation gemm_saturation
+- 限制每折标定轮数：
+  python evaluate_analytical_generalization.py --passes 2
+
+关键参数：
+- --input-csv：输入数据集 CSV。
+- --output-dir：输出目录，写出 CSV / JSON / Markdown 结果。
+- --schemes：评估划分方式，可选 leave_one_case_out、leave_one_combo_out。
+- --variant：分析模型变体，影响 Gather / Reduce / Copy / Transpose 等公式。
+- --matmul-formulation：MatMul 使用的公式版本。
+- --passes：每个 fold 的最大坐标下降标定轮数。
+"""
+
 from __future__ import annotations
 
 import argparse
@@ -404,10 +434,6 @@ def default_params() -> dict[str, float]:
         "rho_tiny_inf": 0.30,
         "K50_tiny": 0.0,
         "tau_micro": 0.0,
-        "rho_matmul_gemm_inf": 0.30,
-        "M50_matmul": 16.0,
-        "N50_matmul": 16.0,
-        "K50_matmul": 64.0,
         "m_stride": 8.0,
         "eta_stride": 0.0,
     }
@@ -430,10 +456,6 @@ PARAM_GRID: dict[str, list[float]] = {
     "rho_tiny_inf": [0.08, 0.12, 0.18, 0.24, 0.30, 0.40, 0.50, 0.60],
     "K50_tiny": [0.0, 16.0, 32.0, 64.0, 128.0, 256.0],
     "tau_micro": [0.0, 0.25, 0.5, 1.0, 2.0, 4.0],
-    "rho_matmul_gemm_inf": [0.08, 0.12, 0.18, 0.24, 0.30, 0.40, 0.50, 0.60],
-    "M50_matmul": [0.0, 4.0, 8.0, 16.0, 32.0, 64.0],
-    "N50_matmul": [0.0, 4.0, 8.0, 16.0, 32.0, 64.0],
-    "K50_matmul": [0.0, 16.0, 32.0, 64.0, 128.0, 256.0],
     "m_stride": [1.0, 2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0],
     "eta_stride": [0.0, 0.25, 0.5, 0.75, 1.0],
 }
@@ -570,18 +592,6 @@ def predict_matmul(frame: pd.DataFrame, params: dict[str, float], matmul_formula
     k_dim = frame["matmul_k"].to_numpy(dtype=float)
     flops = 2.0 * batch_count * m_dim * n_dim * k_dim
     peak_fma = frame["peak_fma_ops_per_us"].to_numpy(dtype=float)
-    bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
-    mem_bytes = frame["feat_io_bytes_sum"].to_numpy(dtype=float)
-    if matmul_formulation == "gemm_saturation":
-        rho_eff = (
-            max(params["rho_matmul_gemm_inf"], 1e-6)
-            * m_dim / np.clip(m_dim + max(params["M50_matmul"], 0.0), a_min=1e-6, a_max=None)
-            * n_dim / np.clip(n_dim + max(params["N50_matmul"], 0.0), a_min=1e-6, a_max=None)
-            * k_dim / np.clip(k_dim + max(params["K50_matmul"], 0.0), a_min=1e-6, a_max=None)
-        )
-        t_comp = flops / np.clip(peak_fma * rho_eff, a_min=1e-6, a_max=None)
-        t_mem = mem_bytes / np.clip(bw_peak, a_min=1e-6, a_max=None)
-        return np.maximum(t_comp, t_mem)
     threads = frame["num_threads"].to_numpy(dtype=float)
     occ_ref = max(params["occ_ref"], 1e-6)
     rho_eff = (
@@ -600,28 +610,12 @@ def predict_transpose(frame: pd.DataFrame, params: dict[str, float], variant: st
     bw_peak = frame["bw_peak_bytes_per_us"].to_numpy(dtype=float)
     prefix_blocks = frame["transpose_prefix_blocks"].to_numpy(dtype=float)
     threads = frame["num_threads"].to_numpy(dtype=float)
-    if variant == "baseline":
-        lat_us = frame["transpose_stride_latency_us_baseline"].to_numpy(dtype=float)
-        copy_us = 2.0 * out_bytes / np.clip(
-            bw_peak * max(params["rho_copy_inf"], 1e-6),
-            a_min=1e-6,
-            a_max=None,
-        )
-    else:
-        lat_us = frame["transpose_stride_latency_us_baseline"].to_numpy(dtype=float)
-        t_stream = 2.0 * out_bytes / np.clip(
-            bw_peak * max(params["rho_copy_inf"], 1e-6),
-            a_min=1e-6,
-            a_max=None,
-        )
-        cacheline = frame["cacheline_bytes"].to_numpy(dtype=float)
-        issue_slots = frame["issue_slots_per_us"].to_numpy(dtype=float)
-        t_issue = (2.0 * out_bytes / np.clip(cacheline, a_min=1.0, a_max=None)) / np.clip(
-            issue_slots,
-            a_min=1e-6,
-            a_max=None,
-        )
-        copy_us = np.maximum(t_stream, t_issue)
+    lat_us = frame["transpose_stride_latency_us"].to_numpy(dtype=float)
+    copy_us = 2.0 * out_bytes / np.clip(
+        bw_peak * max(params["rho_copy_inf"], 1e-6),
+        a_min=1e-6,
+        a_max=None,
+    )
     stride_us = prefix_blocks * lat_us / np.clip(
         np.power(np.clip(threads, a_min=1.0, a_max=None), max(params["eta_stride"], 0.0))
         * max(params["m_stride"], 1e-6),
@@ -768,15 +762,7 @@ def calibrate_params(train_df: pd.DataFrame, passes: int, variant: str, matmul_f
         params = coordinate_search(["kappa_reduce", "tau_reduce_start"], reduce_objective, params, passes=1)
         params = coordinate_search(["rho_gather_inf", "tau_gather_row_start", "m_gather"], gather_objective, params, passes=1)
         params = coordinate_search(["rho_fma_inf", "M50", "N50", "K50"], gemm_objective, params, passes=1)
-        if matmul_formulation == "gemm_saturation":
-            params = coordinate_search(
-                ["rho_matmul_gemm_inf", "M50_matmul", "N50_matmul", "K50_matmul"],
-                matmul_objective,
-                params,
-                passes=1,
-            )
-        else:
-            params = coordinate_search(["occ_ref", "rho_tiny_inf", "K50_tiny", "tau_micro"], matmul_objective, params, passes=1)
+        params = coordinate_search(["occ_ref", "rho_tiny_inf", "K50_tiny", "tau_micro"], matmul_objective, params, passes=1)
         params = coordinate_search(["m_stride", "eta_stride"], transpose_objective, params, passes=1)
         if params == before:
             break
