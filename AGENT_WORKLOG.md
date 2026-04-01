@@ -2414,3 +2414,36 @@ Open risks:
 - `Relu` remains the worst per-op analytical proxy inside `mixed_balanced` at roughly `37.7%` test MAPE; the group-level target is satisfied, but if future work requires every op to be `<30%`, `Relu` still needs a better kernel model.
 - `analytical_calibrated/evaluate_generalization.py` was only minimally updated for compatibility and reuse; if users start depending on its Markdown summaries for publication-quality light-family reporting, it may deserve a dedicated cleanup pass.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-04-01
+
+Summary:
+- Extended the `classed_op_mlp/analyze_analytical_feature_correlation.md` documentation so it now explains the current `mixed_balanced` analytical contract and the op-aware formulas for `Relu / Add / Mul / Sigmoid`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The usage doc now explains that `mixed_balanced` currently activates `ana_calib_total_us` as its heterogeneous group proxy.
+- The doc now records the calibrated analytical formulas and decomposition semantics for:
+  - `ReduceSum`
+  - `Relu`
+  - `Add`
+  - `Mul`
+  - `Sigmoid`
+- The doc now also explains how these op-aware submodels affect `--auto-feature-cols` and the interpretation of `mixed_balanced` correlation outputs.
+
+Validation run:
+- Manual doc review against:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/evaluate_analytical_generalization.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/contracts.py`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter/analysis/active_analytical_feature_correlation_suite/mixed_balanced/summary.md`
+
+Key results:
+- The doc now reflects that `Relu / Add / Mul / Sigmoid` no longer come from the old `generic_mixed` fallback in the current analytical pipeline.
+- The doc now reflects that `mixed_balanced` group-level correlation should be interpreted primarily through `ana_calib_total_us`.
+
+Open risks:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md` already had separate user-owned worktree edits outside the newly documented formula section; the commit for this task stages only the new analytical-model explanation hunk, not unrelated edits.
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
