@@ -82,6 +82,26 @@ This project is a self-contained single-operator latency modeling pipeline for O
 - After each completed modification in this directory, create a git commit in the independent repository rooted at `/data/qc/dlrm/ORT/single_op_stage1_mlp`.
 - Do not commit project changes into the parent `ORT` repository.
 
+### 2026-04-01 - Add classed_op_mlp metrics table to README
+
+Request summary:
+- Read `classed_op_mlp_test_7_analytical_5_200_iter/models/training_summary.json`.
+- Write each model-group metric plus the overall metric into a table in `classed_op_mlp/README.md`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a new `训练结果摘要` section to the classed-op README.
+- Documented the test-split MAE, RMSE, R², MAPE, and median APE for `gather`, `layout_move`, `view_meta`, `mixed_balanced`, `compute_dominant`, and `overall` from the requested training summary artifact.
+
+Validation run:
+- Documentation-only change. Verified the README table values against `artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter/models/training_summary.json`.
+
+Open risks:
+- The README now mirrors a specific artifact version (`classed_op_mlp_test_7_analytical_5_200_iter`); it will become stale if later training runs replace the recommended artifact without updating the table.
+
 ### 2026-04-01 - Promote validated analytical inputs for classed_op_mlp and add CSV validator
 
 Request summary:

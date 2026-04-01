@@ -269,6 +269,19 @@
 | `feat_gemm_mac_count` | 总 MAC 数。 |
 | `feat_gemm_bytes_per_mac` | 每 MAC 字节开销。 |
 
+## 训练结果摘要
+
+以下指标来自 [training_summary.json](/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_7_analytical_5_200_iter/models/training_summary.json) 的 test split。
+
+| 类别 | Test MAE (us) | Test RMSE (us) | Test R² | Test MAPE | Test Median APE |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| gather | 24650.27 | 50338.33 | 0.986697 | 5.2890% | 3.7707% |
+| layout_move | 124.68 | 984.83 | 0.900253 | 5.4924% | 3.5239% |
+| view_meta | 0.95 | 2.47 | 0.909712 | 5.1043% | 3.2280% |
+| mixed_balanced | 15311.13 | 38624.96 | 0.988807 | 6.2514% | 4.0284% |
+| compute_dominant | 1633.81 | 4437.36 | 0.989298 | 6.7293% | 4.1943% |
+| overall | 24650.27 | 50338.33 | 0.986697 | 5.2890% | 3.7707% |
+
 ## 运行
 
 ```bash
