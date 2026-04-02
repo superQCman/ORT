@@ -2612,3 +2612,24 @@ Validation run:
 Open risks:
 - This is a documentation-only restructuring, so it should remain aligned with the calibrated design note if the exported formulas are changed later.
 - The repository may still contain unrelated user edits outside this file pair, and they were intentionally not touched.
+
+## 2026-04-02
+
+Summary:
+- Added a standalone reasonable-justification subsection to the grouped `逐元素算子` analysis so its structure matches the other operator families.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_MODEL_PAPER_WRITEUP.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Kept the unified elementwise formula template unchanged.
+- Added a dedicated explanation for why the grouped model is appropriate for `Relu`, `Add`, `Mul`, and `Sigmoid`.
+- Preserved the per-operator distinctions through the parameter mapping table and `Sigmoid` compute path.
+
+Validation run:
+- Manual doc review of the updated `4.3 逐元素算子` section.
+
+Open risks:
+- This is a prose-only addition, so it should remain aligned with the exported analytical features if the calibrated formulas change later.
+- Other unrelated user edits in the repository, if any, were left untouched.
