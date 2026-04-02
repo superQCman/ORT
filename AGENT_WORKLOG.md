@@ -2588,3 +2588,27 @@ Validation run:
 Open risks:
 - This is a prose-only consolidation, so it should stay synchronized with the design doc if any of the per-operator formulas are changed later.
 - The repository still has unrelated user-owned changes in other files outside this task scope, and they were left untouched.
+
+## 2026-04-02
+
+Summary:
+- Re-expressed the `Relu / Add / Mul / Sigmoid` section in the paper-style analytical write-up with a single unified formula template and a parameter mapping table.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_MODEL_PAPER_WRITEUP.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Reduced repeated per-operator derivations in the elementwise section.
+- Preserved the shared bandwidth model once at the group level.
+- Kept operator-specific behavior through a unified parameter mapping table:
+  - `Relu`: pure memory-dominant path
+  - `Add` / `Mul`: memory path plus fixed overhead
+  - `Sigmoid`: memory path plus nonlinear compute path
+
+Validation run:
+- Manual doc review of the updated `逐元素算子` section and the renamed downstream headings.
+
+Open risks:
+- This is a documentation-only restructuring, so it should remain aligned with the calibrated design note if the exported formulas are changed later.
+- The repository may still contain unrelated user edits outside this file pair, and they were intentionally not touched.

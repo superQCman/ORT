@@ -123,55 +123,36 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 `Relu`、`Add`、`Mul` 与 `Sigmoid` 都属于逐元素算子，整体上共享“流式读写 + 轻量逐元素计算”的基本形态。其中，`Relu` 主要表现为内存主导的单输入算子，`Add` 与 `Mul` 属于二元逐元素算子，除流量搬运外还存在固定结构性开销，而 `Sigmoid` 则进一步引入不可忽略的非线性计算路径。因此，这四类算子适合在统一框架下分别建模，而不必重复引入相同的访存解释。
 
-#### 4.3.2 `Relu`
+#### 4.3.2 统一范式
 
-设总流量为 `S_stream = feat_io_bytes_sum`，则
+设总流量为 `S_stream = feat_io_bytes_sum`，输出元素个数为 `N_out`。对任一逐元素算子 `o`，定义
 
-`BW_relu_eff = BW_eff(S_stream; BW_peak * rho_relu_inf, tau_relu_start)`，
+`BW_o_eff = BW_eff(S_stream; BW_peak * rho_o_inf, tau_o_start)`，
 
-`T_relu = S_stream / BW_relu_eff`。
+`T_mem,o = S_stream / BW_o_eff`，
 
-由于 `Relu` 的逐元素逻辑仅包含简单比较与选择，因此可直接视为流式访存主导算子，此时 `T_total = T_mem = T_relu`，`T_compute = 0`，`T_overhead = 0`。`rho_relu_inf` 描述稳态带宽上限，`tau_relu_start` 描述小张量或短流量样本的启动损失。
+`T_comp,o = chi_o * N_out / (PeakAdd(T) * rho_sigmoid_compute)`，
 
-#### 4.3.3 `Add` 与 `Mul`
+`T_total,o = T_over,o + max(T_mem,o, T_comp,o)`。
 
-`Add` 与 `Mul` 均属于二元逐元素算子。设总流量仍记为 `S_stream = feat_io_bytes_sum`，则
+其中，`chi_o` 表示是否存在非线性计算路径，`T_over,o` 表示算子自身的固定结构性开销。对于 `Relu`、`Add`、`Mul`，`chi_o = 0`；对于 `Sigmoid`，`chi_o = 1`。各算子的参数对应关系如下：
 
-`BW_add_eff = BW_eff(S_stream; BW_peak * rho_add_inf, tau_add_start)`，
+| 算子 | `rho_o_inf` | `tau_o_start` | `T_over,o` |
+| --- | --- | --- | --- |
+| `Relu` | `rho_relu_inf` | `tau_relu_start` | `0` |
+| `Add` | `rho_add_inf` | `tau_add_start` | `tau_add` |
+| `Mul` | `rho_mul_inf` | `tau_mul_start` | `tau_mul` |
+| `Sigmoid` | `rho_sigmoid_inf` | `tau_sigmoid_start` | `tau_sigmoid` |
 
-`T_add = S_stream / BW_add_eff + tau_add`。
+因此，`Relu` 的总时延可退化为纯访存项，`Add` 和 `Mul` 则是在访存项之上叠加固定结构开销，而 `Sigmoid` 还需在访存路径与非线性计算路径之间取主导项。这样写的好处是，只保留一套统一公式范式，而不必为四个算子分别重复展开相同的带宽建模逻辑。
 
-同理，
+### 4.4 Gemm 算子
 
-`BW_mul_eff = BW_eff(S_stream; BW_peak * rho_mul_inf, tau_mul_start)`，
-
-`T_mul = S_stream / BW_mul_eff + tau_mul`。
-
-其中，`rho_add_inf` 与 `rho_mul_inf` 分别表示二者在大流量稳态下的渐近有效带宽系数，`tau_add_start` 与 `tau_mul_start` 表示带宽路径的启动成本，`tau_add` 与 `tau_mul` 则用于吸收各自固定的结构性开销。与 `Relu` 相比，`Add` 和 `Mul` 除了数据搬运，还需要显式保留多输入合并、边界处理和调度管理带来的额外代价。
-
-#### 4.3.4 `Sigmoid`
-
-`Sigmoid` 同样是逐元素算子，但其非线性计算路径不可忽略。设总流量为 `S_stream = feat_io_bytes_sum`，输出元素个数为 `N_out`，则
-
-`BW_sigmoid_eff = BW_eff(S_stream; BW_peak * rho_sigmoid_inf, tau_sigmoid_start)`，
-
-`T_mem = S_stream / BW_sigmoid_eff`，
-
-`PeakSigmoidEff(T) = PeakAdd(T) * rho_sigmoid_compute`，
-
-`T_compute = N_out / PeakSigmoidEff(T)`，
-
-`T_sigmoid = tau_sigmoid + max(T_mem, T_compute)`。
-
-其中，`rho_sigmoid_inf` 用于描述稳态访存带宽折减，`tau_sigmoid_start` 用于描述带宽路径的启动损耗，`rho_sigmoid_compute` 用于将向量加法峰值吞吐缩放为有效非线性计算上限，`tau_sigmoid` 则用于刻画固定 kernel 开销。与 `Relu`、`Add`、`Mul` 不同，`Sigmoid` 的主导瓶颈可能在访存侧，也可能在计算侧，因此需要采用 `max(T_mem, T_compute)` 的联合刻画方式。
-
-### 4.7 Gemm 算子
-
-#### 4.7.1 执行机理分析
+#### 4.4.1 执行机理分析
 
 `Gemm` 是 DLRM 中典型的计算密集型算子，其主导成本通常来自矩阵乘加运算。然而，直接使用理想 roofline 模型会忽略一个关键事实：当矩阵维度不足以支撑 kernel tile 饱和时，实际持续 FMA 利用率会显著低于理论峰值。此外，packing、边界 tile 和并行分块不理想等因素也会进一步降低有效算术吞吐。
 
-#### 4.7.2 模型构建
+#### 4.4.2 模型构建
 
 设矩阵维度为 `M`、`N`、`K`，则总浮点操作数为
 
@@ -193,17 +174,17 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 `T_gemm = max(T_mem, T_compute)`。
 
-#### 4.7.3 合理性论证
+#### 4.4.3 合理性论证
 
 `M50`、`N50` 与 `K50` 的引入，本质上是在刻画不同维度接近“半饱和”时的效率退化规律。当某一维过小，kernel 难以充分填充微核或 tile，持续 FMA 利用率便会下降。该模型因此不是单纯拟合常数，而是在保留 roofline 主结构的基础上，补充了 shape saturation 对实际吞吐的影响。
 
-### 4.8 MatMul 算子
+### 4.5 MatMul 算子
 
-#### 4.8.1 执行机理分析
+#### 4.5.1 执行机理分析
 
 当前 `/MatMul` 更接近大量 tiny batched matmul，而非标准大矩阵乘。其性能瓶颈并不完全由理论 FLOPs 决定，而更多取决于微核占用率不足、批量切分下的启动代价以及小维度导致的 sustained utilization 下降。因此，`MatMul` 不能简单视为缩小版 `Gemm`。
 
-#### 4.8.2 模型构建
+#### 4.5.2 模型构建
 
 设 batch 数为 `B_mat`，矩阵维度为 `M`、`N`、`K`，则总浮点操作数为
 
@@ -225,17 +206,17 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 `T_matmul = T_compute + T_overhead`。
 
-#### 4.8.3 合理性论证
+#### 4.5.3 合理性论证
 
 该模型的核心在于显式刻画 tiny matmul 的 occupancy 问题。`occ_ref` 对应微核接近饱和时的参考尺度，当 `M` 或 `N` 远小于该尺度时，实际利用率会快速下降。与此同时，批次级微核启动开销会在小 batch 或线程数较低时被放大，因此需要通过 `tau_micro` 单独建模。该处理能够更真实地反映 tiny batched matmul 与常规 `Gemm` 的机制差异。
 
-### 4.9 Transpose 算子
+### 4.6 Transpose 算子
 
-#### 4.9.1 执行机理分析
+#### 4.6.1 执行机理分析
 
 `Transpose` 在总体数据量上接近 copy-like kernel，但其性能并不完全由总字节量决定。根本原因在于转置会改变数据访问顺序，使得读写路径中出现明显的 stride 访问，从而破坏局部性并降低线程扩展效率。因此，`Transpose` 的模型必须在“流式搬运主项”之外，额外引入 stride penalty。
 
-#### 4.9.2 模型构建
+#### 4.6.2 模型构建
 
 设输出字节量为 `S_out`，前缀块数量为 `N_prefix`，单个连续后缀块的访存延迟记为 `lat_stride`。则 copy 主项写为
 
@@ -251,17 +232,17 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 其中，`lat_stride` 由后缀块工作集的 `fit -> lat` 路径得到，`m_stride` 用于描述可并发隐藏的 stride miss 数，`eta_stride` 则描述 stride penalty 随线程数增长时的有效缩放程度。
 
-#### 4.9.3 合理性论证
+#### 4.6.3 合理性论证
 
 若只保留 copy 项，则模型无法解释不同张量布局和不同线程数下的显著时延波动；而若只保留 stride 项，则又会忽略大规模读写搬运的主体成本。将二者相加可以自然对应 `Transpose` 的双重本质：既要完成完整的数据搬运，又要为非连续访问模式支付额外延迟代价。因此，该模型能更准确地反映转置算子在 locality 和并发扩展性方面的损失。
 
-### 4.10 Concat 算子
+### 4.7 Concat 算子
 
-#### 4.10.1 执行机理分析
+#### 4.7.1 执行机理分析
 
 `Concat` 本质上是多路输入沿目标维度顺序拼接的过程，其主要代价并非算术计算，而是多块数据的连续搬运以及每路输入对应的 dispatch、offset 更新和边界处理。特别是在单个输入块较小时，前端发射能力和 cacheline 粒度的 copy loop 效率可能成为更紧的约束。
 
-#### 4.10.2 模型构建
+#### 4.7.2 模型构建
 
 设总流量为
 
@@ -283,7 +264,7 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 `T_concat = max(T_stream, T_issue) + N_in * tau_dispatch`。
 
-#### 4.10.3 合理性论证
+#### 4.7.3 合理性论证
 
 该模型同时考虑了 `Concat` 的三类主要成本。首先，`T_stream` 刻画了大块 copy 的持续带宽需求；其次，`T_issue` 用于约束小块场景下 cacheline 粒度的发射能力；最后，`N_in * tau_dispatch` 则显式表达多输入拼接带来的结构性管理开销。三者结合后，模型能够区分“数据搬运慢”和“输入路数多导致调度慢”这两种常见情况，因此更适合作为 `layout_move` 类算子的解析表达。
 
