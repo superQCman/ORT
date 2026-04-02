@@ -117,109 +117,53 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 该模型保留了 `ReduceSum` 的两个核心约束。首先，归约并非纯 copy，因此需要使用 `kappa_reduce` 明确表示 steady-state 带宽退化；其次，随着归约轴乘积增大，逐元素加法数量也同步上升，因此必须引入 `PeakAdd(T)` 对算术吞吐进行约束。使用 `max(T_mem, T_compute)` 可以自然区分“访存瓶颈主导”和“加法吞吐主导”两种场景，符合该类算子的实际执行机理。
 
-### 4.3 Relu 算子
+### 4.3 逐元素算子
 
-#### 4.3.1 执行机理分析
+#### 4.3.1 共同机理
 
-`Relu` 属于典型 unary elementwise 算子。其逐元素计算逻辑非常简单，相比访存路径的代价可以忽略，因此在多数样本上表现为明显的 memory-dominant kernel。对于此类算子，关键不在于计算复杂度，而在于不同张量规模下的等效带宽变化。
+`Relu`、`Add`、`Mul` 与 `Sigmoid` 都属于逐元素算子，整体上共享“流式读写 + 轻量逐元素计算”的基本形态。其中，`Relu` 主要表现为内存主导的单输入算子，`Add` 与 `Mul` 属于二元逐元素算子，除流量搬运外还存在固定结构性开销，而 `Sigmoid` 则进一步引入不可忽略的非线性计算路径。因此，这四类算子适合在统一框架下分别建模，而不必重复引入相同的访存解释。
 
-#### 4.3.2 模型构建
+#### 4.3.2 `Relu`
 
-设总流量为 `S_stream = feat_io_bytes_sum`，定义
+设总流量为 `S_stream = feat_io_bytes_sum`，则
 
 `BW_relu_eff = BW_eff(S_stream; BW_peak * rho_relu_inf, tau_relu_start)`，
 
-则 `Relu` 的理论耗时写为
-
 `T_relu = S_stream / BW_relu_eff`。
 
-此时，
+由于 `Relu` 的逐元素逻辑仅包含简单比较与选择，因此可直接视为流式访存主导算子，此时 `T_total = T_mem = T_relu`，`T_compute = 0`，`T_overhead = 0`。`rho_relu_inf` 描述稳态带宽上限，`tau_relu_start` 描述小张量或短流量样本的启动损失。
 
-`T_total = T_mem = T_relu`，`T_compute = 0`，`T_overhead = 0`。
+#### 4.3.3 `Add` 与 `Mul`
 
-#### 4.3.3 合理性论证
-
-由于 `Relu` 仅执行简单比较与选择，其算术强度极低，因此将其视为流式访存主导是合理的。`rho_relu_inf` 用于描述稳态带宽上限，`tau_relu_start` 用于刻画小张量或短流量样本的启动损失。该模型能够在保持足够简洁的同时，准确表达 `Relu` 在不同规模输入下的时延变化规律。
-
-### 4.4 Add 算子
-
-#### 4.4.1 执行机理分析
-
-`Add` 是 binary elementwise 算子。与 `Relu` 相比，它不仅需要读取更多输入流量，还通常伴随更明显的 kernel 启动与调度成本。因此，`Add` 虽然整体上仍偏向 memory-dominant，但若忽略固定结构性开销，则会系统性低估小张量场景下的真实时延。
-
-#### 4.4.2 模型构建
-
-设总流量为 `S_stream = feat_io_bytes_sum`，定义
+`Add` 与 `Mul` 均属于二元逐元素算子。设总流量仍记为 `S_stream = feat_io_bytes_sum`，则
 
 `BW_add_eff = BW_eff(S_stream; BW_peak * rho_add_inf, tau_add_start)`，
 
-则
+`T_add = S_stream / BW_add_eff + tau_add`。
 
-`T_mem = S_stream / BW_add_eff`
-
-`T_overhead = tau_add`
-
-`T_add = T_mem + T_overhead`。
-
-#### 4.4.3 合理性论证
-
-该模型将 `Add` 拆分为“持续流量代价”和“固定结构开销”两部分。前者反映二元逐元素操作的数据搬运成本，后者用于吸收 kernel dispatch、边界处理及小规模调度开销。由于 `Add` 的算术操作本身十分简单，显式保留 `T_overhead` 比单独加入复杂计算项更符合其真实执行特征。
-
-### 4.5 Mul 算子
-
-#### 4.5.1 执行机理分析
-
-`Mul` 与 `Add` 在宏观执行形态上相似，均属于 binary elementwise kernel；但乘法在底层实现中的 steady-state 效率与固定开销不必与加法完全相同。因此，若强行共享同一组参数，反而会削弱解析模型对细粒度实现差异的表达能力。
-
-#### 4.5.2 模型构建
-
-设总流量仍记为 `S_stream = feat_io_bytes_sum`，定义
+同理，
 
 `BW_mul_eff = BW_eff(S_stream; BW_peak * rho_mul_inf, tau_mul_start)`，
 
-则
+`T_mul = S_stream / BW_mul_eff + tau_mul`。
 
-`T_mem = S_stream / BW_mul_eff`
+其中，`rho_add_inf` 与 `rho_mul_inf` 分别表示二者在大流量稳态下的渐近有效带宽系数，`tau_add_start` 与 `tau_mul_start` 表示带宽路径的启动成本，`tau_add` 与 `tau_mul` 则用于吸收各自固定的结构性开销。与 `Relu` 相比，`Add` 和 `Mul` 除了数据搬运，还需要显式保留多输入合并、边界处理和调度管理带来的额外代价。
 
-`T_overhead = tau_mul`
+#### 4.3.4 `Sigmoid`
 
-`T_mul = T_mem + T_overhead`。
-
-#### 4.5.3 合理性论证
-
-`Mul` 与 `Add` 共用相同的模型结构，但保留独立的 `rho_mul_inf`、`tau_mul_start` 和 `tau_mul`。这种处理方式既承认二者同属 binary elementwise kernel 的共性，又允许解析模型表达不同算子在实现层面上的效率差异，从而增强模型的可解释性与可迁移性。
-
-### 4.6 Sigmoid 算子
-
-#### 4.6.1 执行机理分析
-
-`Sigmoid` 虽然同样是逐元素算子，但与 `Relu`、`Add`、`Mul` 不同，其逐元素非线性计算代价不可忽略。因此，`Sigmoid` 的瓶颈可能来自流式访存，也可能来自每个输出元素的非线性函数计算，属于典型的 mixed-balanced 算子。
-
-#### 4.6.2 模型构建
-
-设总流量为 `S_stream = feat_io_bytes_sum`，输出元素个数为 `N_out`。定义
+`Sigmoid` 同样是逐元素算子，但其非线性计算路径不可忽略。设总流量为 `S_stream = feat_io_bytes_sum`，输出元素个数为 `N_out`，则
 
 `BW_sigmoid_eff = BW_eff(S_stream; BW_peak * rho_sigmoid_inf, tau_sigmoid_start)`，
 
-则访存路径为
-
-`T_mem = S_stream / BW_sigmoid_eff`。
-
-同时，本文使用向量加法峰值吞吐的缩放量近似 `Sigmoid` 的有效非线性计算上界，即
+`T_mem = S_stream / BW_sigmoid_eff`，
 
 `PeakSigmoidEff(T) = PeakAdd(T) * rho_sigmoid_compute`，
 
-故计算路径为
-
-`T_compute = N_out / PeakSigmoidEff(T)`。
-
-考虑到 kernel 启动与内部函数框架存在固定成本，最终总耗时写为
+`T_compute = N_out / PeakSigmoidEff(T)`，
 
 `T_sigmoid = tau_sigmoid + max(T_mem, T_compute)`。
 
-#### 4.6.3 合理性论证
-
-该模型的关键在于显式承认 `Sigmoid` 并非纯访存算子。若仅使用 `bytes / BW` 近似，则会在输出元素数量较大时显著低估非线性计算带来的延迟；若只保留计算项，则又无法解释大张量流量引起的带宽压力。通过 `max(T_mem, T_compute)`，模型能够自然识别不同样本中主导时延的核心机制，因此更适合作为 mixed-balanced 组的解析代理特征。
+其中，`rho_sigmoid_inf` 用于描述稳态访存带宽折减，`tau_sigmoid_start` 用于描述带宽路径的启动损耗，`rho_sigmoid_compute` 用于将向量加法峰值吞吐缩放为有效非线性计算上限，`tau_sigmoid` 则用于刻画固定 kernel 开销。与 `Relu`、`Add`、`Mul` 不同，`Sigmoid` 的主导瓶颈可能在访存侧，也可能在计算侧，因此需要采用 `max(T_mem, T_compute)` 的联合刻画方式。
 
 ### 4.7 Gemm 算子
 

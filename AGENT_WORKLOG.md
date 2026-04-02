@@ -2564,3 +2564,27 @@ Validation run:
 Open risks:
 - The new file is thesis-oriented prose rather than an implementation spec, so if the exported formulas change later, this paper note should be updated together with the design doc.
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp/ANALYTICAL_MODEL_V3_CALIBRATED_VS_PURE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/analyze_analytical_feature_correlation.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/run_pipeline.py`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/roofline_op_type_analysis/README.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/CLAUDE.md`, `/data/qc/dlrm/ORT/single_op_stage1_mlp/data.sh`, and `/data/qc/dlrm/ORT/single_op_stage1_mlp/model.sh` still contain unrelated or user-owned worktree changes and were intentionally left untouched.
+
+## 2026-04-02
+
+Summary:
+- Consolidated the `Relu / Add / Mul / Sigmoid` discussion in the paper-style analytical write-up to reduce repeated explanations while preserving each operator's distinct formula.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_MODEL_PAPER_WRITEUP.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Replaced four separate subsections with one grouped `逐元素算子` section.
+- Kept the shared memory-dominant explanation once at the group level.
+- Preserved the operator-specific formula differences:
+  - `Relu` remains a pure memory-dominant path.
+  - `Add` and `Mul` keep independent steady-state bandwidth and fixed overhead parameters.
+  - `Sigmoid` still uses the combined memory/compute `max(...)` formulation.
+
+Validation run:
+- Manual doc review against the updated `ANALYTICAL_MODEL_PAPER_WRITEUP.md` section structure.
+
+Open risks:
+- This is a prose-only consolidation, so it should stay synchronized with the design doc if any of the per-operator formulas are changed later.
+- The repository still has unrelated user-owned changes in other files outside this task scope, and they were left untouched.
