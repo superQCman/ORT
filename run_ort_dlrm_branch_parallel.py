@@ -35,6 +35,7 @@ from onnx import utils as onnx_utils
 from run_ort_dlrm import (
     _force_ops_to_cpu,
     _import_onnxruntime,
+    _patch_model_for_cann,
     _replace_loop_with_gather,
     _setup_cann_env,
     dump_op_shapes_to_csv,
@@ -1304,12 +1305,13 @@ def main() -> None:
 
     onnx_path = Path(args.onnx_path).resolve()
     effective_path = onnx_path
+    if args.use_cann:
+        effective_path = Path(_patch_model_for_cann(str(effective_path))).resolve()
     if not args.no_replace_loop:
         effective_path = Path(_replace_loop_with_gather(str(effective_path), override_bag_size=args.num_indices_per_lookup)).resolve()
-    if args.use_cann and args.force_cpu_ops:
-        ops = [t.strip() for t in args.force_cpu_ops.split(",") if t.strip()]
-        if ops:
-            effective_path = Path(_force_ops_to_cpu(str(effective_path), ops)).resolve()
+    ops = [t.strip() for t in args.force_cpu_ops.split(",") if t.strip()]
+    if args.use_cann and ops:
+        effective_path = Path(_force_ops_to_cpu(str(effective_path), ops)).resolve()
     print(f"[ORT] 加载模型: {effective_path}")
     print(f"[PAR] using model: {effective_path}")
 
