@@ -54,6 +54,17 @@ def _metric_summary(metric_rows: list[dict[str, object]], predicted_key: str, ac
     }
 
 
+def _build_sorted_frame(
+    rows: list[dict[str, object]],
+    columns: list[str],
+    sort_keys: list[str],
+) -> pd.DataFrame:
+    frame = pd.DataFrame(rows, columns=columns)
+    if frame.empty:
+        return frame
+    return frame.sort_values(sort_keys)
+
+
 def _format_order(order: tuple[int, ...]) -> str:
     return "->".join(str(item) for item in order)
 
@@ -204,6 +215,61 @@ def main() -> None:
     prediction_df = load_prediction_frame(artifact_root, split="test")
     combo_specs = build_combo_specs(prediction_df, ort_root=ort_root)
 
+    full_columns = [
+        "metric_scope",
+        "case_id",
+        "combo",
+        "batch_size",
+        "num_indices_per_lookup",
+        "inter_threads",
+        "expected_count",
+        "observed_count",
+        "coverage_ratio",
+        "predicted_e2e_us",
+        "actual_e2e_us",
+        "abs_error_us",
+        "ape",
+        "bottom_end_us",
+        "branch_pool_end_us",
+        "tail_barrier_us",
+    ]
+    partial_columns = [
+        "metric_scope",
+        "case_id",
+        "combo",
+        "batch_size",
+        "num_indices_per_lookup",
+        "inter_threads",
+        "expected_count",
+        "observed_count",
+        "missing_count",
+        "coverage_ratio",
+        "predicted_observed_subgraph_us",
+        "actual_observed_subgraph_us",
+        "abs_error_us",
+        "ape",
+        "missing_node_indices",
+        "missing_node_names",
+    ]
+    embedding_columns = [
+        "case_id",
+        "combo",
+        "batch_size",
+        "num_indices_per_lookup",
+        "inter_threads",
+        "kept_batch_count",
+        "launch_order",
+        "matches_fifo",
+        "max_gather_concurrency",
+        "matches_inter_threads",
+        "handoff_gap_mean_us",
+        "handoff_gap_min_us",
+        "handoff_gap_max_us",
+        "tail_start_gap_mean_us",
+        "tail_start_gap_min_us",
+        "tail_start_gap_max_us",
+    ]
+
     full_rows: list[dict[str, object]] = []
     partial_rows: list[dict[str, object]] = []
     embedding_rows: list[dict[str, object]] = []
@@ -292,9 +358,21 @@ def main() -> None:
             }
             partial_rows.append(row)
 
-    full_df = pd.DataFrame(full_rows).sort_values(["case_id", "batch_size", "num_indices_per_lookup"])
-    partial_df = pd.DataFrame(partial_rows).sort_values(["case_id", "batch_size", "num_indices_per_lookup"])
-    embedding_df = pd.DataFrame(embedding_rows).sort_values(["case_id", "batch_size", "num_indices_per_lookup"])
+    full_df = _build_sorted_frame(
+        full_rows,
+        columns=full_columns,
+        sort_keys=["case_id", "batch_size", "num_indices_per_lookup"],
+    )
+    partial_df = _build_sorted_frame(
+        partial_rows,
+        columns=partial_columns,
+        sort_keys=["case_id", "batch_size", "num_indices_per_lookup"],
+    )
+    embedding_df = _build_sorted_frame(
+        embedding_rows,
+        columns=embedding_columns,
+        sort_keys=["case_id", "batch_size", "num_indices_per_lookup"],
+    )
 
     full_df.to_csv(output_dir / "full_combo_metrics.csv", index=False)
     partial_df.to_csv(output_dir / "partial_combo_metrics.csv", index=False)

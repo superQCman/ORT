@@ -25,8 +25,9 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ### Current Scheduling Conventions
 
-- `v1` only targets the existing test artifact:
+- `v1` defaults to the existing test artifact:
   - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_200_iter_quick`
+- The CLI can override `--artifact-root` for schema-compatible artifacts from `single_op_stage1_mlp`.
 - Default per-op prediction source:
   - `models/combined/combined_predictions_test.csv`
 - Default ground-truth source for combo-level makespan:
@@ -134,3 +135,44 @@ Open risks:
 - Full-graph error is already moderate, but worst full combo still reaches about `14.7%` APE; branch-level calibration is still worth reserving.
 - Partial observed-subgraph error remains large because missing nodes are zero-duration placeholders in v1, so this report is diagnostic only and must not be read as E2E quality.
 - Embedding handoff gaps cluster in the low hundreds of microseconds, but rare outliers still appear in some combos; a later black-box correction should probably use robust features/statistics instead of raw maxima.
+
+### 2026-04-03 - Validate v1 on the 300-iter nodrop artifact and harden empty-report handling
+
+Request summary:
+- Run the static pipeline evaluator on `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_300_iter_quick_nodrop`.
+- If needed, fix compatibility issues and save the result in the nested git repository.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/run_static_pipeline_eval.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/tests/test_run_static_pipeline_eval.py`
+
+Behavior changes:
+- Hardened `run_static_pipeline_eval.py` so `full_rows` or `partial_rows` may be empty without crashing.
+- Empty reports now still emit CSV files with stable headers.
+- Confirmed the CLI works on the schema-compatible `300_iter_quick_nodrop` artifact via `--artifact-root`.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/run_static_pipeline_eval.py`
+- `pytest -q`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/run_static_pipeline_eval.py --artifact-root /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_300_iter_quick_nodrop --run-name v1_300_iter_quick_nodrop`
+- Output directory:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/v1_300_iter_quick_nodrop`
+- Validated result snapshot:
+  - total test combos: `331`
+  - full combos: `331`
+  - partial combos: `0`
+  - full-graph MAPE: `0.063821`
+  - full-graph p95 APE: `0.180852`
+  - worst full combo: `case_8_1_1 / bs2048_nip2000`, APE `0.223484`
+  - all combos recovered embedding launch order `0 -> 7`
+  - all combos recovered max gather concurrency equal to `inter_threads`
+- Comparison against the earlier `200_iter_quick` run:
+  - full combos increased from `49` to `331`
+  - partial combos dropped from `282` to `0`
+  - full-graph MAPE increased from `0.041985` to `0.063821`
+  - full-graph p95 APE increased from `0.121682` to `0.180852`
+
+Open risks:
+- `nodrop` removes the partial-coverage blind spot, but it also exposes more hard samples, so aggregate full-graph error is worse than the filtered artifact.
+- The worst nodrop errors are still dominated by embedding branch residuals, so branch-level calibration remains the most valuable next step.
