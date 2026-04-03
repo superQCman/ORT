@@ -176,3 +176,42 @@ Validation run:
 Open risks:
 - `nodrop` removes the partial-coverage blind spot, but it also exposes more hard samples, so aggregate full-graph error is worse than the filtered artifact.
 - The worst nodrop errors are still dominated by embedding branch residuals, so branch-level calibration remains the most valuable next step.
+
+### 2026-04-03 - Add project README and paper-style scheduler document
+
+Request summary:
+- Add a `README.md` under `ORT/static_pipeline_eval` to explain the static pipeline scheduling flow and how to use the project.
+- Add a second document in academic-paper style to formalize the scheduling method.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/STATIC_PIPELINE_SCHEDULER_PAPER.md`
+
+Behavior changes:
+- Added `README.md` as the engineering-facing entry document for:
+  - project goal
+  - scheduling flow
+  - directory structure
+  - CLI usage
+  - output artifact interpretation
+  - current validated runs
+- Added `STATIC_PIPELINE_SCHEDULER_PAPER.md` as a Chinese paper-style technical description covering:
+  - problem formulation
+  - graph reconstruction
+  - branch contraction
+  - FIFO slot scheduling with `inter_threads`
+  - truth extraction
+  - coverage regimes
+  - residual interpretation
+  - limitations
+
+Validation run:
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/run_static_pipeline_eval.py --help`
+- Manual inspection of:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/README.md`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/STATIC_PIPELINE_SCHEDULER_PAPER.md`
+
+Open risks:
+- The paper-style document is currently a technical-method note in论文写法, not a polished publication draft with formal experiments, citations, or figure/table numbering.
+- If this document is later turned into an external paper, the evaluation and related-work sections will need to be expanded substantially.
