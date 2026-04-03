@@ -467,6 +467,18 @@ def _peak_add_ops_per_us_vector(frame: pd.DataFrame) -> np.ndarray:
     return (throughput.clip(lower=1e-6) * lanes.clip(lower=1.0) * cpu_clock.clip(lower=1e-6) * 1e3 * active_cores.clip(lower=1.0)).to_numpy(dtype=float)
 
 
+def analytical_superfamily_name(family: str) -> str:
+    return "gemm_like" if str(family) in {"Gemm", "MatMul"} else str(family)
+
+
+def analytical_regime_name(family: str) -> str:
+    if str(family) == "Gemm":
+        return "large_gemm_saturation"
+    if str(family) == "MatMul":
+        return "tiny_batched_occ"
+    return "default"
+
+
 def add_calibrated_analytical_columns(
     rebuilt_df: pd.DataFrame,
     heavy_prepared_df: pd.DataFrame,
@@ -478,6 +490,8 @@ def add_calibrated_analytical_columns(
     out["ana_calib_compute_us"] = 0.0
     out["ana_calib_overhead_us"] = 0.0
     out["ana_calib_family"] = "unassigned"
+    out["ana_calib_superfamily"] = "unassigned"
+    out["ana_calib_regime"] = "unassigned"
 
     if not heavy_prepared_df.empty:
         heavy_parts: list[pd.DataFrame] = []
@@ -548,8 +562,11 @@ def add_calibrated_analytical_columns(
         out.loc[unassigned_mask, "ana_calib_overhead_us"] = 0.0
         out.loc[unassigned_mask, "ana_calib_family"] = "generic_fallback"
 
+    out["ana_calib_superfamily"] = out["ana_calib_family"].map(analytical_superfamily_name)
+    out["ana_calib_regime"] = out["ana_calib_family"].map(analytical_regime_name)
+
     for column in ANALYTICAL_FEATURE_COLUMNS:
-        if column == "ana_calib_family":
+        if column in {"ana_calib_family", "ana_calib_superfamily", "ana_calib_regime"}:
             out[column] = out[column].fillna("generic_fallback").astype(str)
         elif column == "op_class":
             out[column] = out[column].fillna("mixed_balanced").astype(str)
@@ -584,6 +601,8 @@ def build_full_feature_artifacts(
         "op_type",
         "op_class",
         "ana_calib_family",
+        "ana_calib_superfamily",
+        "ana_calib_regime",
         "ana_calib_total_us",
         "ana_calib_mem_us",
         "ana_calib_compute_us",

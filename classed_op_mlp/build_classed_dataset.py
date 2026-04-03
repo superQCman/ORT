@@ -103,7 +103,17 @@ def load_analytical_features(analytical_dir: Path) -> pd.DataFrame:
         raise FileNotFoundError(feature_csv)
     frame = pd.read_csv(feature_csv, low_memory=False)
     frame["row_uid"] = frame["row_uid"].astype(str)
-    keep_columns = ["row_uid", "op_class", "ana_calib_family", "ana_calib_total_us", "ana_calib_mem_us", "ana_calib_compute_us", "ana_calib_overhead_us"]
+    keep_columns = [
+        "row_uid",
+        "op_class",
+        "ana_calib_family",
+        "ana_calib_superfamily",
+        "ana_calib_regime",
+        "ana_calib_total_us",
+        "ana_calib_mem_us",
+        "ana_calib_compute_us",
+        "ana_calib_overhead_us",
+    ]
     return frame[[column for column in keep_columns if column in frame.columns]].copy()
 
 
@@ -111,6 +121,8 @@ def attach_analytical_columns(base_frame: pd.DataFrame, analytical_df: pd.DataFr
     analytical_columns = [
         "op_class",
         "ana_calib_family",
+        "ana_calib_superfamily",
+        "ana_calib_regime",
         "ana_calib_total_us",
         "ana_calib_mem_us",
         "ana_calib_compute_us",
@@ -238,7 +250,16 @@ def feature_manifest_payload(model_group: str, feature_branch: str) -> dict[str,
         "op_type_model_group_map": {},  # filled by the top-level manifest
         "target_column": TARGET_COLUMN,
         "target_columns": [TARGET_COLUMN] if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else [TARGET_COLUMN, ANALYTICAL_RESIDUAL_TARGET_COLUMN],
-        "analytical_feature_columns": [] if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else ["ana_calib_total_us", "ana_calib_mem_us", "ana_calib_compute_us", "ana_calib_overhead_us", "ana_calib_family", "op_class"],
+        "analytical_feature_columns": [] if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL else [
+            "ana_calib_total_us",
+            "ana_calib_mem_us",
+            "ana_calib_compute_us",
+            "ana_calib_overhead_us",
+            "ana_calib_family",
+            "ana_calib_superfamily",
+            "ana_calib_regime",
+            "op_class",
+        ],
         "all_features": categorical_features + numeric_features,
         "baseline_compare_dir": str(BASELINE_COMPARE_DIR),
     }
@@ -289,6 +310,8 @@ def build_classed_dataset_artifacts(
     if feature_branch == FEATURE_BRANCH_NO_ANALYTICAL:
         merged["op_class"] = merged["op_type"].map(resolve_op_class).fillna("mixed_balanced").astype(str)
         merged["ana_calib_family"] = "not_used"
+        merged["ana_calib_superfamily"] = "not_used"
+        merged["ana_calib_regime"] = "not_used"
     else:
         if analytical_dir is None:
             raise RuntimeError("analytical_dir is required for with_analytical branch")
@@ -299,6 +322,8 @@ def build_classed_dataset_artifacts(
             raise RuntimeError(f"analytical_calibrated features are missing for {missing} rows")
         merged["op_class"] = merged["op_class"].fillna("mixed_balanced").astype(str)
         merged["ana_calib_family"] = merged["ana_calib_family"].fillna("not_used").astype(str)
+        merged["ana_calib_superfamily"] = merged["ana_calib_superfamily"].fillna("not_used").astype(str)
+        merged["ana_calib_regime"] = merged["ana_calib_regime"].fillna("not_used").astype(str)
     merged_path = output_dir / "classed_dataset_full.csv"
     merged.to_csv(merged_path, index=False)
 
@@ -342,7 +367,15 @@ def build_classed_dataset_artifacts(
 
     analytical_feature_descriptions: dict[str, str] = {}
     if feature_branch != FEATURE_BRANCH_NO_ANALYTICAL:
-        for key in ["ana_calib_total_us", "ana_calib_mem_us", "ana_calib_compute_us", "ana_calib_overhead_us", "ana_calib_family"]:
+        for key in [
+            "ana_calib_total_us",
+            "ana_calib_mem_us",
+            "ana_calib_compute_us",
+            "ana_calib_overhead_us",
+            "ana_calib_family",
+            "ana_calib_superfamily",
+            "ana_calib_regime",
+        ]:
             if key in CLASSED_FEATURE_DESCRIPTIONS:
                 analytical_feature_descriptions[key] = CLASSED_FEATURE_DESCRIPTIONS[key]
 

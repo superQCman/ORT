@@ -2633,3 +2633,74 @@ Validation run:
 Open risks:
 - This is a prose-only addition, so it should remain aligned with the exported analytical features if the calibrated formulas change later.
 - Other unrelated user edits in the repository, if any, were left untouched.
+
+## 2026-04-04
+
+Summary:
+- Implemented the `gemm_like` superfamily metadata layer without changing the existing `Gemm` and `MatMul` analytical formulas or their exported `ana_calib_family` values.
+- Updated the analytical docs so they now distinguish semantic operator differences from the current modeling-regime split, and clarified why the default proxy still uses `2MNK` instead of explicitly counting the optional `Gemm` bias add term.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/contracts.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_CALIBRATED_MODEL_DESIGN.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/ANALYTICAL_MODEL_PAPER_WRITEUP.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `analytical_calibrated` now exports two additional metadata columns:
+  - `ana_calib_superfamily`
+    - `Gemm / MatMul -> gemm_like`
+    - other families keep their original family name
+  - `ana_calib_regime`
+    - `Gemm -> large_gemm_saturation`
+    - `MatMul -> tiny_batched_occ`
+    - all other families -> `default`
+- The existing analytical outputs remain backward-compatible:
+  - `ana_calib_total_us`
+  - `ana_calib_mem_us`
+  - `ana_calib_compute_us`
+  - `ana_calib_overhead_us`
+  - `ana_calib_family`
+- `classed_op_mlp` now passes the two new metadata columns through its merged dataset and manifest descriptions without changing the static `compute_dominant` grouping.
+- The `no_analytical` branch now fills `ana_calib_family`, `ana_calib_superfamily`, and `ana_calib_regime` with `not_used`.
+- The design note and paper-style write-up now explicitly state:
+  - `Gemm` and `MatMul` share a `gemm_like` superfamily
+  - their current separation is about execution regime, not merely whether `Gemm` has an optional bias term
+  - the exported proxy still uses `F_proxy = 2MNK`
+  - the current `MatMul` slice is tiny-batched, and prior GEMM-style unification ablations worsened held-out generalization
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/contracts.py /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated/build_analytical_features.py --output-dir /tmp/ort_single_op_stage1_mlp_gemm_like_analytical`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --input-data-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace --analytical-dir /tmp/ort_single_op_stage1_mlp_gemm_like_analytical --output-dir /tmp/ort_single_op_stage1_mlp_gemm_like_classed --feature-branch with_analytical`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/build_classed_dataset.py --input-data-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_no_trace --output-dir /tmp/ort_single_op_stage1_mlp_gemm_like_classed_no_analytical --feature-branch no_analytical`
+- Ran an in-memory compatibility check that executed the pre-change `add_calibrated_analytical_columns()` from `git show HEAD:analytical_calibrated/build_analytical_features.py` against the same rebuilt dataset and fitted parameters, then compared it against the new function.
+
+Key results:
+- The in-memory old-vs-new compatibility check showed exact equality on all existing exported columns:
+  - `ana_calib_total_us max_abs_diff = 0.0`
+  - `ana_calib_mem_us max_abs_diff = 0.0`
+  - `ana_calib_compute_us max_abs_diff = 0.0`
+  - `ana_calib_overhead_us max_abs_diff = 0.0`
+  - `ana_calib_family_identical = True`
+- Sample mapping checks confirmed:
+  - `Gemm -> gemm_like / large_gemm_saturation`
+  - `MatMul -> gemm_like / tiny_batched_occ`
+  - `Gather -> Gather / default`
+  - `generic_memory -> generic_memory / default`
+- The rebuilt `with_analytical` classed dataset kept:
+  - `compute_dominant -> (Gemm, MatMul)`
+  - `compute_dominant row_count = 9556`
+- The rebuilt `no_analytical` classed dataset confirmed:
+  - `ana_calib_family == not_used`
+  - `ana_calib_superfamily == not_used`
+  - `ana_calib_regime == not_used`
+  - for every row
+
+Open risks:
+- The compatibility check had to use an in-memory old-function replay rather than a direct diff against the existing artifact directory, because the currently checked-in `artifacts/latest/analytical_calibrated/analytical_features_full.csv` is not the same row slice as the freshly rebuilt export.
+- The new metadata columns are analysis-facing only; if future work wants to route models directly by `ana_calib_regime`, that would be a separate contract change and should be evaluated independently.

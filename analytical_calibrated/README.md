@@ -48,6 +48,8 @@
 | `ana_calib_compute_us` | 校准 analytical model 中计算主项对应的时延。 |
 | `ana_calib_overhead_us` | dispatch、启动、微核等结构性开销。 |
 | `ana_calib_family` | 使用的 analytical family 名称。 |
+| `ana_calib_superfamily` | 兼容导出的上层 analytical 超家族标签；`Gemm / MatMul` 统一为 `gemm_like`。 |
+| `ana_calib_regime` | 当前样本落到的具体公式区间；例如 `Gemm -> large_gemm_saturation`、`MatMul -> tiny_batched_occ`。 |
 | `op_class` | 三分类标签：`memory_pure` / `mixed_balanced` / `compute_dominant`。 |
 
 ## 运行

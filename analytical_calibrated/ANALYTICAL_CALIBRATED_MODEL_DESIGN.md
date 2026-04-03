@@ -23,6 +23,17 @@
 
 这些 family 都服务于 [analytical_calibrated](README.md) 子流水线，用于生成 `ana_calib_*` analytical proxy，并作为后续 classed-op MLP 的输入特征之一。
 
+其中，当前导出层额外保留了一层兼容元数据：
+
+- `ana_calib_family`
+  - 继续输出现有 family 名称，如 `Gemm`、`MatMul`
+- `ana_calib_superfamily`
+  - 把 `Gemm / MatMul` 统一映射到 `gemm_like`
+- `ana_calib_regime`
+  - 用来标记当前落到的具体公式区间，如 `large_gemm_saturation` 或 `tiny_batched_occ`
+
+这样做的目的是把“上层概念统一”与“下层公式分流”同时保留下来，而不破坏现有 CSV、报表与下游消费接口。
+
 ## 1. 设计目标与适用范围
 
 ### 1.1 设计目标
@@ -108,6 +119,13 @@
   - 主要是 stride-heavy transpose
 - `Concat`
   - 主要是多路大块输入沿末轴拼接
+
+从更高一层的机制视角看，`Gemm` 和 `MatMul` 都属于 `gemm_like` 超家族：主项都是矩阵乘，都会显式依赖 `PeakFMA(T)` 与 shape 相关的利用率退化。两者当前仍保留为独立 family，不是因为一个“有 bias、一个没有 bias”，而是因为当前 DLRM 切片里它们落在了两个完全不同的执行区间：
+
+- `Gemm`
+  - 大尺寸、tile saturation 主导
+- `MatMul`
+  - tiny batched、occupancy 与 micro-batch overhead 主导
 
 这类集中结构意味着 family 机制分析比通用 one-size-fits-all 公式更合适。
 
@@ -480,7 +498,7 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 
 #### 机制假设
 
-大 `Gemm` 不能只用标准 roofline：
+在更高一层，`Gemm` 与 `MatMul` 都属于 `gemm_like`。但当前 `Gemm` family 对应的是大尺寸矩阵乘切片，不能只用标准 roofline：
 
 `T = max(flops / PeakFMA, bytes / BW_peak)`
 
@@ -493,20 +511,29 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 
 #### 定义
 
-- `flops = 2MNK`
+- 语义上的矩阵乘主项：`F_mm = 2MNK`
+- 若 `Gemm` 同时带有 broadcast `C / bias` 加项，可额外记：
+  - `F_bias = MN`
+- 当前 exported analytical proxy 默认仍使用：
+  - `F_proxy = 2MNK`
 - `mem_bytes = input_bytes + weight_bytes + output_bytes`
-- `T_base = flops / (PeakFMA(T) * rho_fma_inf)`
+- `T_base = F_proxy / (PeakFMA(T) * rho_fma_inf)`
 - `rho_fma_eff = rho_fma_inf * M / (M + M50) * N / (N + N50) * K / (K + K50)`
 
 #### 时延模型
 
-`T_gemm = max(flops / (PeakFMA(T) * rho_fma_eff), mem_bytes / BW_peak)`
+`T_gemm = max(F_proxy / (PeakFMA(T) * rho_fma_eff), mem_bytes / BW_peak)`
 
 #### 解释
 
+- 这里把 `Gemm` 写成 `F_proxy = 2MNK`，并不是否认它语义上可能包含额外加项，而是因为当前 proxy 主要在建模矩阵乘主体
+- 若把 bias 加法也记进 FLOPs，则相对占比约为 `F_bias / F_mm = 1 / (2K)`
+- 在当前 `Gemm` 切片里，`K` 多数落在 `800 / 1600`，因此这部分通常只有约 `0.03% ~ 0.06%`；在现有全量 `Gemm` 行里最大也只到约 `0.21%`
+- 因而，当前误差主因仍然是 sustained utilization、tile saturation 和 packing 摊销，而不是是否显式计入 bias add FLOPs
 - `rho_fma_inf` 表示大尺寸下 MLAS 相对理论峰值的持续利用率
 - `M50/N50/K50` 表示三个维度各自的半饱和尺度
 - 当某一维偏小时，对应方向的有效利用率下降
+- 当前数据里这类 `Gemm` 主要是大尺寸形状，典型 `M≈1k+`，`N` 常见为 `800` 或 `1`，`K` 多为 `800 / 1600`
 
 因此，`Gemm` 的误差主要不是 roofline 结构完全错，而是需要显式描述 shape saturation 对 sustained efficiency 的影响。
 
@@ -514,7 +541,7 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 
 #### 机制假设
 
-当前 `/MatMul` 更接近大量 tiny batched matmul，而不是通用大矩阵乘。主要问题不是算力上限，而是：
+`MatMul` 在上层仍属于 `gemm_like`，但当前 `/MatMul` 对应的不是大矩阵乘区间，而是大量 tiny batched matmul。主要问题不是算力上限，而是：
 
 - `M/N` 太小
 - occupancy 很低
@@ -534,6 +561,14 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 - `occ_ref` 表示 tiny GEMM 接近微核饱和时的参考 occupancy 尺度
 - `rho_tiny_inf` 表示 tiny regime 下的渐近持续利用率
 - `tau_micro` 表示每个 micro-batch 的固定启动成本
+- 当前重算子切片里的 `/MatMul` 形状高度集中，主要接近：
+  - `batch_count ≈ 1024 ~ 1472`
+  - `M = N = 9`
+  - `K = 400`
+- 因而这里真正要表达的是 tiny-batched occupancy 问题，而不是把它视为缩小版的大 `Gemm`
+- 仓库中已经做过一次显式 ablation：把 `MatMul` 强行改成 GEMM-style saturation 后，held-out `MatMul` 泛化误差会变差
+  - leave-one-case-out `MatMul` mean test `MAPE: 28.77% -> 33.56%`
+  - leave-one-combo-out `MatMul` mean test `MAPE: 14.96% -> 17.88%`
 
 因此，`MatMul` 需要把 tiny regime 单独建模，而不是当作小一号的普通 `Gemm`。
 
@@ -601,6 +636,7 @@ embedding gather 不能近似成单一路径的 `bytes / BW`。它同时包含�
 2. family 公式显式引用共享硬件子模型
 3. 校准参数只出现在有物理语义的位置
 4. `ana_calib_mem_us`、`ana_calib_compute_us`、`ana_calib_overhead_us` 保持机制可拆解
+5. 导出接口允许保留 `family / superfamily / regime` 三层元数据，但不强行把不同 regime 压成同一条公式
 
 这样做的目的，是让 `analytical_calibrated` 既能产出可用的 proxy 特征，也能继续承担“机制解释层”的角色。
 

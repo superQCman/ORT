@@ -154,13 +154,23 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 #### 4.4.1 执行机理分析
 
-`Gemm` 是 DLRM 中典型的计算密集型算子，其主导成本通常来自矩阵乘加运算。然而，直接使用理想 roofline 模型会忽略一个关键事实：当矩阵维度不足以支撑 kernel tile 饱和时，实际持续 FMA 利用率会显著低于理论峰值。此外，packing、边界 tile 和并行分块不理想等因素也会进一步降低有效算术吞吐。
+从更高一层看，`Gemm` 与 `MatMul` 都属于 `gemm_like` 算子：主导成本都是矩阵乘主体，都会显式依赖 SIMD FMA 吞吐与 shape 相关的持续利用率退化。两者之所以仍在本文中分开建模，不是因为“一个有 bias、一个没有 bias”，而是因为当前 DLRM 切片里它们落在不同的执行区间。`Gemm` 对应的是大尺寸矩阵乘，其主导成本通常来自矩阵乘加运算本身；直接使用理想 roofline 模型会忽略一个关键事实：当矩阵维度不足以支撑 kernel tile 饱和时，实际持续 FMA 利用率会显著低于理论峰值。此外，packing、边界 tile 和并行分块不理想等因素也会进一步降低有效算术吞吐。
 
 #### 4.4.2 模型构建
 
-设矩阵维度为 `M`、`N`、`K`，则总浮点操作数为
+设矩阵维度为 `M`、`N`、`K`，则矩阵乘主项的浮点操作数为
 
-`F = 2MNK`。
+`F_mm = 2MNK`。
+
+若 `Gemm` 同时带有 broadcast `C / bias` 加项，则语义上还可以额外记
+
+`F_bias = MN`。
+
+不过，当前 exported analytical proxy 仍采用
+
+`F = F_mm = 2MNK`，
+
+因为它主要用于表征矩阵乘主体的计算体量。
 
 在带宽路径上，令输入、权重与输出总字节量为 `S_mem`，则
 
@@ -180,13 +190,13 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 #### 4.4.3 合理性论证
 
-`M50`、`N50` 与 `K50` 的引入，本质上是在刻画不同维度接近“半饱和”时的效率退化规律。当某一维过小，kernel 难以充分填充微核或 tile，持续 FMA 利用率便会下降。该模型因此不是单纯拟合常数，而是在保留 roofline 主结构的基础上，补充了 shape saturation 对实际吞吐的影响。
+`M50`、`N50` 与 `K50` 的引入，本质上是在刻画不同维度接近“半饱和”时的效率退化规律。当某一维过小，kernel 难以充分填充微核或 tile，持续 FMA 利用率便会下降。该模型因此不是单纯拟合常数，而是在保留 roofline 主结构的基础上，补充了 shape saturation 对实际吞吐的影响。需要说明的是，本文没有把 `F_bias` 纳入当前默认 proxy，并非否认 `Gemm` 语义上可能包含额外加项，而是因为在现有 `Gemm` slice 中这部分量级极小：其相对主乘加的占比约为 `1 / (2K)`，而当前 `K` 多数为 `800 / 1600`，因此通常只有约 `0.03% ~ 0.06%`，不足以主导建模误差。
 
 ### 4.5 MatMul 算子
 
 #### 4.5.1 执行机理分析
 
-当前 `/MatMul` 更接近大量 tiny batched matmul，而非标准大矩阵乘。其性能瓶颈并不完全由理论 FLOPs 决定，而更多取决于微核占用率不足、批量切分下的启动代价以及小维度导致的 sustained utilization 下降。因此，`MatMul` 不能简单视为缩小版 `Gemm`。
+当前 `/MatMul` 虽然同样属于 `gemm_like`，但更接近大量 tiny batched matmul，而非标准大矩阵乘。其性能瓶颈并不完全由理论 FLOPs 决定，而更多取决于微核占用率不足、批量切分下的启动代价以及小维度导致的 sustained utilization 下降。因此，`MatMul` 不能简单视为缩小版 `Gemm`。在当前重算子切片中，它的形状高度集中在 `batch_count ≈ 1024 ~ 1472, M = N = 9, K = 400` 这一 tiny-batched 区间。
 
 #### 4.5.2 模型构建
 
@@ -212,7 +222,7 @@ CPU 主频记为 `f_cpu`，cacheline 大小记为 `cacheline`。向量加法峰�
 
 #### 4.5.3 合理性论证
 
-该模型的核心在于显式刻画 tiny matmul 的 occupancy 问题。`occ_ref` 对应微核接近饱和时的参考尺度，当 `M` 或 `N` 远小于该尺度时，实际利用率会快速下降。与此同时，批次级微核启动开销会在小 batch 或线程数较低时被放大，因此需要通过 `tau_micro` 单独建模。该处理能够更真实地反映 tiny batched matmul 与常规 `Gemm` 的机制差异。
+该模型的核心在于显式刻画 tiny matmul 的 occupancy 问题。`occ_ref` 对应微核接近饱和时的参考尺度，当 `M` 或 `N` 远小于该尺度时，实际利用率会快速下降。与此同时，批次级微核启动开销会在小 batch 或线程数较低时被放大，因此需要通过 `tau_micro` 单独建模。该处理能够更真实地反映 tiny batched matmul 与常规 `Gemm` 的机制差异。更重要的是，仓库中的 held-out ablation 已经表明：若强行把当前 `MatMul` 改写成 GEMM-style saturation 形式，`MatMul` 的泛化误差会进一步升高，因此本文保留了单独的 tiny-batched 公式。
 
 ### 4.6 Transpose 算子
 

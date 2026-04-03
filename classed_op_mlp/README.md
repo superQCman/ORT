@@ -20,6 +20,16 @@
 
 - [analytical_calibrated](/data/qc/dlrm/ORT/single_op_stage1_mlp/analytical_calibrated)
 
+当前 `with_analytical` 导出除了原有 `ana_calib_family` 之外，还会额外保留两列兼容元数据：
+
+- `ana_calib_superfamily`
+  - `Gemm / MatMul -> gemm_like`
+- `ana_calib_regime`
+  - `Gemm -> large_gemm_saturation`
+  - `MatMul -> tiny_batched_occ`
+
+这两列只用于分析、路由解释和下游检查，不改变现有 `compute_dominant` 分组，也不替换原有 `ana_calib_family`。
+
 ## 静态分桶
 
 - `gather`

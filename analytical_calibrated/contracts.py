@@ -102,6 +102,8 @@ ANALYTICAL_FEATURE_COLUMNS = (
     "ana_calib_compute_us",
     "ana_calib_overhead_us",
     "ana_calib_family",
+    "ana_calib_superfamily",
+    "ana_calib_regime",
     "op_class",
 )
 
@@ -131,6 +133,8 @@ ANALYTICAL_FEATURE_DESCRIPTIONS = {
     "ana_calib_compute_us": "校准 analytical model 中计算主项对应的时延。",
     "ana_calib_overhead_us": "校准 analytical model 中 dispatch、启动或微核等结构性开销。",
     "ana_calib_family": "当前样本使用的 analytical family 或通用 proxy 名称。",
+    "ana_calib_superfamily": "兼容导出的上层 analytical 超家族标签；`Gemm/MatMul` 统一映射到 `gemm_like`。",
+    "ana_calib_regime": "当前 analytical 公式所属的具体执行区间；例如 `Gemm -> large_gemm_saturation`、`MatMul -> tiny_batched_occ`。",
     "op_class": "三分类标签，取值为 memory_pure / mixed_balanced / compute_dominant。",
 }
 
