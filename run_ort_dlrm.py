@@ -100,17 +100,21 @@ def _patch_model_for_cann(onnx_path: str) -> str:
     """
     预处理 ONNX 模型，修复已知 CANN 运行时兼容性问题：
 
-    问题：CANN 单算子模式（enable_cann_graph=0）下，
-          当 Mul 的两个输入 shape 不同（需要广播）时，CANN 会把该算子内部分解为
-          BroadcastToD + ElementwiseMul，而 BroadcastToD 在 ACL_COMPILE_SYS
-          （预编译库）中缺少对应 shape 组合的 kernel，抛出 ACL_ERROR_GE_FAILURE。
-          此问题对 int64 和 float32 类型均可能发生。
+    问题：
+      1. 当前 ORT+CANN 组合下，ONNX Gemm 往往不会被 CANNExecutionProvider 接管，
+         但等价的 MatMul + Add 可以正常落到 CANN。
+      2. CANN 单算子模式（enable_cann_graph=0）下，当 Mul 的两个输入 shape 不同
+         （需要广播）时，CANN 会把该算子内部分解为 BroadcastToD +
+         ElementwiseMul，而 BroadcastToD 在 ACL_COMPILE_SYS（预编译库）中
+         缺少对应 shape 组合的 kernel，抛出 ACL_ERROR_GE_FAILURE。
 
-    修复（两步）：
-      1. dtype 修复  —— 将所有含 int64 输入的 Mul 节点替换为
+    修复（三步）：
+      1. Gemm 改写    —— 将 Gemm 重写为等价的 MatMul(+Mul)+Add 链，
+                        让线性层默认走 CANN 支持更好的算子路径。
+      2. dtype 修复   —— 将所有含 int64 输入的 Mul 节点替换为
                         Cast(→fp32) + Mul(fp32) + Cast(→int64)，
                         避免 int64 BroadcastToD 在预编译库中完全缺失。
-      2. shape 修复  —— 对第 1 步得到的 fp32 Mul（或原始 fp32 广播 Mul），
+      3. shape 修复   —— 对第 2 步得到的 fp32 Mul（或原始 fp32 广播 Mul），
                         通过 onnx.shape_inference 推断各输入 rank；
                         若任意输入 rank < 参考输入 rank（即存在广播维度差），
                         则在 fp32 Mul 之前插入 Shape + Expand 节点，
@@ -127,50 +131,49 @@ def _patch_model_for_cann(onnx_path: str) -> str:
 
     model = onnx.load(onnx_path)
 
-    # ── 第一遍：先做 shape inference，以便获取各张量的 rank ──────────────────
-    try:
-        model = onnx_si.infer_shapes(model)
-    except Exception:
-        pass  # 推断失败（如含 Loop 子图）时跳过，后续以 rank=-1 处理
+    def _infer_shapes_if_possible(curr_model: Any) -> Any:
+        try:
+            return onnx_si.infer_shapes(curr_model)
+        except Exception:
+            return curr_model
 
+    def _collect_tensor_metadata(curr_graph: Any) -> Tuple[Dict[str, int], Dict[str, list], set[str]]:
+        dtype_map_local: Dict[str, int] = {}
+        shape_map_local: Dict[str, list] = {}
+        known_value_infos: set[str] = set()
+
+        for vi in list(curr_graph.value_info) + list(curr_graph.input) + list(curr_graph.output):
+            known_value_infos.add(vi.name)
+            if vi.type.HasField("tensor_type"):
+                dtype_map_local[vi.name] = vi.type.tensor_type.elem_type
+            if vi.type.HasField("tensor_type") and vi.type.tensor_type.HasField("shape"):
+                dims: list = []
+                for d in vi.type.tensor_type.shape.dim:
+                    if d.HasField("dim_value"):
+                        dims.append(d.dim_value)
+                    elif d.HasField("dim_param"):
+                        dims.append(d.dim_param)
+                    else:
+                        dims.append(None)
+                shape_map_local[vi.name] = dims
+
+        for init in curr_graph.initializer:
+            dtype_map_local[init.name] = init.data_type
+            shape_map_local[init.name] = list(init.dims)
+
+        for node in curr_graph.node:
+            if node.op_type != "Constant":
+                continue
+            for attr in node.attribute:
+                if attr.name == "value":
+                    dtype_map_local[node.output[0]] = attr.t.data_type
+                    shape_map_local[node.output[0]] = list(attr.t.dims)
+
+        return dtype_map_local, shape_map_local, known_value_infos
+
+    model = _infer_shapes_if_possible(model)
     graph = model.graph
-
-    # 收集所有张量的数据类型（value_info + inputs + outputs + initializers）
-    dtype_map: Dict[str, int] = {}
-    for vi in list(graph.value_info) + list(graph.input) + list(graph.output):
-        if vi.type.HasField("tensor_type"):
-            dtype_map[vi.name] = vi.type.tensor_type.elem_type
-    for init in graph.initializer:
-        dtype_map[init.name] = init.data_type
-    # Constant 节点
-    for node in graph.node:
-        if node.op_type == "Constant":
-            for attr in node.attribute:
-                if attr.name == "value":
-                    dtype_map[node.output[0]] = attr.t.data_type
-
-    # 收集所有张量的完整 shape（含静态值 + 符号维/ None for 纯动态）
-    # shape_map: name → List[int | str | None]
-    # 用于 broadcasting 检测：rank 相同但某维为 1 vs N 时，同样需要 Expand。
-    shape_map: Dict[str, list] = {}
-    for vi in list(graph.value_info) + list(graph.input) + list(graph.output):
-        if vi.type.HasField("tensor_type") and vi.type.tensor_type.HasField("shape"):
-            dims: list = []
-            for d in vi.type.tensor_type.shape.dim:
-                if d.HasField("dim_value"):
-                    dims.append(d.dim_value)
-                elif d.HasField("dim_param"):
-                    dims.append(d.dim_param)  # 符号维（如 "batch_size"）
-                else:
-                    dims.append(None)
-            shape_map[vi.name] = dims
-    for init in graph.initializer:
-        shape_map[init.name] = list(init.dims)
-    for node in graph.node:
-        if node.op_type == "Constant":
-            for attr in node.attribute:
-                if attr.name == "value":
-                    shape_map[node.output[0]] = list(attr.t.dims)
+    dtype_map, shape_map, known_value_info_names = _collect_tensor_metadata(graph)
 
     def _is_broadcast_dim(d_src, d_ref) -> bool:
         """判断 d_src 维是否需要广播到 d_ref：d_src==1 且 d_ref≠1（或动态）。"""
@@ -207,8 +210,163 @@ def _patch_model_for_cann(onnx_path: str) -> str:
     INT64  = TensorProto.INT64   # 7
     FLOAT  = TensorProto.FLOAT   # 1
 
+    def _register_value_info(name: str, elem_type: int) -> None:
+        if not name or name in known_value_info_names:
+            return
+        graph.value_info.append(helper.make_tensor_value_info(name, elem_type, None))
+        known_value_info_names.add(name)
+
+    def _make_scalar_const_node(base: str, suffix: str, value: float) -> Tuple[Any, str]:
+        const_name = f"__cann_patch_{base}_{suffix}_const"
+        const_node = helper.make_node(
+            "Constant",
+            inputs=[],
+            outputs=[const_name],
+            name=f"__cann_patch_{base}_{suffix}_const_node",
+            value=numpy_helper.from_array(np.array(value, dtype=np.float32), name=const_name),
+        )
+        dtype_map[const_name] = FLOAT
+        shape_map[const_name] = []
+        _register_value_info(const_name, FLOAT)
+        return const_node, const_name
+
+    def _transpose_shape(shape: list | None) -> list | None:
+        if shape is None or len(shape) < 2:
+            return shape
+        swapped = list(shape)
+        swapped[-1], swapped[-2] = swapped[-2], swapped[-1]
+        return swapped
+
+    gemm_nodes = []
+    gemm_patch_count = 0
+    for node in graph.node:
+        if node.op_type != "Gemm":
+            gemm_nodes.append(node)
+            continue
+
+        base = node.name.replace("/", "_").lstrip("_") or f"gemm_patch_{gemm_patch_count}"
+        attrs = {attr.name: helper.get_attribute_value(attr) for attr in node.attribute}
+        alpha = float(attrs.get("alpha", 1.0))
+        beta = float(attrs.get("beta", 1.0))
+        trans_a = int(attrs.get("transA", 0))
+        trans_b = int(attrs.get("transB", 0))
+
+        lhs_name = node.input[0]
+        rhs_name = node.input[1]
+        output_name = node.output[0]
+        output_dtype = dtype_map.get(output_name, dtype_map.get(lhs_name, FLOAT))
+        output_shape = shape_map.get(output_name)
+
+        if trans_a:
+            lhs_transposed = f"__cann_patch_{base}_transA"
+            gemm_nodes.append(
+                helper.make_node(
+                    "Transpose",
+                    inputs=[lhs_name],
+                    outputs=[lhs_transposed],
+                    name=f"__cann_patch_{base}_transpose_a",
+                    perm=[1, 0],
+                )
+            )
+            dtype_map[lhs_transposed] = dtype_map.get(lhs_name, output_dtype)
+            shape_map[lhs_transposed] = _transpose_shape(shape_map.get(lhs_name))
+            _register_value_info(lhs_transposed, dtype_map[lhs_transposed])
+            lhs_name = lhs_transposed
+
+        if trans_b:
+            rhs_transposed = f"__cann_patch_{base}_transB"
+            gemm_nodes.append(
+                helper.make_node(
+                    "Transpose",
+                    inputs=[rhs_name],
+                    outputs=[rhs_transposed],
+                    name=f"__cann_patch_{base}_transpose_b",
+                    perm=[1, 0],
+                )
+            )
+            dtype_map[rhs_transposed] = dtype_map.get(rhs_name, output_dtype)
+            shape_map[rhs_transposed] = _transpose_shape(shape_map.get(rhs_name))
+            _register_value_info(rhs_transposed, dtype_map[rhs_transposed])
+            rhs_name = rhs_transposed
+
+        has_bias = len(node.input) >= 3 and bool(node.input[2])
+        need_alpha_scale = not np.isclose(alpha, 1.0)
+        need_bias_add = has_bias and not np.isclose(beta, 0.0)
+        matmul_out = output_name if not need_alpha_scale and not need_bias_add else f"__cann_patch_{base}_matmul"
+
+        gemm_nodes.append(
+            helper.make_node(
+                "MatMul",
+                inputs=[lhs_name, rhs_name],
+                outputs=[matmul_out],
+                name=f"__cann_patch_{base}_matmul",
+            )
+        )
+        dtype_map[matmul_out] = output_dtype
+        if output_shape is not None:
+            shape_map[matmul_out] = list(output_shape)
+        _register_value_info(matmul_out, output_dtype)
+
+        current_out = matmul_out
+        if need_alpha_scale:
+            alpha_node, alpha_const = _make_scalar_const_node(base, "alpha", alpha)
+            scaled_out = output_name if not need_bias_add else f"__cann_patch_{base}_matmul_scaled"
+            gemm_nodes.append(alpha_node)
+            gemm_nodes.append(
+                helper.make_node(
+                    "Mul",
+                    inputs=[current_out, alpha_const],
+                    outputs=[scaled_out],
+                    name=f"__cann_patch_{base}_alpha_mul",
+                )
+            )
+            dtype_map[scaled_out] = output_dtype
+            if output_shape is not None:
+                shape_map[scaled_out] = list(output_shape)
+            _register_value_info(scaled_out, output_dtype)
+            current_out = scaled_out
+
+        if need_bias_add:
+            bias_name = node.input[2]
+            add_rhs = bias_name
+            if not np.isclose(beta, 1.0):
+                beta_node, beta_const = _make_scalar_const_node(base, "beta", beta)
+                scaled_bias = f"__cann_patch_{base}_bias_scaled"
+                gemm_nodes.append(beta_node)
+                gemm_nodes.append(
+                    helper.make_node(
+                        "Mul",
+                        inputs=[bias_name, beta_const],
+                        outputs=[scaled_bias],
+                        name=f"__cann_patch_{base}_beta_mul",
+                    )
+                )
+                dtype_map[scaled_bias] = dtype_map.get(bias_name, output_dtype)
+                if bias_name in shape_map:
+                    shape_map[scaled_bias] = list(shape_map[bias_name])
+                _register_value_info(scaled_bias, dtype_map[scaled_bias])
+                add_rhs = scaled_bias
+
+            gemm_nodes.append(
+                helper.make_node(
+                    "Add",
+                    inputs=[current_out, add_rhs],
+                    outputs=[output_name],
+                    name=f"__cann_patch_{base}_add",
+                )
+            )
+
+        gemm_patch_count += 1
+
+    if gemm_patch_count > 0:
+        del graph.node[:]
+        graph.node.extend(gemm_nodes)
+        model = _infer_shapes_if_possible(model)
+        graph = model.graph
+        dtype_map, shape_map, known_value_info_names = _collect_tensor_metadata(graph)
+
     new_nodes = []
-    patch_count = 0
+    mul_patch_count = 0
     expand_count = 0
 
     for node in graph.node:
@@ -226,7 +384,7 @@ def _patch_model_for_cann(onnx_path: str) -> str:
             continue
 
         # ── 步骤 1：插入 Cast(int64→float32) ────────────────────────────────
-        base = node.name.replace("/", "_").lstrip("_") or f"mul_patch_{patch_count}"
+        base = node.name.replace("/", "_").lstrip("_") or f"mul_patch_{mul_patch_count}"
         cast_fp_inputs = []
         for i, inp in enumerate(node.input):
             cast_out = f"__cann_patch_{base}_castfp_{i}"
@@ -242,7 +400,7 @@ def _patch_model_for_cann(onnx_path: str) -> str:
             # Cast 保持 shape 不变，将原输入的 shape 信息传递给 cast 输出
             if inp in shape_map:
                 shape_map[cast_out] = shape_map[inp]
-            graph.value_info.append(helper.make_tensor_value_info(cast_out, FLOAT, None))
+            _register_value_info(cast_out, FLOAT)
             cast_fp_inputs.append(cast_out)
 
         # ── 步骤 2：检测是否需要显式 Expand 以消除广播维度差 ────────────────
@@ -283,9 +441,7 @@ def _patch_model_for_cann(onnx_path: str) -> str:
                 )
                 new_nodes.append(shape_node)
                 dtype_map[ref_shape_name] = INT64
-                graph.value_info.append(
-                    helper.make_tensor_value_info(ref_shape_name, INT64, None)
-                )
+                _register_value_info(ref_shape_name, INT64)
                 ref_shape_node_inserted = True
 
             exp_name = f"__cann_patch_{base}_expanded_{i}"
@@ -298,16 +454,14 @@ def _patch_model_for_cann(onnx_path: str) -> str:
             new_nodes.append(exp_node)
             dtype_map[exp_name] = FLOAT
             shape_map[exp_name] = ref_shape  # 扩展后 shape = 参考 shape
-            graph.value_info.append(
-                helper.make_tensor_value_info(exp_name, FLOAT, None)
-            )
+            _register_value_info(exp_name, FLOAT)
             final_fp_inputs[i] = exp_name
             expand_count += 1
 
         # ── 步骤 3：插入 fp32 Mul（此时两输入 shape 相同，无 BroadcastToD）──
         mul_fp_out = f"__cann_patch_{base}_mulfp"
         dtype_map[mul_fp_out] = FLOAT
-        graph.value_info.append(helper.make_tensor_value_info(mul_fp_out, FLOAT, None))
+        _register_value_info(mul_fp_out, FLOAT)
 
         mul_fp_node = helper.make_node(
             "Mul",
@@ -327,9 +481,9 @@ def _patch_model_for_cann(onnx_path: str) -> str:
                 to=INT64,
             )
             new_nodes.append(cast_back_node)
-        patch_count += 1
+        mul_patch_count += 1
 
-    if patch_count == 0:
+    if gemm_patch_count == 0 and mul_patch_count == 0:
         return onnx_path  # 无需修改
 
     # 重建图节点列表
@@ -338,11 +492,18 @@ def _patch_model_for_cann(onnx_path: str) -> str:
 
     # 写入临时文件
     tmp_path = onnx_path + ".cann_patched.onnx"
+    try:
+        onnx.checker.check_model(model)
+    except Exception as e:
+        print(f"[PATCH] WARNING: onnx.checker 失败（{e}），继续保存")
     onnx.save(model, tmp_path)
-    print(
-        f"[PATCH] 已将 {patch_count} 个 int64 Mul 节点包装为 fp32 Mul"
-        f"（其中 {expand_count} 处额外插入 Expand 以消除广播维度差）"
-    )
+    if gemm_patch_count > 0:
+        print(f"[PATCH] 已将 {gemm_patch_count} 个 Gemm 节点改写为 MatMul(+Mul)+Add")
+    if mul_patch_count > 0:
+        print(
+            f"[PATCH] 已将 {mul_patch_count} 个 int64 Mul 节点包装为 fp32 Mul"
+            f"（其中 {expand_count} 处额外插入 Expand 以消除广播维度差）"
+        )
     print(f"[PATCH] 补丁模型保存到: {tmp_path}")
     return tmp_path
 
