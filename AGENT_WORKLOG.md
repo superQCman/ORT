@@ -215,3 +215,30 @@ Validation run:
 Open risks:
 - The paper-style document is currently a technical-method note in论文写法, not a polished publication draft with formal experiments, citations, or figure/table numbering.
 - If this document is later turned into an external paper, the evaluation and related-work sections will need to be expanded substantially.
+
+### 2026-04-03 - Rewrite scheduler paper into a more academic manuscript style
+
+Request summary:
+- Rewrite `STATIC_PIPELINE_SCHEDULER_PAPER.md` so it reads like an academic paper rather than an engineering note.
+- Remove repository/file-path-centric narration, avoid code variable names, describe the method in prose, and replace the pseudocode with a more standard paper-style algorithm block.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/STATIC_PIPELINE_SCHEDULER_PAPER.md`
+
+Behavior changes:
+- Reframed the document around formal problem formulation, execution semantics, task-graph construction, scheduling equations, and residual interpretation.
+- Removed explicit repository paths, CLI/file-level descriptions, and most engineering-facing workflow language from the paper document.
+- Replaced code-like feature names with mathematical symbols or full semantic descriptions.
+- Rewrote the scheduling pseudocode into a standard `Require/Ensure` academic algorithm format with numbered lines.
+
+Validation run:
+- `sed -n '1,260p' /data/qc/dlrm/ORT/static_pipeline_eval/STATIC_PIPELINE_SCHEDULER_PAPER.md`
+- Manual inspection for:
+  - removal of engineering file references
+  - prose-style methodological description
+  - standard paper-style pseudocode formatting
+
+Open risks:
+- The document is now much more manuscript-like, but it is still a methods paper draft rather than a submission-ready paper with citations, related work, theorem statements, or formatted tables/figures.
+- If this is later adapted to a formal venue template, equation numbering, algorithm environment styling, references, and experimental sections will still need another pass.

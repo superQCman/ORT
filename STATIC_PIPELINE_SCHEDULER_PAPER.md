@@ -1,363 +1,188 @@
-# 面向 ORT DLRM Branch-Parallel 执行的静态流水线排程方法
+# 面向 Branch-Parallel 推荐模型推理的静态流水线排程方法
 
 ## 摘要
 
-本文给出一种面向 ORT DLRM branch-parallel 执行的静态流水线排程方法，用于将已有单算子时延预测结果提升为整图级 end-to-end 时延估计。该方法复用 `single_op_stage1_mlp` 已输出的 per-op 预测值，从 `op_shapes` 重建 combo 级 DAG，将 8 条 embedding branch 折叠为复合任务，并引入由 `inter_threads` 控制的 FIFO 槽位调度机制，进而构建整图静态时间线。随后，方法从 `branch_parallel_op_timeline.csv` 中提取真实整图 span，并与预测结果进行误差对比。本文系统描述了问题定义、图重建策略、branch 折叠规则、排程算法、真值提取口径以及误差热点，为后续黑盒校准模型提供结构化基础。
+本文研究一种由单算子时延预测提升到整图端到端时延估计的静态排程方法。目标对象是一类具有多分支 embedding lookup 结构的推荐模型推理图，其运行时表现不仅由各算子的局部时延决定，还受到分支启动顺序、并发槽位竞争以及汇合后串行尾段等结构性因素影响。为此，本文提出一种结构可解释的静态流水线排程框架：首先由图结构描述恢复算子级有向无环图；随后将每条 embedding 分支折叠为复合任务，并用分支并行度参数刻画其受限并发语义；在此基础上构造包含底部子图、分支任务池、汇合屏障与尾部子图的统一任务图，并以确定性的先进先出槽位机制生成整图时间线。实验分析表明，该方法能够在不引入动态运行时特征的前提下，将单算子预测映射为具有较好可解释性的整图时延估计；同时，残差分布也揭示了后续黑盒校准最值得关注的结构区域，即 embedding 复合分支、分支交接间隙以及汇合后的短尾突发段。
 
 ## 1. 引言
 
-单算子性能建模是整图时延预测的基础，但并不足以直接给出高质量的 end-to-end 估计。即使单个算子的预测误差较小，整图误差仍然可能主要来自以下因素：
+整图时延预测不能被简化为单算子预测值的直接求和。其根本原因在于，现代推理图的运行时间不仅由局部计算代价决定，还受到图拓扑、并行资源约束和同步结构的共同支配。对于具有多条 embedding lookup 分支的推荐模型而言，这一问题尤为突出。虽然单个 embedding 算子的预测误差可能已经较小，但只要分支启动顺序、并发槽位占用范围或汇合后的尾部执行方式被错误建模，整图级误差仍会被显著放大。
 
-- branch 启动顺序
-- 并发槽位竞争
-- barrier 同步行为
-- join 之后的短尾段累计误差
+这类模型的一个关键特征在于，embedding 子图通常由多条结构相似的分支组成，而这些分支在运行时并非无约束地同时发射。相反，它们受到一个静态并行度参数的限制；在给定并行度下，先启动的分支会优先占用执行槽位，后续分支只有在已有槽位释放之后才能进入执行。由此可见，若整图预测器忽略分支层面的排队和同步语义，仅把所有预测时长线性相加，则无法得到可信的端到端估计。
 
-在 ORT DLRM 的 branch-parallel 执行中，embedding 部分尤其关键。其根本原因在于：8 条 embedding lookup branch 并不是无约束地同时发起，而是受到 `inter_threads` 控制的并发上限约束。因此，一个整图级预测器不能仅对所有 op 的预测时长做简单求和，而必须显式建模图拓扑与 branch 排队规则。
+基于上述观察，本文提出一种一阶静态排程器。该方法不试图在第一步就完整复刻复杂的运行时调度细节，而是优先刻画影响最大的结构规律：底部子图与 embedding 分支的并行启动、embedding 分支的固定发射顺序、由分支并行度决定的槽位上限、分支完成后的汇合屏障，以及汇合后尾部子图按照原始依赖关系执行的过程。换言之，本文的目标并不是构造一个完全黑盒的整图回归器，而是建立一个具有明确物理含义和误差可解释性的静态时间线生成模型。
 
-基于此，本文提出一个一阶静态排程器 `v1`。该方法强调三个特点：
+## 2. 问题表述
 
-1. 结构上可解释
-2. 规则上可复现
-3. 与 branch-parallel runner 的实际执行语义保持一致
-
-## 2. 问题定义
-
-对于任意一个 combo 样本 `c`，假设已知如下输入：
-
-1. 单算子预测集合  
-   \[
-   P_c = \{(v_i, \hat{t}_i)\}
-   \]
-   其中 `v_i` 表示图中的算子节点，`\hat{t}_i` 表示对应的预测时长。
-
-2. 来自 `op_shapes` 的图结构信息
-
-3. combo 对应的静态变量  
-   \[
-   x_c = (\text{batch\_size}, \text{num\_indices\_per\_lookup}, \text{inter\_threads}, \text{case\_id})
-   \]
-
-4. 真实执行时间线  
-   \[
-   T_c
-   \]
-
-目标是构造一个整图级静态排程函数：
-
+设某一配置样本对应的计算图为有向无环图
 \[
-\hat{M}_c = f(P_c, G_c, x_c)
+G=(V,E),
+\]
+其中 \(V\) 表示算子集合，\(E\) 表示依赖边集合。对任意算子 \(v\in V\)，假定已有单算子预测器给出其时延估计 \(\hat{t}(v)\)。此外，给定一组仅由静态配置决定的样本属性，记为
+\[
+\mathbf{x}=(b,n,\kappa,\mathbf{c}),
+\]
+其中 \(b\) 表示 batch size，\(n\) 表示每次 lookup 的索引数，\(\kappa\) 表示 embedding 分支的并行槽位数，\(\mathbf{c}\) 表示其余结构配置参数。本文的任务是构造一个静态映射
+\[
+\hat{M}=F\!\left(G,\{\hat{t}(v)\}_{v\in V},\mathbf{x}\right),
+\]
+使其输出整图预测时延 \(\hat{M}\)，并与真实整图时延 \(M\) 进行比较。
+
+本文采用绝对误差与相对误差分别衡量预测质量，即
+\[
+\mathrm{AE}=|\hat{M}-M|,
+\qquad
+\mathrm{APE}=\frac{|\hat{M}-M|}{M}.
+\]
+由于本文关心的是由结构排程引入的误差，而非单算子预测器本身的训练问题，因此单算子预测值在本方法中被视为既有输入，而不是待优化对象。
+
+## 3. 图结构恢复与时延真值定义
+
+### 3.1 图结构恢复
+
+输入的图描述并不是一个显式的节点邻接表，而是沿张量流展开的结构化表格。因此，本文首先从张量级描述恢复算子级有向无环图。具体而言，对每一个算子节点，保留其节点标识、节点名称与算子类型；随后遍历所有输入张量，读取其生产者节点标识，并在生产者与消费者之间建立依赖边。对于仅作为常量源或图输入出现而不参与实际调度的节点，本文不将其纳入可调度图结构。经过该步骤后，可得到仅包含有效计算节点的有向无环图 \(G\)。
+
+在结构恢复完成之后，需要进一步区分不同节点在整体排程中的角色。本文将算子划分为三类：底部子图、embedding 分支子图以及汇合后的尾部子图。底部子图由主干前段的顺序或局部并行计算组成；embedding 分支子图由 8 条同构分支构成；尾部子图则对应所有分支汇合之后的后续计算。这样的划分并非仅为叙述方便，而是因为三类子图在运行时遵循不同的调度机制。
+
+### 3.2 整图时延真值
+
+真实整图时延通过批次级时间线统计获得。对任一批次 \(q\)，若其包含节点集合 \(S\) 的完整执行记录，则定义该批次上子图 \(S\) 的时间跨度为
+\[
+\Delta(q;S)=\max_{v\in S} t^{\mathrm{end}}_{q}(v)-\min_{v\in S} t^{\mathrm{start}}_{q}(v),
+\]
+其中 \(t^{\mathrm{start}}_{q}(v)\) 与 \(t^{\mathrm{end}}_{q}(v)\) 分别表示节点 \(v\) 在批次 \(q\) 上的开始与结束时刻。
+
+为了降低首批次冷启动噪声的影响，本文将最早的一个批次从统计中剔除。设剔除后保留的批次集合为 \(\mathcal{Q}'\)，则任意节点集合 \(S\) 的真值时延定义为
+\[
+T(S)=\frac{1}{|\mathcal{Q}'|}\sum_{q\in\mathcal{Q}'} \Delta(q;S).
+\]
+当 \(S=V\) 时，得到整图真实端到端时延 \(M=T(V)\)。
+
+## 4. 执行语义抽象
+
+本文的静态排程器并不假设 embedding 分支之间可以任意重叠，而是采用一种受限并发模型。对于第 \(j\) 条 embedding 分支，记其包含的三个核心算子分别为 lookup、形状变换与规约操作。由于这三者在运行时共享同一个分支执行上下文，因此本文将其合并为一个复合任务 \(B_j\)。设该复合任务中的节点集合为 \(V_j\subset V\)，则其预测时长定义为
+\[
+\hat{t}(B_j)=\sum_{v\in V_j}\hat{t}(v).
 \]
 
-其中 `G_c` 是由 `op_shapes` 重建得到的 combo 级 DAG，`\hat{M}_c` 是预测 makespan。进一步，将其与真实整图 span `M_c` 比较，并计算误差：
-
+在此基础上，本文进一步引入两个与运行语义直接对应的假设。第一，8 条 embedding 分支的发射顺序是固定的先进先出顺序，即
 \[
-\mathrm{AE}_c = |\hat{M}_c - M_c|
+B_0 \prec B_1 \prec \cdots \prec B_7.
+\]
+第二，系统同一时刻最多允许 \(\kappa\) 条分支处于活动状态，其中 \(\kappa\) 即样本的分支并行度参数。换言之，复合分支任务不是简单的拓扑节点，而是需要竞争有限执行槽位的有序任务。
+
+与 embedding 分支不同，底部子图与尾部子图中的普通节点不参与该槽位竞争。底部子图在满足其拓扑依赖之后即可执行；尾部子图则必须等待底部子图与全部 embedding 分支任务共同完成之后，才能在汇合屏障之后启动。这个屏障约束是整图时间线中最关键的同步结构之一，也是单纯逐节点求和无法刻画的主要原因。
+
+## 5. 静态任务图构造
+
+为了将上述运行语义形式化，本文把整图重写为一个混合粒度任务图
+\[
+\mathcal{G}=(\mathcal{U},\mathcal{A}),
+\]
+其中 \(\mathcal{U}\) 为任务集合，\(\mathcal{A}\) 为任务间依赖关系。任务集合由四部分组成：底部普通任务集合 \(\mathcal{U}_{\mathrm{bot}}\)，embedding 复合分支集合 \(\mathcal{U}_{\mathrm{emb}}=\{B_0,\ldots,B_7\}\)，尾部普通任务集合 \(\mathcal{U}_{\mathrm{tail}}\)，以及一个显式的汇合屏障任务 \(u_{\mathrm{bar}}\)。
+
+对于不属于 embedding 分支的普通节点 \(v\)，本文保留其节点级粒度，并将其视为任务 \(u_v\)。对于 embedding 分支中的节点，则不再逐个调度，而是由复合任务 \(B_j\) 代表整条分支。普通节点与复合分支之间的依赖关系由原始图结构诱导得到：若某一普通节点依赖于某条 embedding 分支中的任一节点，则在任务图中令其依赖于对应复合任务；反之亦然。屏障任务 \(u_{\mathrm{bar}}\) 的前驱集合由全部底部任务与全部 embedding 复合任务共同构成，而所有尾部任务都额外依赖该屏障任务。
+
+经过上述转换后，静态排程问题就被归结为：在一个满足拓扑约束的任务图上，对普通任务采用依赖驱动调度，对 embedding 复合任务采用带有槽位竞争的有序调度，并最终输出该任务图的 makespan。
+
+## 6. 排程规则与时间线生成
+
+对任一任务 \(u\in\mathcal{U}\)，定义其依赖就绪时刻为
+\[
+r(u)=\max_{p\in \mathrm{Pred}(u)} f(p),
+\]
+其中 \(f(p)\) 表示任务 \(p\) 的结束时刻，\(\mathrm{Pred}(u)\) 表示其前驱集合；若 \(u\) 无前驱，则令 \(r(u)=0\)。
+
+对于普通任务，本文采用最早就绪调度规则，即开始时刻满足
+\[
+s(u)=r(u), \qquad u\in \mathcal{U}_{\mathrm{bot}}\cup \mathcal{U}_{\mathrm{tail}}.
+\]
+对 embedding 复合任务，则需额外考虑槽位可用性。设某一时刻活动分支任务集合对应的最早释放槽位时间为 \(a_{\min}\)，则对按顺序到达的复合任务 \(B_j\)，其开始时刻定义为
+\[
+s(B_j)=
+\begin{cases}
+r(B_j), & \text{若当前占用槽位数}<\kappa,\\[4pt]
+\max\{r(B_j),a_{\min}\}, & \text{否则}.
+\end{cases}
+\]
+其结束时刻为
+\[
+f(u)=s(u)+\hat{t}(u).
+\]
+当任务 \(u\) 为复合分支时，槽位仅在其完整结束之后才被释放。
+
+由于尾部子图中的每个任务都依赖汇合屏障 \(u_{\mathrm{bar}}\)，而屏障任务本身又依赖全部底部与 embedding 任务，因此尾部子图天然被约束在一个晚于分支池结束的时间区间之内。由此，整图预测时延可表示为
+\[
+\hat{M}=\max_{u\in \mathcal{U}} f(u).
 \]
 
-\[
-\mathrm{APE}_c = \frac{|\hat{M}_c - M_c|}{M_c}
-\]
+## 7. 标准伪代码
 
-## 3. 数据来源与图结构恢复
+下述伪代码采用学术论文中常见的算法描述形式。算法输入为结构恢复后的有向无环图、节点时延预测以及分支并行度参数；算法输出为整图预测 makespan。
 
-### 3.1 单算子预测结果
-
-静态排程器并不重新训练模型，而是直接复用 `single_op_stage1_mlp` 的已有输出。默认使用的文件为：
-
-- `models/combined/combined_predictions_test.csv`
-
-该文件中每一行给出一个 op 的：
-
-- `case_id`
-- `combo`
-- `op_idx`
-- `pred_us`
-- `target_us`
-
-因此，静态排程器的重点不是重新估计单个算子时长，而是如何把这些时长排进一条符合执行语义的整图时间线。
-
-### 3.2 从 `op_shapes` 重建 DAG
-
-`op_shapes_*.csv` 不是显式的节点表，而是按 tensor edge 展开的结构化描述表。为获得可调度的图结构，本文采用如下恢复流程：
-
-1. 按以下字段去重得到节点集合：
-   - `node_idx`
-   - `node_name`
-   - `op_type`
-2. 遍历每个输入 tensor 行，读取其 `producer_node`
-3. 由 `producer_node -> consumer_node` 构建前驱边
-4. 在调度图中忽略以下非计算型来源：
-   - `initializer`
-   - `graph_input`
-   - `Constant`
-
-最终得到一个非 Constant 的有向无环图：
-
-\[
-G_c = (V_c, E_c)
-\]
-
-该图用于表示整图的静态依赖关系。
-
-### 3.3 整图真值提取
-
-真实整图时延从以下文件中提取：
-
-- `branch_parallel_op_timeline.csv`
-
-给定某个节点集合 `S`，定义 batch `b` 上的图 span 为：
-
-\[
-\mathrm{span}(b, S) =
-\max_{v \in S} \mathrm{end}(b, v) -
-\min_{v \in S} \mathrm{start}(b, v)
-\]
-
-为了与 `single_op_stage1_mlp` 的标签策略保持一致，本文采用以下真值协议：
-
-1. 对每个 batch 计算图 span
-2. 丢弃最早的一个 batch
-3. 对剩余 batch 的 span 求均值
-
-记保留后的 batch 集合为 `B_c'`，则：
-
-\[
-M_c(S) = \frac{1}{|B_c'|} \sum_{b \in B_c'} \mathrm{span}(b, S)
-\]
-
-## 4. 静态排程假设
-
-`v1` 排程器依赖以下已从真实 branch-parallel timeline 中验证的执行假设。
-
-### 4.1 Embedding 启动顺序固定
-
-8 条 embedding branch 的启动顺序满足固定 FIFO 规律：
-
-\[
-0 \rightarrow 1 \rightarrow 2 \rightarrow 3 \rightarrow 4 \rightarrow 5 \rightarrow 6 \rightarrow 7
-\]
-
-即，branch 不会在启动阶段发生乱序。
-
-### 4.2 `inter_threads` 决定 branch 并发槽位数
-
-`inter_threads` 不是普通附加特征，而是 branch 级排程规则中的核心变量。它等价于 embedding 分支的最大并发槽位数：
-
-\[
-K = \mathrm{inter\_threads}
-\]
-
-当 `K=4` 时，表示最多允许 4 条 embedding branch 同时处于活动状态。
-
-### 4.3 槽位占用覆盖整个 branch 生命周期
-
-对于第 `j` 条 embedding branch，其槽位占用起点为：
-
-- `/emb_lj/Gather`
-
-终点为：
-
-- `/emb_lj/ReduceSum`
-
-这意味着下列 3 个算子必须被视为一个整体调度单元：
-
-- `Gather`
-- `Reshape`
-- `ReduceSum`
-
-### 4.4 Tail 受 barrier 约束
-
-`tail` 不能与 embedding 分支自由交叠。本文将其建模为一个 barrier 之后的独立阶段，即：
-
-- `bottom` 完成
-- 所有 embedding branch 完成
-
-上述两个条件同时满足后，`tail` 才能启动。`tail` 内部仍保持 `op_shapes` 中恢复出的真实 DAG 依赖。
-
-## 5. Embedding Branch 折叠策略
-
-对每条 embedding branch `j`，定义其复合任务：
-
-\[
-B_j = \{\mathrm{Gather}_j, \mathrm{Reshape}_j, \mathrm{ReduceSum}_j\}
-\]
-
-其预测时长定义为：
-
-\[
-\hat{t}(B_j) = \sum_{v \in B_j} \hat{t}_v
-\]
-
-进行 branch 折叠有两个直接好处：
-
-1. 排程粒度从 node-level 提升到 branch-level，更贴近真实执行语义。
-2. 槽位竞争可以直接建模为 branch 竞争，而不是用多个微小算子间接逼近。
-
-除 embedding 分支外，其余节点继续保留为 node-level 任务。
-
-## 6. 静态流水线排程算法
-
-### 6.1 任务集合定义
-
-对一个 combo 样本，最终调度任务集合定义为：
-
-\[
-\mathcal{T}_c =
-\mathcal{T}_{bottom} \cup
-\mathcal{T}_{branch} \cup
-\mathcal{T}_{tail} \cup
-\{\mathrm{barrier}_{tail}\}
-\]
-
-其中：
-
-- `bottom` 为 node-level 任务
-- `branch` 为 8 个 embedding 复合 branch 任务
-- `tail` 为 node-level 任务
-- `barrier_tail` 用于连接 `bottom + branch pool` 与 `tail`
-
-### 6.2 非 branch 任务的开始时间
-
-对任意任务 `u`，定义其依赖满足时间为：
-
-\[
-r(u) = \max_{p \in \mathrm{pred}(u)} \mathrm{end}(p)
-\]
-
-对于 `bottom` 与 `tail` 中的普通 node-level 任务，开始时间直接取：
-
-\[
-\mathrm{start}(u) = r(u)
-\]
-
-### 6.3 Branch 任务的开始时间
-
-对于 embedding branch 任务 `B_j`，除依赖满足外，还必须等待槽位释放。记当前最早可用槽位释放时间为 `s_{\min}`，则：
-
-\[
-\mathrm{start}(B_j) = \max(r(B_j), s_{\min})
-\]
-
-所有 branch 按固定 FIFO 顺序 `0 -> 7` 被送入调度器。当可用槽位数少于 `K` 时，新 branch 可以立即进入；否则必须等待最早释放的那个槽位。
-
-### 6.4 结束时间与 makespan
-
-每个任务的结束时间定义为：
-
-\[
-\mathrm{end}(u) = \mathrm{start}(u) + \hat{t}(u)
-\]
-
-整图预测 makespan 则为：
-
-\[
-\hat{M}_c = \max_{u \in \mathcal{T}_c} \mathrm{end}(u)
-\]
-
-### 6.5 伪代码
+**Algorithm 1** Static Pipeline Scheduling for Branch-Parallel Inference
 
 ```text
-输入: DAG G_c, 任务预测时长, inter_threads = K
-输出: 预测 makespan \hat{M}_c
+Require: Directed acyclic graph G=(V,E);
+         predicted operator latency {t_hat(v)} for all v in V;
+         branch parallelism degree kappa
+Ensure:  Predicted end-to-end latency M_hat
 
-1. 将每条 embedding branch 折叠为一个复合任务 B_j
-2. 构建任务图:
-   - bottom 任务
-   - branch 任务 B_0 ... B_7
-   - barrier_tail
-   - tail 任务
-3. 对任务图做拓扑遍历
-4. 对非 branch 任务:
-   start = 所有前驱 end 的最大值
-5. 对 branch 任务, 按 FIFO 顺序处理:
-   若当前活动槽位数 < K:
-       start = ready_time
-   否则:
-       start = max(ready_time, 最早槽位释放时间)
-   并保持该槽位直到 branch 的 ReduceSum 完成
-6. 当 bottom 和全部 branch 完成后, 释放 barrier_tail
-7. 按 DAG ready time 调度 tail
-8. 返回所有任务 end 的最大值
+ 1: Construct bottom-task set U_bot from non-branch nodes before the join point
+ 2: Construct tail-task set U_tail from non-branch nodes after the join point
+ 3: For each embedding branch j in {0,1,...,7} do
+ 4:     Contract its lookup, reshape, and reduction nodes into one composite task B_j
+ 5:     Set t_hat(B_j) <- sum of predicted latencies of nodes in B_j
+ 6: End For
+ 7: Build a task graph G_T whose nodes are U_bot, {B_j}, U_tail, and one barrier task u_bar
+ 8: Add precedence edges induced by the original graph structure
+ 9: Add edges from all bottom tasks and all branch tasks to u_bar
+10: Add an edge from u_bar to every tail task
+11: Obtain a topological order of G_T that preserves the fixed branch order B_0,...,B_7
+12: Initialize an empty min-heap H for active branch slots
+13: For each task u in the topological order do
+14:     r(u) <- max finish time among predecessors of u
+15:     If u is a composite branch task then
+16:         If |H| < kappa then
+17:             s(u) <- r(u)
+18:         Else
+19:             a_min <- Extract-Min(H)
+20:             s(u) <- max{r(u), a_min}
+21:         End If
+22:         f(u) <- s(u) + t_hat(u)
+23:         Insert f(u) into H
+24:     Else
+25:         s(u) <- r(u)
+26:         f(u) <- s(u) + t_hat(u)
+27:     End If
+28: End For
+29: Return M_hat <- max_u f(u)
 ```
 
-## 7. 覆盖率定义
+该算法的关键之处在于，第 15 至 23 行并没有把 embedding 分支视为普通拓扑节点，而是将其建模为受限并发资源上的有序作业。正是这一步将单算子预测值与整图执行语义联系起来。
 
-为了避免将不同数据质量条件下的样本混在一起，本文区分两种 coverage regime。
+## 8. 覆盖率与评估口径
 
-### 7.1 Full Graph
+在整图评估中，必须区分结构完整样本与结构不完整样本。本文将一个样本定义为“完整覆盖”，是指其全部非平凡计算节点都能够在预测结果中找到对应条目；若某些节点在上游数据处理阶段被过滤掉，则该样本仅能用于“观测子图”层面的诊断，而不能作为严格意义上的整图端到端样本。
 
-若某个 combo 的 60 个已建模非 Constant 节点全部存在于预测结果中，则将其定义为 full-graph combo。
+这一区分是必要的。若对缺失节点样本仍强行报告整图误差，则所得结果混合了两类误差来源：一类是静态排程器本身的结构误差，另一类则来自输入节点集合已被截断的覆盖误差。为了保证方法评估的可解释性，本文只将完整覆盖样本纳入主端到端指标，而把不完整样本作为辅助分析对象。
 
-### 7.2 Partial Graph
+## 9. 残差来源与校准启示
 
-若原始 sweep/profile 存在，但部分节点因为上游标签稳定性过滤而从预测结果中缺失，则该 combo 被定义为 partial combo。
+本文提出的静态排程器首先追求结构建模的正确性，而不是一次性吸收所有系统噪声。因此，残差模式本身具有分析价值。从实验观察看，最重要的残差来源大致可以归纳为三类。
 
-在这种情况下，评估器只对已观测子图做诊断性误差分析，而不将其作为整图 E2E 指标纳入主统计。
+第一类是 embedding 复合分支残差。即便复合分支的结构已经被正确建模，其内部 lookup 与规约操作仍可能存在系统性偏差。这类偏差通常具有较强的结构稳定性，因此适合作为分支级校准对象。
 
-因此，最终报告必须分为：
+第二类是分支交接间隙残差。在真实执行中，新分支的启动往往略晚于旧分支结束时刻，说明槽位释放与新任务发射之间存在一个不属于任何单一算子的交接成本。该残差在局部层面可以通过独立回归器较好拟合，但由于其绝对量级较小，未必显著改变整图误差。
 
-- full-graph E2E 指标
-- partial observed-subgraph 指标
+第三类是汇合后的短尾突发段残差。该区域由多个超短算子串行构成，单节点误差虽然不大，但由于其位于尾部关键路径上，局部误差容易以累积方式传递到整图输出。因此，若后续需要引入黑盒校准，更合理的做法往往不是逐节点校准，而是把该短尾段视为一个整体结构单元处理。
 
-二者不能混合汇总。
+## 10. 局限性与讨论
 
-## 8. 误差结构分析
+本文方法属于一阶静态排程模型，其优势在于结构清晰、物理含义明确、与静态配置变量天然对齐。然而，这一方法也存在明显边界。首先，它不描述动态抢占、任务窃取或更复杂的运行时调度策略；其次，它默认 embedding 分支的发射顺序在样本分布内保持稳定；再次，它把尾部执行建模为严格依赖驱动的静态过程，而没有显式表示更细粒度的调度和缓存态变化。
 
-`v1` 的目标是先把结构骨架建对，而不是一次性解决所有高阶误差。因此，其残差本身提供了后续黑盒校准的方向。
-
-### 8.1 Branch 槽位交接空隙
-
-真实 timeline 显示，排队 branch 的 `Gather` 启动时间通常晚于前一条 branch 的 `ReduceSum` 结束时间，即存在稳定但非零的 handoff gap。该 gap 不天然属于某个单独 op，因此适合作为 branch 释放开销的加性校准项。
-
-### 8.2 Embedding 复合 Branch 残差
-
-最差样本的主误差往往集中在 `Gather + ReduceSum`，说明 embedding branch 更适合作为复合任务进行校准，而不是把误差拆散到多个微小算子上。
-
-### 8.3 Join 后微尾段 Bundle
-
-`Shape_1/Gather_9/.../Concat_4` 这一段由多个极短算子组成，单个 op 的误差看起来不大，但它们在图级时间线中会形成 bundle 型残差，因此适合做 bundle correction。
-
-### 8.4 Top MLP 尾段波动
-
-在启用标签稳定性过滤的 artifact 中，`top_l` 末段容易被删点。这说明该区域不仅存在建模误差，也存在更强的标签波动问题。
-
-## 9. 实验观察
-
-已有两个 artifact 可以说明过滤策略对调度评估的影响。
-
-### 9.1 含过滤的 Artifact
-
-对于 `classed_op_mlp_test_78910_analytical_5_200_iter_quick`：
-
-- total test combos: `331`
-- full combos: `49`
-- partial combos: `282`
-- full-graph MAPE: `0.041985`
-
-### 9.2 不做 Drop 的 Artifact
-
-对于 `classed_op_mlp_test_78910_analytical_5_300_iter_quick_nodrop`：
-
-- total test combos: `331`
-- full combos: `331`
-- partial combos: `0`
-- full-graph MAPE: `0.063821`
-
-这一对比说明：过滤异常数据会提高剩余 full-graph 样本上的表观精度，而不做 drop 则能暴露更完整但更困难的整图预测问题。
-
-## 10. 方法局限性
-
-当前 `v1` 排程器尚未显式建模以下行为：
-
-- runtime 乱序调度
-- work stealing
-- cache 干扰的动态状态
-- 带宽竞争的时间变化过程
-- branch release gap 的学习型修正
-
-因此，`v1` 更适合作为结构化基线方法，而不是最终版的 fully calibrated end-to-end predictor。
+因此，本文方法更适合作为整图建模的“结构骨架”。其作用是先把最重要的同步与并发机制显式写入时间线，再把无法由这一骨架解释的剩余误差交给后续校准模型处理。换言之，静态排程器并不是黑盒回归的替代品，而是黑盒校准的前提：只有当主要执行语义已经被正确编码之后，后续校准才不至于陷入对错误结构的过拟合。
 
 ## 11. 结论
 
-本文提出了一种面向 ORT DLRM branch-parallel 执行的静态流水线排程方法。该方法的核心思想是：不再把 embedding lookup 看作分散的 node-level 小算子，而是提升为受 `inter_threads` 限制的 branch-level 复合任务，并通过固定 FIFO + 槽位竞争规则来构造整图静态时间线。该方法在保留结构可解释性的同时，将单算子预测自然提升为整图级时延估计，并为后续黑盒校准提供了清晰、可定位的误差分解基础。
+本文提出了一种面向多 embedding 分支推理图的静态流水线排程方法。该方法从单算子时延预测出发，通过恢复算子级有向无环图、构造分支级复合任务、引入受限并发的先进先出槽位机制以及显式汇合屏障，生成具有可解释性的整图时间线，并据此得到整图端到端时延预测。方法的核心贡献不在于构造一个完全黑盒的端到端回归器，而在于提供一个结构正确、可分析、可校准的中间层。实验中的残差模式进一步说明，embedding 复合分支与汇合后短尾段是最值得继续校准的区域。未来工作可在保持该结构骨架不变的前提下，引入更细粒度的 bundle 级或分支级残差学习模型，以进一步提升整图预测精度。
