@@ -25,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate the calibrated analytical model against the baseline roofline.")
     parser.add_argument("--data-dir", required=True, help="Directory that contains train.csv/val.csv/test.csv.")
     parser.add_argument("--hardware-profile", default="", help="Optional hardware_profile_910b3.json path.")
-    parser.add_argument("--calibration", required=True, help="Path to calibration.json.")
+    parser.add_argument("--calibration", required=True, help="Path to the fitted calibration.json produced by fit_sep_analytical_model.py.")
     parser.add_argument("--output-dir", required=True, help="Directory for the comparison report.")
     parser.add_argument("--label-column", default=LABEL_COLUMN)
     parser.add_argument("--op-column", default=OP_COLUMN)

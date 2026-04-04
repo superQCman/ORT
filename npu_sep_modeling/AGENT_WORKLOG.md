@@ -52,6 +52,42 @@ This project is a self-contained NPU single-operator modeling pipeline for Ascen
 
 ## Change History
 
+### 2026-04-04 - Add a checked-in 910B3 hardware profile and clarify calibration inputs
+
+Request summary:
+- Add a project-local `hardware_profile_910b3.json` so the nested model can be run without relying on a temporary probe output.
+- Clarify that `--calibration` points to the fitted `calibration.json` produced by `fit_sep_analytical_model.py`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The project now ships a checked-in 910B3 hardware profile with the current effective inputs and null peak placeholders, matching the best-effort probe output.
+- The README now explains that `--calibration` should reference the fitted parameter artifact from the previous `fit` step, not a hardware probe file.
+- The evaluator help text now says the same thing directly in the CLI help string.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `python3 - <<'PY'`
+- `import json`
+- `from pathlib import Path`
+- `p=Path('/data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json')`
+- `obj=json.load(open(p))`
+- `print(obj['device_name'], obj['ai_core_count'], obj['cube_count'], obj['vector_count'])`
+- `PY`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_v2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_v2_localhw`
+
+Observed results:
+- The checked-in hardware profile loads successfully and reports `910B3`, `ai_core_count=20`, `cube_count=20`, `vector_count=40`.
+- The evaluator works with the checked-in profile and emits the comparison report and summary JSON normally.
+
+Open risks:
+- The checked-in profile still carries `null` peak/bandwidth fields because this environment does not yet provide the ORT/CANN microbenchmark runtime stack needed to refresh them.
+- If the local hardware probe changes, the checked-in sample profile should be regenerated to stay aligned with the current environment.
+
 ### 2026-04-04 - Draft the thesis-style NPU side modeling chapter
 
 Request summary:

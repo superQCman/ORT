@@ -1,0 +1,55 @@
+{
+  "case_id": "case_10_4_4_cann",
+  "device_id": 0,
+  "device_name": "910B3",
+  "device_count": 9,
+  "chip_count": 1,
+  "ai_core_count": 20,
+  "cube_count": 20,
+  "vector_count": 40,
+  "frequency_mhz": 1800,
+  "current_frequency_mhz": 800,
+  "cube_peak_eff_gflops": null,
+  "vector_peak_eff_gflops": null,
+  "h2d_bw_gbps": null,
+  "d2h_bw_gbps": null,
+  "source": {
+    "device_name": "npu-smi info",
+    "device_count": "npu-smi info",
+    "chip_count": "npu-smi info -t board",
+    "ai_core_count": "npu-smi info -t common",
+    "cube_count": "npu-smi info -t common + official AIC/AIV layout",
+    "vector_count": "npu-smi info -t common + official AIC/AIV layout",
+    "frequency_mhz": "npu-smi info -t common",
+    "current_frequency_mhz": "npu-smi info -t common",
+    "cube_peak_eff_gflops": null,
+    "vector_peak_eff_gflops": null,
+    "h2d_bw_gbps": null,
+    "d2h_bw_gbps": null
+  },
+  "diagnostics": [
+    "parsed 9 device rows from npu-smi info",
+    "ascend-dmi not found",
+    "microbench skipped: missing onnx, onnxruntime"
+  ],
+  "ascend_dmi": {
+    "available": false,
+    "path": null,
+    "diagnostics": [
+      "ascend-dmi not found"
+    ]
+  },
+  "microbench": {
+    "available": false,
+    "onnx_available": false,
+    "onnxruntime_available": false,
+    "msprof_path": "/data/qc/Ascend/ascend-toolkit/latest/bin/msprof",
+    "diagnostics": [
+      "microbench skipped: missing onnx, onnxruntime"
+    ],
+    "cube_peak_eff_gflops": null,
+    "vector_peak_eff_gflops": null,
+    "h2d_bw_gbps": null,
+    "d2h_bw_gbps": null
+  }
+}

@@ -182,17 +182,20 @@ python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py \
 
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py \
   --data-dir /tmp/npu_sep_modeling_dataset \
-  --hardware-profile /tmp/npu_sep_modeling_hw/hardware_profile_910b3.json \
+  --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json \
   --calibration-fit-fraction 0.3 \
   --calibration-seed 42 \
   --output-dir /tmp/npu_sep_modeling_fit
 
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py \
   --data-dir /tmp/npu_sep_modeling_dataset \
-  --hardware-profile /tmp/npu_sep_modeling_hw/hardware_profile_910b3.json \
+  --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json \
   --calibration /tmp/npu_sep_modeling_fit/calibration.json \
   --output-dir /tmp/npu_sep_modeling_eval
 ```
+
+- `--calibration` 要填的是前一步 `fit_sep_analytical_model.py` 生成的 `calibration.json` 路径，它保存了这次训练出来的物理参数集合。
+- 如果你用的是项目里这份 `hardware_profile_910b3.json`，那就表示评估时采用这份固定的 910B3 有效硬件输入，而不是重新做一次硬件探测。
 
 ## 备注
 
