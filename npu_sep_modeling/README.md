@@ -164,7 +164,8 @@ v2 不要求每个参数都对应单一硬件寄存器，而要求它们对应�
 - `board_name` 不再作为输出字段保留，避免把板级字符串混进模型输入
 - `cube_count` 和 `vector_count` 会写入硬件 profile，当前按 910B3 分离架构固定为 `20` 与 `40`
 - 当前环境里没有 `ascend-dmi`
-- 当前环境里也没有可直接跑这套 microbench 的 `onnx` / `onnxruntime` 依赖，所以峰值字段会先以 `null` 记录，`fit_sep_analytical_model.py` 会回退到内置默认值
+- `hardware_probe.py` 会在真机上跑 `MatMul` / `Add` / `Relu` 微基准，其中 transfer 方向也使用实际 NPU `MatMul` 图来诱发 host/device 传输，不再依赖 CPU-only 算子
+- `cube_peak_eff_gflops` / `vector_peak_eff_gflops` / `h2d_bw_gbps` / `d2h_bw_gbps` 优先来自本机 microbenchmark；如果某次 `task_time` 中的传输归因不够完整，transfer 带宽会退回到“总测量时间减去目标 NPU 算子时间”的有效带宽估计
 - 当前数据里 `cpu_main_Wait_avg` / `cpu_main_DistributionEnqueue_avg` 只对一部分 `transfer` 节点可见，所以 `queueing_us` 目前更像一个 host-side queueing proxy，而不是严格拆出来的 device queue depth
 
 ## 运行入口

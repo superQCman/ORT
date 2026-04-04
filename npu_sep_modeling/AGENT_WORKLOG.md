@@ -52,6 +52,35 @@ This project is a self-contained NPU single-operator modeling pipeline for Ascen
 
 ## Change History
 
+### 2026-04-04 - Implement real NPU microbenchmark hardware probing
+
+Request summary:
+- Replace the nested hardware probe's `null` transfer placeholders with a real microbenchmark-backed flow.
+- Make the transfer cases use actual NPU `MatMul` graphs, not CPU-only reductions, so the measured bandwidths reflect real device execution.
+- Keep the checked-in `hardware_profile_910b3.json` synchronized with the artifact output.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_microbench.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Removed unused ReduceSum / ConstantOfShape benchmark builders so the transfer path stays anchored to actual NPU-executed `MatMul` cases.
+- `hardware_probe.py` now prefers exported msprof CSVs that actually exist, then derives transfer bandwidth from the microbenchmark summary and task-time evidence instead of leaving the H2D/D2H fields null.
+- The checked-in hardware profile now carries real benchmark values for `cube_peak_eff_gflops`, `vector_peak_eff_gflops`, `h2d_bw_gbps`, and `d2h_bw_gbps`.
+- The README now states explicitly that the transfer microbench uses NPU `MatMul` graphs and that transfer bandwidth may fall back to an effective case-level timing estimate when task-level DMA attribution is incomplete.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/npu_microbench.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw`
+- Verified `/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/hardware_profile_910b3.json` now reports non-null transfer bandwidths.
+
+Open risks:
+- Transfer attribution still relies on benchmark-level evidence when the profiler does not expose a clean direction tag, so the bandwidth is an effective measurement rather than a lane-register dump.
+- If future msprof exports change their CSV layout or directory naming, `locate_latest_msprof_profile()` may need a small refresh.
+
 ### 2026-04-04 - Add a checked-in 910B3 hardware profile and clarify calibration inputs
 
 Request summary:

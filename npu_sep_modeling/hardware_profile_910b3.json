@@ -2,17 +2,18 @@
   "case_id": "case_10_4_4_cann",
   "device_id": 0,
   "device_name": "910B3",
-  "device_count": 9,
+  "device_count": 8,
   "chip_count": 1,
   "ai_core_count": 20,
   "cube_count": 20,
   "vector_count": 40,
   "frequency_mhz": 1800,
   "current_frequency_mhz": 800,
-  "cube_peak_eff_gflops": null,
-  "vector_peak_eff_gflops": null,
-  "h2d_bw_gbps": null,
-  "d2h_bw_gbps": null,
+  "cube_peak_eff_gflops": 17940.665531703817,
+  "vector_peak_eff_gflops": 4.329329811996293,
+  "h2d_bw_gbps": 28.224503117514494,
+  "d2h_bw_gbps": 8.435265667716592,
+  "microbench_summary_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/microbench_summary.json",
   "source": {
     "device_name": "npu-smi info",
     "device_count": "npu-smi info",
@@ -22,15 +23,16 @@
     "vector_count": "npu-smi info -t common + official AIC/AIV layout",
     "frequency_mhz": "npu-smi info -t common",
     "current_frequency_mhz": "npu-smi info -t common",
-    "cube_peak_eff_gflops": null,
-    "vector_peak_eff_gflops": null,
-    "h2d_bw_gbps": null,
-    "d2h_bw_gbps": null
+    "cube_peak_eff_gflops": "benchmark",
+    "vector_peak_eff_gflops": "benchmark",
+    "h2d_bw_gbps": "benchmark",
+    "d2h_bw_gbps": "benchmark"
   },
   "diagnostics": [
-    "parsed 9 device rows from npu-smi info",
+    "parsed 8 device rows from npu-smi info",
     "ascend-dmi not found",
-    "microbench skipped: missing onnx, onnxruntime"
+    "[INFO] Start profiling...\nWrote /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/microbench_summary.json\ncube_peak_eff_gflops=17940.665531703817\nvector_peak_eff_gflops=4.329329811996293\nh2d_bw_gbps=None\nd2h_bw_gbps=None\n[INFO] Start export data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB.\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Start analyzing data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\" ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: It may take few minutes, please be patient ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Analysis data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\" finished.\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Start analyzing data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\" ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: It may take few minutes, please be patient ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Analysis data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\" finished.\nSat 04 Apr 2026 23:50:03 [INFO] [MSVP] [1982729] msprof_export.py: All collected data will be exported, path is: /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0.\nSat 04 Apr 2026 23:50:03 [INFO] [MSVP] [1982729] msprof_export.py: There is no timeline data to export for \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\"\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: The data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\" has been analyzed. Parsing phase will be skipped.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: The data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\" has been analyzed. Parsing phase will be skipped.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: All collected data will be exported, path is: /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: There is no summary data to export for \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\"\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: All collected data will be exported, path is: /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: There is no summary data to export for \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\"\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_common.py: Start exporting summary output_file.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_common.py: End exporting summary output_file.The file is stored in the /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/mindstudio_profiler_output path.\n[INFO] Export all data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB done.\n[INFO] Start query data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB.\nJob Info\tDevice ID\tDir Name\tCollection Time           \tModel ID\tIteration Number\tTop Time Iteration\tRank ID\t\n\nNA      \t         \thost    \t2026-04-04 23:49:37.380416\tN/A     \tN/A             \tN/A               \t-1     \t\n\nNA      \t0        \tdevice_0\t2026-04-04 23:49:37.665952\tN/A     \tN/A             \tN/A               \t-1     \t\n\n[INFO] Query all data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB done.\n[INFO] Profiling finished.\n[INFO] Process profiling data complete. Data is saved in /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB",
+    "onnxruntime cpuid_info warning: Unknown CPU vendor. cpuinfo_vendor value: 15"
   ],
   "ascend_dmi": {
     "available": false,
@@ -40,16 +42,287 @@
     ]
   },
   "microbench": {
-    "available": false,
-    "onnx_available": false,
-    "onnxruntime_available": false,
+    "available": true,
+    "onnx_available": true,
+    "onnxruntime_available": true,
+    "runner_python": "/data/qc/anaconda3/envs/ort/bin/python",
     "msprof_path": "/data/qc/Ascend/ascend-toolkit/latest/bin/msprof",
+    "msprof_output_root": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof",
+    "msprof_profile_dir": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB",
+    "msprof_op_summary_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/mindstudio_profiler_output/op_summary_20260404235004.csv",
+    "msprof_task_time_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/mindstudio_profiler_output/task_time_20260404235004.csv",
+    "benchmark_root": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench",
+    "summary_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/microbench_summary.json",
     "diagnostics": [
-      "microbench skipped: missing onnx, onnxruntime"
+      "[INFO] Start profiling...\nWrote /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/microbench_summary.json\ncube_peak_eff_gflops=17940.665531703817\nvector_peak_eff_gflops=4.329329811996293\nh2d_bw_gbps=None\nd2h_bw_gbps=None\n[INFO] Start export data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB.\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Start analyzing data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\" ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: It may take few minutes, please be patient ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Analysis data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\" finished.\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Start analyzing data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\" ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: It may take few minutes, please be patient ...\nSat 04 Apr 2026 23:50:02 [INFO] [MSVP] [1982729] msprof_common.py: Analysis data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\" finished.\nSat 04 Apr 2026 23:50:03 [INFO] [MSVP] [1982729] msprof_export.py: All collected data will be exported, path is: /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0.\nSat 04 Apr 2026 23:50:03 [INFO] [MSVP] [1982729] msprof_export.py: There is no timeline data to export for \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\"\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: The data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\" has been analyzed. Parsing phase will be skipped.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: The data in \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\" has been analyzed. Parsing phase will be skipped.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: All collected data will be exported, path is: /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: There is no summary data to export for \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/host\"\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: All collected data will be exported, path is: /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_export.py: There is no summary data to export for \"/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/device_0\"\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_common.py: Start exporting summary output_file.\nSat 04 Apr 2026 23:50:04 [INFO] [MSVP] [1982878] msprof_common.py: End exporting summary output_file.The file is stored in the /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB/mindstudio_profiler_output path.\n[INFO] Export all data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB done.\n[INFO] Start query data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB.\nJob Info\tDevice ID\tDir Name\tCollection Time           \tModel ID\tIteration Number\tTop Time Iteration\tRank ID\t\n\nNA      \t         \thost    \t2026-04-04 23:49:37.380416\tN/A     \tN/A             \tN/A               \t-1     \t\n\nNA      \t0        \tdevice_0\t2026-04-04 23:49:37.665952\tN/A     \tN/A             \tN/A               \t-1     \t\n\n[INFO] Query all data in PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB done.\n[INFO] Profiling finished.\n[INFO] Process profiling data complete. Data is saved in /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/msprof/PROF_000001_20260404234937377_HHMCBMNMDMKQLDHB",
+      "onnxruntime cpuid_info warning: Unknown CPU vendor. cpuinfo_vendor value: 15"
     ],
-    "cube_peak_eff_gflops": null,
-    "vector_peak_eff_gflops": null,
-    "h2d_bw_gbps": null,
-    "d2h_bw_gbps": null
+    "cube_peak_eff_gflops": 17940.665531703817,
+    "vector_peak_eff_gflops": 4.329329811996293,
+    "h2d_bw_gbps": 28.224503117514494,
+    "d2h_bw_gbps": 8.435265667716592,
+    "cases": [
+      {
+        "name": "cube_matmul",
+        "kind": "matmul",
+        "category": "cube",
+        "op_name": "MatMul",
+        "model_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/cube_matmul/model.onnx",
+        "profile_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/cube_matmul/ort_profile.json",
+        "input_names": [
+          "lhs",
+          "rhs"
+        ],
+        "input_shapes": [
+          [
+            4096,
+            4096
+          ],
+          [
+            4096,
+            4096
+          ]
+        ],
+        "output_shape": [
+          4096,
+          4096
+        ],
+        "units_per_run": 137438953472.0,
+        "input_bytes_per_run": 134217728,
+        "output_bytes_per_run": 67108864,
+        "transfer_bytes_per_direction": null,
+        "target_op_count": 8,
+        "target_op_time_us": 61286.0,
+        "throughput_gflops": 17940.665531703817,
+        "h2d_bytes": 0,
+        "h2d_time_us": 0.0,
+        "h2d_bw_gbps": null,
+        "d2h_bytes": 0,
+        "d2h_time_us": 0.0,
+        "d2h_bw_gbps": null,
+        "warmup_time_us": 15338102.610781789,
+        "measured_time_us": 168907.88823366165,
+        "measure_runs": 8,
+        "warmup_runs": 2,
+        "provider_ops": [
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul"
+        ]
+      },
+      {
+        "name": "vector_add",
+        "kind": "add",
+        "category": "vector",
+        "op_name": "Add",
+        "model_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/vector_add/model.onnx",
+        "profile_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/vector_add/ort_profile.json",
+        "input_names": [
+          "lhs",
+          "rhs"
+        ],
+        "input_shapes": [
+          [
+            8192,
+            4096
+          ],
+          [
+            8192,
+            4096
+          ]
+        ],
+        "output_shape": [
+          8192,
+          4096
+        ],
+        "units_per_run": 33554432.0,
+        "input_bytes_per_run": 268435456,
+        "output_bytes_per_run": 134217728,
+        "transfer_bytes_per_direction": null,
+        "target_op_count": 8,
+        "target_op_time_us": 73846.0,
+        "throughput_gflops": 3.635071039731333,
+        "h2d_bytes": 0,
+        "h2d_time_us": 0.0,
+        "h2d_bw_gbps": null,
+        "d2h_bytes": 0,
+        "d2h_time_us": 0.0,
+        "d2h_bw_gbps": null,
+        "warmup_time_us": 728136.7741525173,
+        "measured_time_us": 245800.56592822075,
+        "measure_runs": 8,
+        "warmup_runs": 2,
+        "provider_ops": [
+          "Add",
+          "Add",
+          "Add",
+          "Add",
+          "Add",
+          "Add",
+          "Add",
+          "Add"
+        ]
+      },
+      {
+        "name": "vector_relu",
+        "kind": "relu",
+        "category": "vector",
+        "op_name": "Relu",
+        "model_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/vector_relu/model.onnx",
+        "profile_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/vector_relu/ort_profile.json",
+        "input_names": [
+          "x"
+        ],
+        "input_shapes": [
+          [
+            8192,
+            4096
+          ]
+        ],
+        "output_shape": [
+          8192,
+          4096
+        ],
+        "units_per_run": 33554432.0,
+        "input_bytes_per_run": 134217728,
+        "output_bytes_per_run": 134217728,
+        "transfer_bytes_per_direction": null,
+        "target_op_count": 8,
+        "target_op_time_us": 53435.0,
+        "throughput_gflops": 5.023588584261253,
+        "h2d_bytes": 0,
+        "h2d_time_us": 0.0,
+        "h2d_bw_gbps": null,
+        "d2h_bytes": 0,
+        "d2h_time_us": 0.0,
+        "d2h_bw_gbps": null,
+        "warmup_time_us": 662976.0228097439,
+        "measured_time_us": 217987.2002452612,
+        "measure_runs": 8,
+        "warmup_runs": 2,
+        "provider_ops": [
+          "Relu",
+          "Relu",
+          "Relu",
+          "Relu",
+          "Relu",
+          "Relu",
+          "Relu",
+          "Relu"
+        ]
+      },
+      {
+        "name": "transfer_h2d",
+        "kind": "matmul",
+        "category": "transfer",
+        "op_name": "MatMul",
+        "model_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/transfer_h2d/model.onnx",
+        "profile_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/transfer_h2d/ort_profile.json",
+        "input_names": [
+          "lhs",
+          "rhs"
+        ],
+        "input_shapes": [
+          [
+            8192,
+            4096
+          ],
+          [
+            4096,
+            1
+          ]
+        ],
+        "output_shape": [
+          8192,
+          1
+        ],
+        "units_per_run": 67108864.0,
+        "input_bytes_per_run": 134234112,
+        "output_bytes_per_run": 32768,
+        "transfer_bytes_per_direction": 32768,
+        "target_op_count": 8,
+        "target_op_time_us": 42492.0,
+        "throughput_gflops": 12.63463503718347,
+        "h2d_bytes": 0,
+        "h2d_time_us": 0.0,
+        "h2d_bw_gbps": null,
+        "d2h_bytes": 0,
+        "d2h_time_us": 0.0,
+        "d2h_bw_gbps": null,
+        "warmup_time_us": 415804.7363162041,
+        "measured_time_us": 80539.53945636749,
+        "measure_runs": 8,
+        "warmup_runs": 2,
+        "provider_ops": [
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul"
+        ]
+      },
+      {
+        "name": "transfer_d2h",
+        "kind": "matmul",
+        "category": "transfer",
+        "op_name": "MatMul",
+        "model_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/transfer_d2h/model.onnx",
+        "profile_path": "/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/microbench/transfer_d2h/ort_profile.json",
+        "input_names": [
+          "lhs",
+          "rhs"
+        ],
+        "input_shapes": [
+          [
+            8192,
+            1
+          ],
+          [
+            1,
+            4096
+          ]
+        ],
+        "output_shape": [
+          8192,
+          4096
+        ],
+        "units_per_run": 67108864.0,
+        "input_bytes_per_run": 49152,
+        "output_bytes_per_run": 134217728,
+        "transfer_bytes_per_direction": 134217728,
+        "target_op_count": 8,
+        "target_op_time_us": 32205.0,
+        "throughput_gflops": 16.670421114733738,
+        "h2d_bytes": 0,
+        "h2d_time_us": 0.0,
+        "h2d_bw_gbps": null,
+        "d2h_bytes": 0,
+        "d2h_time_us": 0.0,
+        "d2h_bw_gbps": null,
+        "warmup_time_us": 88819.34359669685,
+        "measured_time_us": 159496.99841439724,
+        "measure_runs": 8,
+        "warmup_runs": 2,
+        "provider_ops": [
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul",
+          "MatMul"
+        ]
+      }
+    ],
+    "resolved_provider": "CANNExecutionProvider"
   }
 }

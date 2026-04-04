@@ -52,6 +52,33 @@ The parent repo coordinates the full-model sweep, branch-parallel execution, dyn
 
 ## Change History
 
+### 2026-04-04 - Refresh nested NPU microbenchmark hardware inputs
+
+Request summary:
+- Update the nested `ORT/npu_sep_modeling` hardware probe so it produces real microbenchmark-backed transfer bandwidths instead of null placeholders.
+- Make sure the nested checked-in hardware profile and README stay aligned with the measured values and the actual NPU-executed benchmark path.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_microbench.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The nested microbenchmark flow now uses actual NPU `MatMul` cases for transfer measurement, rather than CPU-only reductions.
+- The hardware probe prefers exported msprof CSVs that are fully materialized and can fall back to an effective case-level transfer timing estimate when task-level DMA attribution is incomplete.
+- The nested hardware profile now contains non-null `cube_peak_eff_gflops`, `vector_peak_eff_gflops`, `h2d_bw_gbps`, and `d2h_bw_gbps` values.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/npu_microbench.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw`
+- Verified `/data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw/hardware_profile_910b3.json` and `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json` both carry the refreshed benchmark-backed fields.
+
+Open risks:
+- This remains an effective microbenchmark measurement, so it depends on the current ORT/CANN toolchain and profiler export format staying stable.
+- The parent worktree is still dirty; any future commit must stay scoped to the nested NPU files and the two worklogs.
+
 ### 2026-04-04 - Add a checked-in nested 910B3 hardware profile and clarify calibration inputs
 
 Request summary:
