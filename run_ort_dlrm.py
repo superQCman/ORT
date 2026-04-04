@@ -207,6 +207,56 @@ def _patch_model_for_cann(onnx_path: str) -> str:
             return (rank, prod)
         return max(range(len(shapes)), key=lambda i: _score(shapes[i]))
 
+    def _expand_to_ref_if_needed(
+        target_nodes: list,
+        inp: str,
+        ref_inp: str,
+        base: str,
+        idx: int,
+        *,
+        prefix: str,
+        ref_shape_name: str,
+        ref_shape_node_inserted: bool,
+        ref_shape: list | None,
+        src_shape: list | None,
+        elem_type: int = 1,
+        force: bool = False,
+    ) -> tuple[str, bool]:
+        """
+        如果 inp 的 shape 需要显式扩展到 ref_shape，则插入 Shape(ref) + Expand(inp, Shape(ref)).
+        返回 (最终输入名, 是否插入了新的 Shape 节点)。
+        """
+        if src_shape is None and not force:
+            return inp, ref_shape_node_inserted
+        if not force and (ref_shape is None or not _needs_expand(src_shape, ref_shape)):
+            return inp, ref_shape_node_inserted
+
+        if not ref_shape_node_inserted:
+            shape_node = helper.make_node(
+                "Shape",
+                inputs=[ref_inp],
+                outputs=[ref_shape_name],
+                name=f"__cann_patch_{base}_{prefix}_broadcast_shape",
+            )
+            target_nodes.append(shape_node)
+            dtype_map[ref_shape_name] = INT64
+            _register_value_info(ref_shape_name, INT64)
+            ref_shape_node_inserted = True
+
+        exp_name = f"__cann_patch_{base}_{prefix}_expanded_{idx}"
+        exp_node = helper.make_node(
+            "Expand",
+            inputs=[inp, ref_shape_name],
+            outputs=[exp_name],
+            name=f"__cann_patch_{base}_{prefix}_expand_node_{idx}",
+        )
+        target_nodes.append(exp_node)
+        dtype_map[exp_name] = elem_type
+        if ref_shape is not None:
+            shape_map[exp_name] = list(ref_shape)
+        _register_value_info(exp_name, elem_type)
+        return exp_name, ref_shape_node_inserted
+
     INT64  = TensorProto.INT64   # 7
     FLOAT  = TensorProto.FLOAT   # 1
 
@@ -237,6 +287,31 @@ def _patch_model_for_cann(onnx_path: str) -> str:
         swapped[-1], swapped[-2] = swapped[-2], swapped[-1]
         return swapped
 
+    def _infer_matmul_output_shape(lhs_shape: list | None, rhs_shape: list | None) -> list | None:
+        """
+        保守推断 MatMul 输出 shape。
+        这里只需要覆盖 Gemm 改写后的 2D / batched 线性层主路径，目标是给后续
+        bias Add 提供一个可靠的广播参考 shape。
+        """
+        if lhs_shape is None or rhs_shape is None:
+            return None
+        if len(lhs_shape) == 0 or len(rhs_shape) == 0:
+            return None
+        if len(lhs_shape) == 1 and len(rhs_shape) == 1:
+            return []
+        if len(lhs_shape) == 1:
+            prefix = []
+            tail = rhs_shape[-1] if len(rhs_shape) >= 1 else None
+            return prefix + [tail] if tail is not None else None
+        if len(rhs_shape) == 1:
+            prefix = list(lhs_shape[:-1])
+            return prefix if prefix else None
+        prefix = list(lhs_shape[:-1])
+        tail = rhs_shape[-1]
+        if tail is None:
+            return None
+        return prefix + [tail]
+
     gemm_nodes = []
     gemm_patch_count = 0
     for node in graph.node:
@@ -256,6 +331,8 @@ def _patch_model_for_cann(onnx_path: str) -> str:
         output_name = node.output[0]
         output_dtype = dtype_map.get(output_name, dtype_map.get(lhs_name, FLOAT))
         output_shape = shape_map.get(output_name)
+        lhs_shape = shape_map.get(lhs_name)
+        rhs_shape = shape_map.get(rhs_name)
 
         if trans_a:
             lhs_transposed = f"__cann_patch_{base}_transA"
@@ -303,8 +380,9 @@ def _patch_model_for_cann(onnx_path: str) -> str:
             )
         )
         dtype_map[matmul_out] = output_dtype
-        if output_shape is not None:
-            shape_map[matmul_out] = list(output_shape)
+        matmul_shape = list(output_shape) if output_shape is not None else _infer_matmul_output_shape(lhs_shape, rhs_shape)
+        if matmul_shape is not None:
+            shape_map[matmul_out] = list(matmul_shape)
         _register_value_info(matmul_out, output_dtype)
 
         current_out = matmul_out
@@ -346,6 +424,25 @@ def _patch_model_for_cann(onnx_path: str) -> str:
                     shape_map[scaled_bias] = list(shape_map[bias_name])
                 _register_value_info(scaled_bias, dtype_map[scaled_bias])
                 add_rhs = scaled_bias
+
+            add_rhs_shape = shape_map.get(add_rhs)
+            current_shape = shape_map.get(current_out) or output_shape
+            add_ref_shape_name = f"__cann_patch_{base}_add_broadcast_shape"
+            add_ref_shape_inserted = False
+            add_rhs, add_ref_shape_inserted = _expand_to_ref_if_needed(
+                gemm_nodes,
+                add_rhs,
+                current_out,
+                base,
+                0,
+                prefix="add",
+                ref_shape_name=add_ref_shape_name,
+                ref_shape_node_inserted=add_ref_shape_inserted,
+                ref_shape=current_shape,
+                src_shape=add_rhs_shape,
+                elem_type=dtype_map.get(add_rhs, output_dtype),
+                force=True,
+            )
 
             gemm_nodes.append(
                 helper.make_node(

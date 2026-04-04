@@ -375,7 +375,10 @@ python3 onnx_operator_analysis/build_training_features.py \
   --unmatched-out "$PROFILE_DIR/${PROFILE_STEM}_cpu_thread_unmatched.csv" \
   --out ./features/$COMBO.csv \
   --batch-size "$BATCH_SIZE" \
-  --num-indices-per-lookup "$NUM_INDICES"
+  --num-indices-per-lookup "$NUM_INDICES" \
+  --arch-embedding-size "$ARCH_EMBEDDING_SIZE" \
+  --arch-mlp-bot "$ARCH_MLP_BOT" \
+  --arch-mlp-top "$ARCH_MLP_TOP"
 ```
 
 基于已有 merged training CSV 提取精简特征 CSV：
@@ -389,7 +392,7 @@ python3 onnx_operator_analysis/select_feature_subset.py \
 
 ## 输出语义
 
-最终的 `features/<combo>.csv` 会保留 `op_shapes` 中每个 ONNX 节点各一行。
+最终的 `features/<combo>.csv` 会保留 `op_shapes` 中每个 ONNX 节点各一行。如果 sweep 使用的 ONNX 能在 `dlrm_onnx_dyn/manifest.csv` 中命中，对应行还会额外带上 `arch_embedding_size`、`arch_mlp_bot`、`arch_mlp_top` 这三列模型结构元数据。
 
 最终的 `features_selected/<combo>.csv` 也保持每个 ONNX 节点一行，但只保留供下游实验使用的精简特征子集。默认情况下，`dur_us` 来自 `cpu_dur_us_avg`，而 `input_type_shape` / `output_type_shape` 会在 merged dataset 中缺失时，从 `*_cpu_thread_detail_aligned.csv` 自动回填。
 
@@ -406,7 +409,7 @@ sweep 还可以通过 [select_feature_subset.py](./onnx_operator_analysis/select
 
 精简特征数据集仍然保持每个 ONNX 节点一行，目前包含：
 
-- 元数据：`batch_size`、`num_indices_per_lookup`、`node_name`、`op_type`、`trace_op_name`
+- 元数据：`batch_size`、`num_indices_per_lookup`、`arch_embedding_size`、`arch_mlp_bot`、`arch_mlp_top`、`node_name`、`op_type`、`trace_op_name`
 - 算子 shape / size 字段：`input_type_shape`、`output_type_shape`、`output_size`、`activation_size`、`parameter_size`
 - 指令与访存统计：`total_instructions`、`total_loads`、`total_stores`、`load_store_ratio`、`num_threads`
 - reuse time 摘要：`reuse_time_mean` 以及所有已存在的 `reuse_time_bin_<n>_pct`

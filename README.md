@@ -370,7 +370,10 @@ python3 onnx_operator_analysis/build_training_features.py \
   --unmatched-out "$PROFILE_DIR/${PROFILE_STEM}_cpu_thread_unmatched.csv" \
   --out ./features/$COMBO.csv \
   --batch-size "$BATCH_SIZE" \
-  --num-indices-per-lookup "$NUM_INDICES"
+  --num-indices-per-lookup "$NUM_INDICES" \
+  --arch-embedding-size "$ARCH_EMBEDDING_SIZE" \
+  --arch-mlp-bot "$ARCH_MLP_BOT" \
+  --arch-mlp-top "$ARCH_MLP_TOP"
 ```
 
 Extract the compact selected-feature CSV from an existing merged training CSV:
@@ -384,7 +387,7 @@ python3 onnx_operator_analysis/select_feature_subset.py \
 
 ## Output Semantics
 
-The final `features/<combo>.csv` keeps one row per ONNX node from `op_shapes`.
+The final `features/<combo>.csv` keeps one row per ONNX node from `op_shapes`. When the sweep ONNX comes from `dlrm_onnx_dyn/manifest.csv`, each row also carries the combo-level model metadata `arch_embedding_size`, `arch_mlp_bot`, and `arch_mlp_top`.
 
 The final `features_selected/<combo>.csv` keeps one row per ONNX node as well, but only retains the compact feature subset used for downstream experiments. By default `dur_us` is sourced from `cpu_dur_us_avg`, and `input_type_shape` / `output_type_shape` are backfilled from `*_cpu_thread_detail_aligned.csv` when they are not already present in the merged dataset.
 
@@ -401,7 +404,7 @@ For each combo, the sweep writes:
 
 The selected dataset keeps one row per ONNX node and currently includes:
 
-- metadata: `batch_size`, `num_indices_per_lookup`, `node_name`, `op_type`, `trace_op_name`
+- metadata: `batch_size`, `num_indices_per_lookup`, `arch_embedding_size`, `arch_mlp_bot`, `arch_mlp_top`, `node_name`, `op_type`, `trace_op_name`
 - operator shape and size fields: `input_type_shape`, `output_type_shape`, `output_size`, `activation_size`, `parameter_size`
 - trace instruction and memory counts: `total_instructions`, `total_loads`, `total_stores`, `load_store_ratio`, `num_threads`
 - reuse-time summary: `reuse_time_mean` and all available `reuse_time_bin_<n>_pct` columns

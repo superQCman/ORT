@@ -392,30 +392,33 @@ if not csv_paths:
     print(f"[WARN] no feature CSVs found under {feature_root}")
     sys.exit(0)
 
-header = None
+header = []
 rows_written = 0
+
+for path in csv_paths:
+    with path.open("r", encoding="utf-8", newline="") as in_f:
+        reader = csv.DictReader(in_f)
+        if not reader.fieldnames:
+            continue
+        for field in reader.fieldnames:
+            if field not in header:
+                header.append(field)
+
+if not header:
+    print(f"[WARN] feature CSVs under {feature_root} are empty")
+    sys.exit(0)
 
 merged_csv.parent.mkdir(parents=True, exist_ok=True)
 with merged_csv.open("w", encoding="utf-8", newline="") as out_f:
-    writer = None
+    writer = csv.DictWriter(out_f, fieldnames=header)
+    writer.writeheader()
     for path in csv_paths:
         with path.open("r", encoding="utf-8", newline="") as in_f:
-            reader = csv.reader(in_f)
-            current_header = next(reader, None)
-            if not current_header:
+            reader = csv.DictReader(in_f)
+            if not reader.fieldnames:
                 continue
-            if header is None:
-                header = current_header
-                writer = csv.writer(out_f)
-                writer.writerow(header)
-            elif current_header != header:
-                raise SystemExit(
-                    f"ERROR: header mismatch while merging {path}. "
-                    f"expected {header}, got {current_header}"
-                )
-
             for row in reader:
-                writer.writerow(row)
+                writer.writerow({field: row.get(field, "") for field in header})
                 rows_written += 1
 
 print(f"[ OK ] merged {len(csv_paths)} feature CSVs into {merged_csv} ({rows_written} rows)")

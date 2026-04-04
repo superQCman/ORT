@@ -200,7 +200,11 @@ def build_session(
 
 def extract_submodel(src: Path, dst: Path, input_names: List[str], output_names: List[str]) -> None:
     if dst.exists():
-        return
+        try:
+            if dst.stat().st_mtime_ns >= src.stat().st_mtime_ns:
+                return
+        except FileNotFoundError:
+            pass
     ensure_dir(dst.parent)
     onnx_utils.extract_model(str(src), str(dst), input_names, output_names)
 

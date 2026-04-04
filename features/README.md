@@ -18,6 +18,9 @@
 | --- | --- | --- |
 | `batch_size` | 生成当前样本时使用的 batch size。 | `build_training_features.py --batch-size` |
 | `num_indices_per_lookup` | DLRM embedding lookup 的 `num_indices_per_lookup`。 | `build_training_features.py --num-indices-per-lookup` |
+| `arch_embedding_size` | 当前样本对应 ONNX 的 `arch_embedding_size` 配置。 | `build_training_features.py --arch-embedding-size` 或 `run_ort_sweep_extensible.sh` 从 `dlrm_onnx_dyn/manifest.csv` 自动解析 |
+| `arch_mlp_bot` | 当前样本对应 ONNX 的 `arch_mlp_bot` 配置。 | `build_training_features.py --arch-mlp-bot` 或 `run_ort_sweep_extensible.sh` 从 `dlrm_onnx_dyn/manifest.csv` 自动解析 |
+| `arch_mlp_top` | 当前样本对应 ONNX 的 `arch_mlp_top` 配置。 | `build_training_features.py --arch-mlp-top` 或 `run_ort_sweep_extensible.sh` 从 `dlrm_onnx_dyn/manifest.csv` 自动解析 |
 | `node_idx` | ONNX 节点在 `op_shapes` 中的规范索引，也是最终 join key。 | `op_shapes_*.csv` |
 | `node_name` | ONNX 节点名，作为最终训练集中的规范节点名。 | `op_shapes_*.csv` |
 | `op_type` | ONNX 算子类型，例如 `Gather`、`Gemm`、`Constant`。 | `op_shapes_*.csv` |
