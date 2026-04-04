@@ -52,6 +52,29 @@ The parent repo coordinates the full-model sweep, branch-parallel execution, dyn
 
 ## Change History
 
+### 2026-04-04 - Add thesis-style NPU side modeling draft in the nested NPU project
+
+Request summary:
+- Create a dedicated thesis draft document under `ORT/npu_sep_modeling` for section 3.3 NPU-side modeling.
+- Rewrite the content in a formal academic style that emphasizes theory, feature construction, and model design instead of engineering implementation.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/chapter3_3_npu_side_modeling_draft.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a standalone markdown draft that covers the three requested subsections: modeling objective/overall idea, feature construction, and model design.
+- The draft presents the NPU model as a lane-aware physical approximation with launch, queueing, compute, memory, and transfer terms, while avoiding repository-specific script details.
+
+Validation run:
+- Manual content review of the new markdown draft.
+- `git diff --check -- /data/qc/dlrm/ORT/npu_sep_modeling/chapter3_3_npu_side_modeling_draft.md /data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md /data/qc/dlrm/ORT/AGENT_WORKLOG.md`
+
+Open risks:
+- The chapter is a first draft and may still need wording alignment with the rest of the dissertation.
+- Symbol conventions may need to be harmonized later if adjacent chapters use different notation for launch, queueing, or effective bandwidth terms.
+
 ### 2026-04-04 - Convert the nested NPU model to physical-parameter calibration
 
 Request summary:

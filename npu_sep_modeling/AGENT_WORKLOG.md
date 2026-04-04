@@ -52,6 +52,28 @@ This project is a self-contained NPU single-operator modeling pipeline for Ascen
 
 ## Change History
 
+### 2026-04-04 - Draft the thesis-style NPU side modeling chapter
+
+Request summary:
+- Create a dedicated document in `ORT/npu_sep_modeling` for the thesis draft of section 3.3 NPU-side modeling.
+- Recast the NPU modeling content in a more academic style, removing engineering implementation details and emphasizing theory, feature design, and model structure.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/chapter3_3_npu_side_modeling_draft.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added a standalone Chinese draft covering `3.3.1` target/overall idea, `3.3.2` feature construction, and `3.3.3` model design.
+- The draft now frames the NPU side as a lane-aware physical model with launch, queueing, compute, memory, and transfer terms, while avoiding script-level or pipeline-level implementation details.
+
+Validation run:
+- Manual content review of the new markdown draft.
+- `git diff --check -- /data/qc/dlrm/ORT/npu_sep_modeling/chapter3_3_npu_side_modeling_draft.md /data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Open risks:
+- The chapter draft is intentionally initial and may still need terminology tuning to match the final thesis title, chapter order, and surrounding sections.
+- The formulas are written at a thesis level of abstraction and may need minor notation harmonization with later chapters if the full dissertation uses a different symbol system.
+
 ### 2026-04-04 - Replace scale+bias calibration with physical-parameter NPU modeling
 
 Request summary:
