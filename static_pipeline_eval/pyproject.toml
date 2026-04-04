@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ort-static-pipeline-eval"
+version = "0.1.0"
+description = "Static pipeline evaluation for ORT DLRM branch-parallel execution"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
