@@ -139,6 +139,29 @@ Open risks:
 - The proof sketch depends on the boundedness and i.i.d. assumptions stated in the nested README, so it is a conditional guarantee rather than a universal one.
 - Very small per-op groups would still fit, but the effective statistical margin on those groups becomes weaker.
 
+### 2026-04-04 - Fix nested baseline parsing and refresh error estimates
+
+Request summary:
+- Investigate the nested NPU baseline that had been reporting 100% MAPE.
+- Fix the numeric parsing bug in the nested shared utility code.
+- Refresh the nested baseline and calibrated error estimates after the fix.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The nested shared `safe_float` helper now parses numeric inputs correctly, so the roofline baseline uses real tensor sizes instead of zeros.
+- The nested analytical model now reports a meaningful baseline MAPE, while the calibrated model remains substantially below that baseline.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_subset_test2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_subset_test2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_subset_test2`
+
+Open risks:
+- The baseline is still a coarse roofline approximation and should not be expected to reach sub-20% error without better peak measurements or more detailed per-op physics.
+
 ### 2026-04-04 - Add 910B3 separated-architecture NPU modeling subproject
 
 Request summary:

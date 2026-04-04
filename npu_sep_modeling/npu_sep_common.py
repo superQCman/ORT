@@ -113,17 +113,6 @@ def safe_int(value: Any, default: int | None = None) -> int | None:
 def safe_float(value: Any, default: float | None = None) -> float | None:
     if value is None:
         return default
-
-
-def hardware_value(profile: dict[str, Any] | None, key: str, default: Any = None) -> Any:
-    if not profile:
-        return default
-    value = profile.get(key, default)
-    if value is None:
-        return default
-    if isinstance(value, float) and math.isnan(value):
-        return default
-    return value
     if isinstance(value, bool):
         return float(int(value))
     if isinstance(value, (int, float)):
@@ -137,6 +126,17 @@ def hardware_value(profile: dict[str, Any] | None, key: str, default: Any = None
         return float(text)
     except ValueError:
         return default
+
+
+def hardware_value(profile: dict[str, Any] | None, key: str, default: Any = None) -> Any:
+    if not profile:
+        return default
+    value = profile.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, float) and math.isnan(value):
+        return default
+    return value
 
 
 def parse_combo_name(combo: str) -> tuple[int, int]:

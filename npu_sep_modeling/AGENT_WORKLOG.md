@@ -204,3 +204,30 @@ Observed results:
 Open risks:
 - The conditional generalization argument still depends on the i.i.d. / bounded-noise assumptions stated in the README.
 - If a future data split has very small per-op groups, stratified sampling may collapse to one row per group, which keeps coverage but weakens the statistical bound.
+
+### 2026-04-04 - Fix baseline numeric parsing and refresh error estimates
+
+Request summary:
+- Investigate why the baseline MAPE stayed at 100% after the subset calibration work.
+- Fix the baseline numeric parsing bug so the analytical roofline is evaluated with the real shape/byte inputs.
+- Recompute the current baseline and calibrated error levels.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `safe_float` now correctly parses numeric scalars and strings instead of returning `None` for every non-`None` input.
+- The baseline roofline now uses the actual per-row `matmul_m/k/n`, bytes, and vector element counts, so its error metrics are meaningful again.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_subset_test2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_subset_test2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_subset_test2`
+
+Observed results:
+- Baseline MAPE dropped from the broken `100%` artifact to about `77%` on train/val/test.
+- The calibrated model remained in the `~5%` to `~12%` MAPE range, and the internal train holdout stayed close to the fit subset.
+
+Open risks:
+- Even with the parsing bug fixed, the baseline is still only a coarse roofline approximation, so it is not expected to reach `20%` MAPE without better hardware peaks or richer per-op correction.
