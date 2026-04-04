@@ -106,7 +106,24 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
     lines.append(f"- Label column: `{calibration.get('label_column')}`")
     lines.append(f"- Operator column: `{calibration.get('op_column')}`")
     lines.append(f"- Lane column: `{calibration.get('lane_column')}`")
+    if calibration.get("calibration_fit_fraction") is not None:
+        lines.append(f"- Calibration fit fraction: `{calibration.get('calibration_fit_fraction')}`")
+        lines.append(f"- Calibration fit seed: `{calibration.get('calibration_seed')}`")
     lines.append("")
+    subset = calibration.get("calibration_subset") or {}
+    if subset:
+        lines.append("## Calibration Subset")
+        lines.append(
+            "- "
+            + ", ".join(
+                [
+                    f"fit_rows={subset.get('fit_rows')}",
+                    f"heldout_rows={subset.get('heldout_rows')}",
+                    f"fit_group_col={calibration.get('calibration_fit_group_column')}",
+                ]
+            )
+        )
+        lines.append("")
     lines.append("## Baseline Defaults")
     defaults = calibration.get("baseline_defaults", {})
     lines.append(
@@ -125,7 +142,10 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
         "RMSE",
     ]
     rows: list[list[str]] = []
-    for split in ("train", "val", "test"):
+    split_order = ["train_fit", "train_heldout", "train", "val", "test"]
+    for split in split_order:
+        if split not in summary["overall"]:
+            continue
         data = summary["overall"][split]
         for model_name in ("baseline", "calibrated", "lane_calibrated", "global_calibrated"):
             metrics = data[model_name]
@@ -140,10 +160,29 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
             )
     lines.append(markdown_table(headers, rows))
     lines.append("")
+    if "train_heldout" in summary["overall"] and summary["overall"]["train_heldout"]:
+        lines.append("## Internal Train Holdout")
+        holdout = summary["overall"]["train_heldout"]
+        headers = ["model", "MAE", "MAPE%", "RMSE"]
+        rows = []
+        for model_name in ("baseline", "calibrated", "lane_calibrated", "global_calibrated"):
+            metrics = holdout[model_name]
+            rows.append(
+                [
+                    model_name,
+                    format_float(metrics["mae"]),
+                    format_float(metrics["mape"]),
+                    format_float(metrics["rmse"]),
+                ]
+            )
+        lines.append(markdown_table(headers, rows))
+        lines.append("")
     lines.append("## Baseline To Calibrated Delta")
     delta_headers = ["split", "MAE delta", "MAPE delta", "RMSE delta"]
     delta_rows: list[list[str]] = []
     for split in ("train", "val", "test"):
+        if split not in summary["overall"]:
+            continue
         delta = summary["overall"][split]["delta"]
         delta_rows.append(
             [
@@ -254,10 +293,25 @@ def evaluate_model(
     }
 
     summary: dict[str, Any] = {"overall": {}, "by_op_name": {}, "by_lane": {}}
+    subset = calibration.get("calibration_subset") or {}
     for split, frame in calibrated_frames.items():
         summary["overall"][split] = compare_frame(frame, label_col)
         summary["by_op_name"][split] = compare_groups_with_baseline(frame, label_col, op_col, "calibrated_pred_us")
         summary["by_lane"][split] = compare_groups_with_baseline(frame, label_col, lane_col, "lane_calibrated_pred_us")
+
+    fit_indices = subset.get("fit_indices") or []
+    heldout_indices = subset.get("heldout_indices") or []
+    train_frame = calibrated_frames["train"]
+    if fit_indices:
+        fit_frame = train_frame.loc[fit_indices]
+        summary["overall"]["train_fit"] = compare_frame(fit_frame, label_col)
+        summary["by_op_name"]["train_fit"] = compare_groups_with_baseline(fit_frame, label_col, op_col, "calibrated_pred_us")
+        summary["by_lane"]["train_fit"] = compare_groups_with_baseline(fit_frame, label_col, lane_col, "lane_calibrated_pred_us")
+    if heldout_indices:
+        heldout_frame = train_frame.loc[heldout_indices]
+        summary["overall"]["train_heldout"] = compare_frame(heldout_frame, label_col)
+        summary["by_op_name"]["train_heldout"] = compare_groups_with_baseline(heldout_frame, label_col, op_col, "calibrated_pred_us")
+        summary["by_lane"]["train_heldout"] = compare_groups_with_baseline(heldout_frame, label_col, lane_col, "lane_calibrated_pred_us")
     return {
         "calibration": calibration,
         "summary": summary,

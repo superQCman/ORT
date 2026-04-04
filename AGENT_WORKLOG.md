@@ -111,6 +111,34 @@ Validation run:
 Open risks:
 - The cube/vector split is inferred from the separated AI Core layout and the local `npu-smi` count; if official 910B3 documentation changes, the nested profile should be refreshed together with the README.
 
+### 2026-04-04 - Add subset calibration and conditional generalization reporting
+
+Request summary:
+- Allow the nested NPU calibration step to fit on only a stratified fraction of the train rows.
+- Add an internal holdout so the remaining train rows can be used to inspect generalization.
+- Document the generalization argument as conditional rather than unconditional.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+
+Behavior changes:
+- The nested calibration script now accepts `--calibration-fit-fraction` and `--calibration-seed`.
+- The nested calibration artifacts now record the sampled fit subset and internal holdout.
+- The nested evaluation report now includes the internal train holdout when the subset mode is active.
+- The nested README now frames the generalization claim as a conditional proof sketch with explicit assumptions.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_subset_test`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_subset_test/calibration.json --output-dir /tmp/npu_sep_modeling_eval_subset_test`
+
+Open risks:
+- The proof sketch depends on the boundedness and i.i.d. assumptions stated in the nested README, so it is a conditional guarantee rather than a universal one.
+- Very small per-op groups would still fit, but the effective statistical margin on those groups becomes weaker.
+
 ### 2026-04-04 - Add 910B3 separated-architecture NPU modeling subproject
 
 Request summary:

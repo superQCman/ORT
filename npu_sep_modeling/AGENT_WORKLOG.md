@@ -171,3 +171,36 @@ Observed results:
 
 Open risks:
 - The cube/vector count split is inferred from the separated AI Core layout and the observed `Aicore Count=20`; if future official data revises the mapping, the profile should be updated in one place.
+
+### 2026-04-04 - Add subset calibration and conditional generalization reporting
+
+Request summary:
+- Allow the calibration stage to fit on only a stratified fraction of the training rows.
+- Expose an internal train holdout so the remaining rows can be used to check generalization.
+- Document the fact that generalization needs assumptions, and provide a conditional proof sketch instead of an unconditional claim.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+
+Behavior changes:
+- `fit_sep_analytical_model.py` now accepts `--calibration-fit-fraction` and `--calibration-seed`.
+- The calibration subset is sampled stratified by `op_name`; the unused rows are preserved as an internal holdout.
+- `calibration.json` now records the subset metadata and `metrics_summary.json` includes `train_fit` and `train_heldout` metrics.
+- `evaluate_sep_analytical_model.py` now renders the internal train holdout in the Markdown comparison report when subset calibration is used.
+- The README now states the conditional nature of the generalization argument and adds a proof sketch with the required assumptions.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_subset_test`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_subset_test/calibration.json --output-dir /tmp/npu_sep_modeling_eval_subset_test`
+
+Observed results:
+- The 252-row train split was divided into 78 fit rows and 174 internal holdout rows at `calibration-fit-fraction=0.3`.
+- Holdout `calibrated` MAPE stayed around `9.49%`, which is close to the fitted subset's `7.16%` and well below the baseline `100%`.
+
+Open risks:
+- The conditional generalization argument still depends on the i.i.d. / bounded-noise assumptions stated in the README.
+- If a future data split has very small per-op groups, stratified sampling may collapse to one row per group, which keeps coverage but weakens the statistical bound.

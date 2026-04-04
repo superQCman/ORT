@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import math
+import random
 from pathlib import Path
 from typing import Any
 
@@ -12,7 +14,6 @@ from npu_sep_common import (
     DEFAULT_MEMORY_BW_GBPS,
     DEFAULT_TRANSFER_BW_GBPS,
     DEFAULT_VECTOR_PEAK_EFF_GFLOPS,
-    baseline_prediction,
     compute_regression_metrics,
     dump_json,
     ensure_dir,
@@ -36,6 +37,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label-column", default=LABEL_COLUMN)
     parser.add_argument("--op-column", default=OP_COLUMN)
     parser.add_argument("--lane-column", default=LANE_COLUMN)
+    parser.add_argument(
+        "--calibration-fit-fraction",
+        type=float,
+        default=1.0,
+        help="Fraction of train rows used to fit calibration parameters. Values below 1.0 use a stratified subset.",
+    )
+    parser.add_argument(
+        "--calibration-seed",
+        type=int,
+        default=42,
+        help="Random seed used when selecting the calibration subset.",
+    )
     return parser.parse_args()
 
 
@@ -73,6 +86,36 @@ def annotate_baselines(df: pd.DataFrame, hardware_profile: dict[str, Any]) -> pd
         row["baseline_formula"] = baseline["formula"]
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def select_calibration_subset(
+    df: pd.DataFrame,
+    group_col: str,
+    fraction: float,
+    seed: int,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[int], list[int]]:
+    if fraction >= 1.0:
+        fit_df = df.copy()
+        heldout_df = df.iloc[0:0].copy()
+        fit_indices = [int(idx) for idx in fit_df.index.tolist()]
+        return fit_df, heldout_df, fit_indices, []
+    if fraction <= 0.0:
+        raise ValueError("calibration-fit-fraction must be greater than 0")
+
+    rng = random.Random(seed)
+    fit_indices: list[int] = []
+    for _, group_df in df.groupby(group_col, dropna=False):
+        group_indices = [int(idx) for idx in group_df.index.tolist()]
+        rng.shuffle(group_indices)
+        target = max(1, int(math.ceil(len(group_indices) * fraction)))
+        target = min(len(group_indices), target)
+        fit_indices.extend(group_indices[:target])
+
+    fit_indices = sorted(set(fit_indices))
+    heldout_indices = [int(idx) for idx in df.index.tolist() if int(idx) not in fit_indices]
+    fit_df = df.loc[fit_indices].copy()
+    heldout_df = df.loc[heldout_indices].copy()
+    return fit_df, heldout_df, fit_indices, heldout_indices
 
 
 def fit_group_params(df: pd.DataFrame, group_col: str, label_col: str) -> dict[str, dict[str, Any]]:
@@ -146,17 +189,29 @@ def build_metrics_summary(
     return summary
 
 
-def fit_model(data_dir: Path, hardware_profile_path: str, output_dir: Path, label_col: str, op_col: str, lane_col: str) -> dict[str, Any]:
+def fit_model(
+    data_dir: Path,
+    hardware_profile_path: str,
+    output_dir: Path,
+    label_col: str,
+    op_col: str,
+    lane_col: str,
+    calibration_fit_fraction: float,
+    calibration_seed: int,
+) -> dict[str, Any]:
     frames = load_split_frames(data_dir)
     hardware_profile = load_optional_hardware_profile(hardware_profile_path)
 
     annotated_frames = {split: annotate_baselines(frame, hardware_profile) for split, frame in frames.items()}
     train = annotated_frames["train"]
+    fit_train, heldout_train, fit_indices, heldout_indices = select_calibration_subset(
+        train, op_col, calibration_fit_fraction, calibration_seed
+    )
 
-    global_scale, global_bias = fit_scale_bias(train["baseline_pred_us"], train[label_col])
-    global_params = {"scale": float(global_scale), "bias_us": float(global_bias), "n": int(len(train))}
-    op_params = fit_group_params(train, op_col, label_col)
-    lane_params = fit_group_params(train, lane_col, label_col)
+    global_scale, global_bias = fit_scale_bias(fit_train["baseline_pred_us"], fit_train[label_col])
+    global_params = {"scale": float(global_scale), "bias_us": float(global_bias), "n": int(len(fit_train))}
+    op_params = fit_group_params(fit_train, op_col, label_col)
+    lane_params = fit_group_params(fit_train, lane_col, label_col)
 
     calibrated_frames = {
         split: apply_calibration(frame, op_params, lane_params, global_params, op_col, lane_col)
@@ -164,6 +219,16 @@ def fit_model(data_dir: Path, hardware_profile_path: str, output_dir: Path, labe
     }
 
     metrics_summary = build_metrics_summary(calibrated_frames, label_col, op_col, lane_col)
+    metrics_summary["overall"]["train_fit"] = metrics_for_frame(
+        apply_calibration(fit_train, op_params, lane_params, global_params, op_col, lane_col),
+        label_col,
+        ["baseline_pred_us", "calibrated_pred_us", "lane_calibrated_pred_us", "global_calibrated_pred_us"],
+    )
+    metrics_summary["overall"]["train_heldout"] = metrics_for_frame(
+        apply_calibration(heldout_train, op_params, lane_params, global_params, op_col, lane_col),
+        label_col,
+        ["baseline_pred_us", "calibrated_pred_us", "lane_calibrated_pred_us", "global_calibrated_pred_us"],
+    ) if len(heldout_train) else {}
 
     calibration_payload = {
         "case_id": CASE_ID,
@@ -171,6 +236,15 @@ def fit_model(data_dir: Path, hardware_profile_path: str, output_dir: Path, labe
         "op_column": op_col,
         "lane_column": lane_col,
         "hardware_profile_path": hardware_profile_path or None,
+        "calibration_fit_fraction": float(calibration_fit_fraction),
+        "calibration_seed": int(calibration_seed),
+        "calibration_fit_group_column": op_col,
+        "calibration_subset": {
+            "fit_rows": int(len(fit_train)),
+            "heldout_rows": int(len(heldout_train)),
+            "fit_indices": fit_indices,
+            "heldout_indices": heldout_indices,
+        },
         "baseline_defaults": {
             "cube_peak_eff_gflops": DEFAULT_CUBE_PEAK_EFF_GFLOPS,
             "vector_peak_eff_gflops": DEFAULT_VECTOR_PEAK_EFF_GFLOPS,
@@ -216,7 +290,16 @@ def fit_model(data_dir: Path, hardware_profile_path: str, output_dir: Path, labe
 
 def main() -> None:
     args = parse_args()
-    result = fit_model(Path(args.data_dir), args.hardware_profile, Path(args.output_dir), args.label_column, args.op_column, args.lane_column)
+    result = fit_model(
+        Path(args.data_dir),
+        args.hardware_profile,
+        Path(args.output_dir),
+        args.label_column,
+        args.op_column,
+        args.lane_column,
+        args.calibration_fit_fraction,
+        args.calibration_seed,
+    )
     print(f"Wrote {result['calibration_path']}")
     print(f"Wrote {result['metrics_path']}")
 

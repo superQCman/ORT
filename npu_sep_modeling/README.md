@@ -103,6 +103,36 @@ v1 目标很窄：
 - 再按 `op_name` 和 `npu_lane` 拟合少量 `scale + bias_us`
 - 评估时比较 baseline、`op_name` 校准、`lane` 校准和 `global` 校准
 
+## 泛化性说明
+
+这套校准**可以**只用少量训练样本来拟合，而且更推荐这么做，但前提是要把“拟合”和“验证”分开。
+
+当前实现里，`fit_sep_analytical_model.py` 支持 `--calibration-fit-fraction < 1.0`，它会：
+
+- 按 `op_name` 做分层抽样
+- 只用抽到的那部分训练样本拟合 `scale + bias_us`
+- 把没参与拟合的训练样本留作内部 holdout
+- 在 `metrics_summary.json` 和评估报告里显式报告 holdout 误差
+
+这里不能给出“对所有未来数据都绝对成立”的无条件证明，但可以给出一个严格的条件性结论：
+
+> 对每个校准桶 `g`，我们拟合的是二维仿射模型 `h_g(x)=a_g x + b_g`。
+> 如果同一桶内的样本可视为独立同分布，且 `baseline_pred_us` 与真实标签都被限制在有界区间内，那么标准的线性回归/经验风险最小化泛化理论保证：
+> 经验风险与期望风险之间的差距会随样本数 `n_g` 以 `O(1/sqrt(n_g))` 的速度收敛。
+> 也就是说，校准参数越少、每个桶里的样本越多，泛化上界就越紧。
+
+这条结论的实际含义是：
+
+- 我们没有引入高容量黑盒模型
+- 每个桶只学 2 个参数
+- 只要每个桶保留足够的拟合样本，泛化风险就可以用持出集直接检验，而不是靠主观感觉
+
+更稳妥的使用方式是：
+
+1. 用少量、但分层覆盖的 train 样本拟合校准
+2. 用 train holdout 验证泛化
+3. 再看 val/test 的最终误差
+
 ## 硬件探测
 
 - `hardware_probe.py` 先读 `npu-smi info`、`npu-smi info -t board` 和 `npu-smi info -t common`
@@ -127,6 +157,8 @@ python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py \
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py \
   --data-dir /tmp/npu_sep_modeling_dataset \
   --hardware-profile /tmp/npu_sep_modeling_hw/hardware_profile_910b3.json \
+  --calibration-fit-fraction 0.3 \
+  --calibration-seed 42 \
   --output-dir /tmp/npu_sep_modeling_fit
 
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py \
