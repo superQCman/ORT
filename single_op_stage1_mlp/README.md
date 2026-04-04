@@ -1,6 +1,6 @@
 # Single-Op Stage-1 MLP
 
-这个目录是一个独立的小流水线，直接从 `ORT/features_extensible_case_*/*.csv` 和对应的 `ORT/sweep_runs_extensible_case_*/op_shapes/*.csv` 提取全量 case 数据，不依赖其他目录下的脚本。
+这个目录是 ORT monorepo 下的一个子流水线，已通过 subtree 迁入主仓库；它直接从 `ORT/features_extensible_case_*/*.csv` 和对应的 `ORT/sweep_runs_extensible_case_*/op_shapes/*.csv` 提取全量 case 数据，不依赖其他目录下的脚本。
 
 现在已经同时支持两种输入口径：
 

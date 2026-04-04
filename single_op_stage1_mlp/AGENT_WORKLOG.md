@@ -8,7 +8,7 @@ Future agents working in this directory must read this file before changing code
 
 ### Purpose
 
-This project is a self-contained single-operator latency modeling pipeline for ORT DLRM. It builds train/val/test tables from all `features_extensible_case_*` cases, engineers stage-1-style features, and trains an MLP to predict per-operator latency.
+This project is a self-contained single-operator latency modeling pipeline for ORT DLRM within the ORT monorepo. It builds train/val/test tables from all `features_extensible_case_*` cases, engineers stage-1-style features, and trains an MLP to predict per-operator latency.
 
 ### Main Components
 
@@ -79,8 +79,8 @@ This project is a self-contained single-operator latency modeling pipeline for O
 
 - Keep this project self-contained. Do not add dependencies on scripts from other directories for core pipeline steps.
 - When changing project behavior, update this file in the same task.
-- After each completed modification in this directory, create a git commit in the independent repository rooted at `/data/qc/dlrm/ORT/single_op_stage1_mlp`.
-- Do not commit project changes into the parent `ORT` repository.
+- After each completed modification in this directory, create a git commit in the parent `ORT` repository rooted at `/data/qc/dlrm/ORT`.
+- Do not commit project changes into a separate nested repository.
 
 ### 2026-04-01 - Add classed_op_mlp metrics table to README
 
@@ -2704,3 +2704,34 @@ Key results:
 Open risks:
 - The compatibility check had to use an in-memory old-function replay rather than a direct diff against the existing artifact directory, because the currently checked-in `artifacts/latest/analytical_calibrated/analytical_features_full.csv` is not the same row slice as the freshly rebuilt export.
 - The new metadata columns are analysis-facing only; if future work wants to route models directly by `ana_calib_regime`, that would be a separate contract change and should be evaluated independently.
+
+### 2026-04-04 - Migrate single_op_stage1_mlp into the ORT monorepo via subtree
+
+Request summary:
+- Import the standalone `single_op_stage1_mlp` repository into the parent `ORT` monorepo while preserving its commit history.
+- Update the project docs and agent instructions so they describe the subtree-imported monorepo layout instead of a separate nested repository.
+
+Files changed:
+- `/data/qc/dlrm/ORT/README.md`
+- `/data/qc/dlrm/ORT/README.zh-CN.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENTS.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+
+Behavior changes:
+- Preserved the single-op project history by importing it into the ORT monorepo with `git subtree add` from a bare clone.
+- Reworded the project README so it now describes `single_op_stage1_mlp` as an ORT monorepo subproject rather than an independent repository.
+- Updated agent instructions and commit guidance to point at the parent ORT repository instead of a nested git root.
+- Added a root ORT README section that links the subtree-imported `single_op_stage1_mlp` and `static_pipeline_eval` subprojects.
+
+Validation run:
+- `git -C /tmp/ORT_monorepo_merge subtree add --prefix=single_op_stage1_mlp /tmp/ort_subtree_sources/single_op_stage1_mlp.git master`
+- Manual review of:
+  - `/tmp/ORT_monorepo_merge/README.md`
+  - `/tmp/ORT_monorepo_merge/README.zh-CN.md`
+  - `/tmp/ORT_monorepo_merge/single_op_stage1_mlp/AGENTS.md`
+  - `/tmp/ORT_monorepo_merge/single_op_stage1_mlp/README.md`
+
+Open risks:
+- The original workspace had pre-existing dirty state, so this migration was carried out in a temporary clean worktree and then mirrored back into the visible workspace.
+- The subtree import preserved history, but future edits should continue to avoid reintroducing a nested `.git` directory under `single_op_stage1_mlp`.

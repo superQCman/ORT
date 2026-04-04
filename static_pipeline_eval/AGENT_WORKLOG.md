@@ -8,7 +8,7 @@ Future agents working in this directory must read this file before changing code
 
 ### Purpose
 
-This project is a self-contained static pipeline evaluator for ORT DLRM branch-parallel execution. It reuses saved per-op predictions from `single_op_stage1_mlp`, reconstructs combo-level graph structure from `op_shapes`, applies a static scheduler for the 8 embedding branches, and compares predicted makespan against actual whole-graph timing from branch-parallel timeline traces.
+This project is a self-contained static pipeline evaluator for ORT DLRM branch-parallel execution within the ORT monorepo. It reuses saved per-op predictions from `single_op_stage1_mlp`, reconstructs combo-level graph structure from `op_shapes`, applies a static scheduler for the 8 embedding branches, and compares predicted makespan against actual whole-graph timing from branch-parallel timeline traces.
 
 ### Main Components
 
@@ -25,6 +25,9 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ### Current Scheduling Conventions
 
+- Repository layout:
+  - this project now lives inside the ORT monorepo via subtree migration
+  - the artifact paths and combo naming conventions remain unchanged
 - `v1` defaults to the existing test artifact:
   - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_200_iter_quick`
 - The CLI can override `--artifact-root` for schema-compatible artifacts from `single_op_stage1_mlp`.
@@ -242,3 +245,34 @@ Validation run:
 Open risks:
 - The document is now much more manuscript-like, but it is still a methods paper draft rather than a submission-ready paper with citations, related work, theorem statements, or formatted tables/figures.
 - If this is later adapted to a formal venue template, equation numbering, algorithm environment styling, references, and experimental sections will still need another pass.
+
+### 2026-04-04 - Migrate static_pipeline_eval into the ORT monorepo via subtree
+
+Request summary:
+- Import the standalone `static_pipeline_eval` repository into the parent `ORT` monorepo while preserving commit history.
+- Update the project docs and agent instructions so they describe the subtree-imported monorepo layout instead of a separate nested repository.
+
+Files changed:
+- `/data/qc/dlrm/ORT/README.md`
+- `/data/qc/dlrm/ORT/README.zh-CN.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENTS.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/README.md`
+
+Behavior changes:
+- Preserved the static pipeline evaluator history by importing it into the ORT monorepo with `git subtree add` from a bare clone.
+- Reworded the project README so it now describes `static_pipeline_eval` as an ORT monorepo subproject rather than an independent repository.
+- Updated agent instructions and commit guidance to point at the parent ORT repository instead of a nested git root.
+- Added a root ORT README section that links the subtree-imported `single_op_stage1_mlp` and `static_pipeline_eval` subprojects.
+
+Validation run:
+- `git -C /tmp/ORT_monorepo_merge subtree add --prefix=static_pipeline_eval /tmp/ort_subtree_sources/static_pipeline_eval.git master`
+- Manual review of:
+  - `/tmp/ORT_monorepo_merge/README.md`
+  - `/tmp/ORT_monorepo_merge/README.zh-CN.md`
+  - `/tmp/ORT_monorepo_merge/static_pipeline_eval/AGENTS.md`
+  - `/tmp/ORT_monorepo_merge/static_pipeline_eval/README.md`
+
+Open risks:
+- The original workspace had pre-existing dirty state, so this migration was carried out in a temporary clean worktree and then mirrored back into the visible workspace.
+- The subtree import preserved history, but future edits should continue to avoid reintroducing a nested `.git` directory under `static_pipeline_eval`.

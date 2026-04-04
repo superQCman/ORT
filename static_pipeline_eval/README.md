@@ -1,6 +1,6 @@
 # ORT Static Pipeline Eval
 
-`ORT/static_pipeline_eval` 是一个独立的小项目，用来把 `single_op_stage1_mlp` 已经训练好的单算子性能预测结果，重新组织成整图级静态流水线时间线，并评估预测的 end-to-end makespan 与真实 branch-parallel 执行时间之间的误差。
+`ORT/static_pipeline_eval` 是 ORT monorepo 下的一个子项目，已通过 subtree 迁入主仓库。它用来把 `single_op_stage1_mlp` 已经训练好的单算子性能预测结果，重新组织成整图级静态流水线时间线，并评估预测的 end-to-end makespan 与真实 branch-parallel 执行时间之间的误差。
 
 它解决的问题不是“单个算子预测准不准”，而是“当这些算子带着真实依赖关系和 branch 并发规则被排成一条静态时间线之后，整图误差会变成什么样”。
 

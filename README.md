@@ -11,6 +11,13 @@ This directory contains the current ONNX Runtime based DLRM workflow for:
 - merging ORT CPU-thread profiling with trace features into a training dataset
 - extracting a compact selected-feature dataset for downstream modeling
 
+This monorepo also includes two subtree-imported subprojects:
+
+- [single_op_stage1_mlp](./single_op_stage1_mlp/README.md)
+  Single-operator stage-1 MLP pipeline for feature engineering and training.
+- [static_pipeline_eval](./static_pipeline_eval/README.md)
+  Static pipeline evaluator for branch-parallel makespan estimation.
+
 ## Main Entry Points
 
 Use [run_ort_sweep.sh](./run_ort_sweep.sh) for the canonical end-to-end workflow.
@@ -73,6 +80,8 @@ The default sweep range is:
 ```text
 ORT/
 ├── README.md
+├── single_op_stage1_mlp/
+├── static_pipeline_eval/
 ├── run_ort_dlrm.py
 ├── run_ort_dlrm_branch_parallel.py
 ├── run_ort.sh

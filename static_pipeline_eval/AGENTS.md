@@ -14,13 +14,13 @@ After making any change in this directory:
 
 1. Append a new dated entry to [AGENT_WORKLOG.md](/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md).
 2. Include: request summary, files changed, behavior changes, validation run, and open risks.
-3. Save the change with git in the independent repository rooted at `/data/qc/dlrm/ORT/static_pipeline_eval` before finishing the task.
+3. Save the change with git in the parent `ORT` repository rooted at `/data/qc/dlrm/ORT` before finishing the task.
 
 ## Git Rules
 
 - Commit after each completed modification task affecting this directory.
-- Do not commit these changes into the parent `ORT` repository.
-- Use the independent git repository rooted at `/data/qc/dlrm/ORT/static_pipeline_eval`.
+- Do not commit these changes into a separate nested repository.
+- Use the parent `ORT` repository rooted at `/data/qc/dlrm/ORT`.
 - Stage only the files relevant to the task.
 - Do not include unrelated dirty worktree changes from elsewhere in the repo.
 - Do not amend an earlier commit unless the user explicitly asks.

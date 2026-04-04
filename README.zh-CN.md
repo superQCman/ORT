@@ -11,6 +11,13 @@ English version: [README.md](./README.md)
 - 将 ORT CPU 线程 profiling 与 trace 特征合并为训练数据集
 - 提取供下游建模使用的精简特征子集
 
+这个 monorepo 还包含两个通过 subtree 迁入的子项目：
+
+- [single_op_stage1_mlp](./single_op_stage1_mlp/README.md)
+  单算子 stage-1 MLP 特征工程与训练流水线。
+- [static_pipeline_eval](./static_pipeline_eval/README.md)
+  用于 branch-parallel makespan 估计的静态流水线评估器。
+
 ## 主入口
 
 使用 [run_ort_sweep.sh](./run_ort_sweep.sh) 作为标准的端到端工作流入口。
@@ -74,6 +81,8 @@ English version: [README.md](./README.md)
 ORT/
 ├── README.md
 ├── README.zh-CN.md
+├── single_op_stage1_mlp/
+├── static_pipeline_eval/
 ├── run_ort_dlrm.py
 ├── run_ort_dlrm_branch_parallel.py
 ├── run_ort.sh
