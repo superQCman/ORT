@@ -30,7 +30,9 @@ Analytical 设计文档：
 
 ## 特征口径
 
-这里采用的是 E2E/competition 里 stage-1 baseline 的输入风格：
+### 单 MLP 模型特征
+
+这里采用的是 E2E/competition 里 stage-1 baseline 的输入风格，下面这部分描述的是单一 MLP baseline 的特征合同：
 
 - 类别特征
 
@@ -119,6 +121,37 @@ Analytical 设计文档：
 - 标签默认不是 3 个 batch 的原始均值，而是先丢掉最早的 profile batch，再对剩余 batch 的单算子 `dur_us` 取均值。
 - 样本波动过滤默认使用 `last2_range_ratio = abs(batch2 - batch3) / mean(batch2, batch3)`。
 - 当前推荐阈值是 `0.20`。这个值和 E2E 稳定性审计里常见的 `cv > 0.20` 不稳定口径相近，而且在当前全 case 数据上，去掉第一个 batch 后大约会过滤掉 `17%` 的单算子样本。
+
+### 分类 MLP 模型特征
+
+分类 MLP 的完整特征合同见 [classed_op_mlp/README.md](/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md)。这里先给一个总览，方便和单 MLP baseline 区分：
+
+- 主入口分支
+  - `with_analytical`
+  - `no_analytical`
+- 共享类别特征
+  - `op_type`
+  - `node_scope`
+  - `node_name_normalized`
+  - `arch_embedding_size`
+  - `arch_mlp_bot`
+  - `arch_mlp_top`
+- 静态分桶
+  - `gather`
+  - `layout_move`
+  - `view_meta`
+  - `mixed_balanced`
+  - `compute_dominant`
+- `with_analytical`
+  - 在各分桶的原始软件/形状特征基础上，按组追加通过验证的 `ana_calib_*` proxy
+  - `layout_move`、`mixed_balanced`、`compute_dominant` 等组会使用各自的校准 analytical 输入列
+  - 适合和单 MLP baseline 做同口径对照，观察分组和 analytical proxy 带来的收益
+- `no_analytical`
+  - 不使用 `ana_calib_*`
+  - 只使用 `dataset_all_no_trace` 中的原始软件/形状特征，以及少量派生的 `feat_gemm_*`
+  - 适合看“纯分类 MLP”相对单 MLP baseline 的增益
+
+分类 MLP 的分组级别 numeric feature 列表、每个分支的 active contract、以及 `with_analytical` / `no_analytical` 的差异说明，都以 [classed_op_mlp/README.md](/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp/README.md) 为准。
 
 ## 一键运行
 

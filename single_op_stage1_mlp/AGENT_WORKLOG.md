@@ -2756,3 +2756,24 @@ Validation run:
 Open risks:
 - The original workspace had pre-existing dirty state, so this migration was carried out in a temporary clean worktree and then mirrored back into the visible workspace.
 - The subtree import preserved history, but future edits should continue to avoid reintroducing a nested `.git` directory under `single_op_stage1_mlp`.
+
+### 2026-04-04 - Split README feature contract into single MLP and classed MLP sections
+
+Request summary:
+- Refactor `single_op_stage1_mlp/README.md` so the feature contract is presented as two separate parts.
+- Make the single MLP baseline the first section, and add a separate summary for the classed MLP feature contract.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Added explicit `单 MLP 模型特征` and `分类 MLP 模型特征` subsections under `## 特征口径`.
+- Kept the full single MLP feature table and notes in place under the single-MLP subsection.
+- Added a classed MLP overview that points readers to `classed_op_mlp/README.md` for group-level contracts, while still naming the shared categorical features, static buckets, and branch differences.
+
+Validation run:
+- Reviewed the updated README structure to confirm the two feature contracts are now clearly separated and the classed MLP section links to the dedicated documentation.
+
+Open risks:
+- The classed MLP section is intentionally a summary rather than a full contract table; if we want all group-specific numeric feature tables duplicated here too, that would be a larger documentation expansion.
