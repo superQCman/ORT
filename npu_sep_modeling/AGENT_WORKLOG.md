@@ -141,3 +141,33 @@ Open risks:
 - Peak values remain `null` in the hardware JSON because this environment does not yet have the ORT/CANN microbenchmark runtime stack (`onnx` / `onnxruntime`) needed to measure them directly.
 - The calibration therefore uses built-in fallback roofline defaults for `cube`, `vector`, and `transfer`; if a future environment provides real microbench values, the reported coefficients should be refreshed.
 - The current data tree still resolves to 30 combos rather than the earlier planning assumption of 24, so any downstream test assertions should key off `dataset_summary.json` instead of a fixed row count.
+
+### 2026-04-04 - Tighten 910B3 hardware inputs and document the analytical model
+
+Request summary:
+- Remove `board_name` from the exported hardware profile.
+- Confirm the 910B3 Cube/Vector core counts and keep them as explicit hardware inputs.
+- Expand the README so the analytical model construction is clear and reproducible.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+
+Behavior changes:
+- `hardware_probe.py` no longer emits `board_name`; it now exports `cube_count=20` and `vector_count=40` for the 910B3 separated architecture input set.
+- `fit_sep_analytical_model.py` now carries those count fields into `hardware_profile_effective` alongside the peak and bandwidth defaults.
+- The README now explains the baseline construction flow, the per-lane roofline formulas, and the small-parameter calibration strategy in plain terms.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_test4`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --output-dir /tmp/npu_sep_modeling_fit_test4`
+
+Observed results:
+- hardware JSON now contains `cube_count=20` and `vector_count=40`, while `board_name` is absent.
+- calibration JSON now includes `hardware_profile_effective.cube_count=20` and `hardware_profile_effective.vector_count=40`.
+
+Open risks:
+- The cube/vector count split is inferred from the separated AI Core layout and the observed `Aicore Count=20`; if future official data revises the mapping, the profile should be updated in one place.

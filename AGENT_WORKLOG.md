@@ -85,6 +85,32 @@ Open risks:
 - The root workflow guardrail depends on future agents honoring the new root `AGENTS.md`; existing nested-repo guardrails still apply independently.
 - The parent worktree still contains unrelated dirty files outside this change set, so commit hygiene must stay strict.
 
+### 2026-04-04 - Tighten 910B3 NPU inputs for the separated modeling subproject
+
+Request summary:
+- Remove `board_name` from the NPU hardware profile.
+- Make the 910B3 Cube/Vector core counts explicit inputs.
+- Clarify the analytical modeling construction in the nested project README.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+
+Behavior changes:
+- The nested hardware profile now exports `cube_count=20` and `vector_count=40` and no longer exports `board_name`.
+- The nested calibration artifact now carries those count fields in `hardware_profile_effective`.
+- The nested README now explains the baseline roofline and small-parameter calibration flow more explicitly.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_test4`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --output-dir /tmp/npu_sep_modeling_fit_test4`
+
+Open risks:
+- The cube/vector split is inferred from the separated AI Core layout and the local `npu-smi` count; if official 910B3 documentation changes, the nested profile should be refreshed together with the README.
+
 ### 2026-04-04 - Add 910B3 separated-architecture NPU modeling subproject
 
 Request summary:

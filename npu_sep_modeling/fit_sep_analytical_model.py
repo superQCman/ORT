@@ -180,6 +180,8 @@ def fit_model(data_dir: Path, hardware_profile_path: str, output_dir: Path, labe
         "hardware_profile_effective": {
             "device_name": hardware_value(hardware_profile, "device_name", "910B3"),
             "ai_core_count": hardware_value(hardware_profile, "ai_core_count"),
+            "cube_count": hardware_value(hardware_profile, "cube_count", 20),
+            "vector_count": hardware_value(hardware_profile, "vector_count", 40),
             "cube_peak_eff_gflops": hardware_value(
                 hardware_profile, "cube_peak_eff_gflops", DEFAULT_CUBE_PEAK_EFF_GFLOPS
             ),

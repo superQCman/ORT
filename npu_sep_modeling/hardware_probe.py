@@ -16,6 +16,8 @@ CHIP_COUNT_RE = re.compile(r"^\s*Chip Count\s*:\s*(?P<value>\d+)\s*$")
 AICORE_COUNT_RE = re.compile(r"^\s*Aicore Count\s*:\s*(?P<value>\d+)\s*$")
 AICORE_FREQ_RE = re.compile(r"^\s*Aicore Freq\(MHZ\)\s*:\s*(?P<value>\d+)\s*$")
 AICORE_CUR_FREQ_RE = re.compile(r"^\s*Aicore curFreq\(MHZ\)\s*:\s*(?P<value>\d+)\s*$")
+DEFAULT_CUBE_COUNT = 20
+DEFAULT_VECTOR_COUNT = 40
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,23 +70,16 @@ def parse_npu_smi_board(device_id: int) -> dict[str, Any]:
     if code != 0:
         return {
             "chip_count": None,
-            "board_name": None,
             "diagnostics": [f"npu-smi board probe failed: {stderr.strip() or stdout.strip()}"],
         }
 
     chip_count = None
-    board_name = None
     for line in stdout.splitlines():
         chip_match = CHIP_COUNT_RE.match(line)
         if chip_match is not None:
             chip_count = int(chip_match.group("value"))
-        if "Product Name" in line:
-            parts = [part.strip() for part in line.split(":", 1)]
-            if len(parts) == 2:
-                board_name = parts[1] or None
     return {
         "chip_count": chip_count,
-        "board_name": board_name,
         "diagnostics": [],
         "raw_output": stdout,
     }
@@ -179,16 +174,19 @@ def probe_hardware(device_id: int) -> dict[str, Any]:
     dmi_info = probe_ascend_dmi()
     microbench = probe_microbenchmarks()
 
+    ai_core_count = common_info.get("ai_core_count")
+    cube_count = ai_core_count if ai_core_count is not None else DEFAULT_CUBE_COUNT
+    vector_count = (int(ai_core_count) * 2) if ai_core_count is not None else DEFAULT_VECTOR_COUNT
+
     payload = {
         "case_id": "case_10_4_4_cann",
         "device_id": device_id,
         "device_name": smi_info.get("device_name") or "910B3",
         "device_count": smi_info.get("device_count"),
         "chip_count": board_info.get("chip_count"),
-        "board_name": board_info.get("board_name"),
-        "ai_core_count": common_info.get("ai_core_count"),
-        "cube_count": None,
-        "vector_count": None,
+        "ai_core_count": ai_core_count,
+        "cube_count": cube_count,
+        "vector_count": vector_count,
         "frequency_mhz": common_info.get("frequency_mhz"),
         "current_frequency_mhz": common_info.get("current_frequency_mhz"),
         "cube_peak_eff_gflops": microbench.get("cube_peak_eff_gflops"),
@@ -200,10 +198,10 @@ def probe_hardware(device_id: int) -> dict[str, Any]:
             "device_count": "npu-smi info",
             "chip_count": "npu-smi info -t board",
             "ai_core_count": "npu-smi info -t common",
+            "cube_count": "npu-smi info -t common + official AIC/AIV layout",
+            "vector_count": "npu-smi info -t common + official AIC/AIV layout",
             "frequency_mhz": "npu-smi info -t common",
             "current_frequency_mhz": "npu-smi info -t common",
-            "cube_count": None,
-            "vector_count": None,
             "cube_peak_eff_gflops": "benchmark" if microbench["available"] else None,
             "vector_peak_eff_gflops": "benchmark" if microbench["available"] else None,
             "h2d_bw_gbps": "benchmark" if microbench["available"] else None,

@@ -54,6 +54,26 @@ v1 目标很窄：
 
 ## 建模口径
 
+这套 NPU analytical model 先做结构化 baseline，再做轻量校准：
+
+1. 先按 `npu_lane` 把算子分成 `cube`、`vector`、`transfer` 三类。
+2. 再根据算子类型与 shape/size 特征构造每一类的 roofline 下界。
+3. 对每个 lane 的 baseline 结果做 `scale + bias_us` 小参数校准。
+4. 最后只在 train 上拟合参数，在 val/test 上报告未校准与已校准的误差。
+
+硬件输入参数现在明确保留为：
+
+- `ai_core_count`
+- `cube_count`
+- `vector_count`
+- `cube_peak_eff_gflops`
+- `vector_peak_eff_gflops`
+- `memory_bw_gbps`
+- `h2d_bw_gbps`
+- `d2h_bw_gbps`
+
+其中 `cube_count` / `vector_count` 来自 910B3 分离架构的 AI Core 布局，本机 `npu-smi info -t common` 显示 `Aicore Count = 20`，再结合官方文档对 AIC/AIV 的定义，可将其解释为 `20 Cube + 40 Vector` 的输入基线。
+
 - `cube` 基线：
   - `MatMul` 用 `2 * M * K * N / cube_peak_eff_gflops`
   - 再和 `input/output/activation/parameter` 字节搬运时间取 `max`
@@ -62,14 +82,32 @@ v1 目标很窄：
   - 再和 `input/output/activation` 字节搬运时间取 `max`
 - `transfer` 基线：
   - `MemcpyFromHost` / `MemcpyToHost` 用 `bytes / h2d_or_d2h_bw`
-- 校准策略：
-  - 先算无参 baseline
-  - 再按 `op_name` 和 `npu_lane` 拟合少量 `scale + bias_us`
-  - 评估时比较 baseline、`op_name` 校准、`lane` 校准和 `global` 校准
+
+更具体地说：
+
+- `cube` lane 主要覆盖 `MatMul`
+  - 计算项用 `2 * M * K * N`
+  - 传输项用 `input_bytes + output_bytes + activation_bytes + parameter_bytes`
+  - baseline 取 `compute_us` 与 `memory_us` 的 `max`
+- `vector` lane 主要覆盖 `Transpose`、`Add`、`Relu`
+  - 计算项用 `vector_elem_count`
+  - 传输项用 `input_bytes + output_bytes + activation_bytes`
+  - baseline 取 `compute_us` 与 `memory_us` 的 `max`
+- `transfer` lane 主要覆盖 `MemcpyFromHost`、`MemcpyToHost`
+  - 传输项用 `max(input_bytes, output_bytes, activation_bytes, parameter_bytes)`
+  - baseline 直接取带宽时间
+
+校准策略是小参数而不是残差学习：
+
+- 先计算无参 baseline
+- 再按 `op_name` 和 `npu_lane` 拟合少量 `scale + bias_us`
+- 评估时比较 baseline、`op_name` 校准、`lane` 校准和 `global` 校准
 
 ## 硬件探测
 
-- `hardware_probe.py` 先读 `npu-smi info` 和 `npu-smi info -t common`
+- `hardware_probe.py` 先读 `npu-smi info`、`npu-smi info -t board` 和 `npu-smi info -t common`
+- `board_name` 不再作为输出字段保留，避免把板级字符串混进模型输入
+- `cube_count` 和 `vector_count` 会写入硬件 profile，当前按 910B3 分离架构固定为 `20` 与 `40`
 - 当前环境里没有 `ascend-dmi`
 - 当前环境里也没有可直接跑这套 microbench 的 `onnx` / `onnxruntime` 依赖，所以峰值字段会先以 `null` 记录，`fit_sep_analytical_model.py` 会回退到内置默认值
 
