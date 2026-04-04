@@ -1,6 +1,10 @@
 # Single-Op Stage-1 MLP
 
-这个目录是 ORT monorepo 下的一个子流水线，已通过 subtree 迁入主仓库；它直接从 `ORT/features_extensible_case_*/*.csv` 和对应的 `ORT/sweep_runs_extensible_case_*/op_shapes/*.csv` 提取全量 case 数据，不依赖其他目录下的脚本。
+这个目录是 ORT monorepo 下的一个子流水线，已通过 subtree 迁入主仓库。
+
+当前主要使用的是按算子机理分组的分类 MLP 流水线：[classed_op_mlp](/data/qc/dlrm/ORT/single_op_stage1_mlp/classed_op_mlp)。这个 README 仍然保留单一 MLP baseline、数据集构建、训练和推理等通用说明，方便回退、对照和查阅。
+
+它也直接从 `ORT/features_extensible_case_*/*.csv` 和对应的 `ORT/sweep_runs_extensible_case_*/op_shapes/*.csv` 提取全量 case 数据，不依赖其他目录下的脚本。
 
 现在已经同时支持两种输入口径：
 
@@ -9,6 +13,7 @@
 
 功能包括：
 
+- 以 `classed_op_mlp` 为主线，按算子机理分组训练分类 MLP
 - 抽取全部 16 个 case 的单算子样本
 - 按 stage-1 风格恢复特征列
 - 生成完整的 `dataset_full.csv`

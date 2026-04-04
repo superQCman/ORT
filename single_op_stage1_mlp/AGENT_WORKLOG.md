@@ -218,6 +218,27 @@ Files changed:
 
 Behavior changes:
 - The `Gather` section now expands `stream_bytes` into `src_read_bytes`, `dst_write_bytes`, `bytes_per_index`, and `index_read_bytes`.
+
+### 2026-04-04 - Recenter README around classed_op_mlp as the primary flow
+
+Request summary:
+- Update `single_op_stage1_mlp/README.md` so it reflects that `classed_op_mlp` is now the primary training path.
+- Keep the single MLP baseline description in place as supporting context rather than the main narrative.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Reworded the README introduction to point readers first to `classed_op_mlp/README.md`.
+- Clarified that this README now serves as the shared reference for dataset construction, single MLP baseline usage, and auxiliary analysis entry points.
+- Added a top-level feature bullet so the classed-op classification flow is explicitly called out as the current mainline.
+
+Validation run:
+- Reviewed the rendered diff for `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md` to confirm the rest of the document still describes the single MLP baseline and auxiliary tooling accurately.
+
+Open risks:
+- The README still contains some single-MLP-centric sections by design; if the classification flow becomes the only supported path later, those sections may need a deeper cleanup rather than this light re-centering.
 - The surrounding explanation now explicitly states that total stream traffic is decomposed into source read, destination write, and index read.
 
 Validation run:
