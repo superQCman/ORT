@@ -79,7 +79,7 @@ Validation run:
 - `obj=json.load(open(p))`
 - `print(obj['device_name'], obj['ai_core_count'], obj['cube_count'], obj['vector_count'])`
 - `PY`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_v2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_v2_localhw`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_v2 --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json --calibration /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_v2/calibration.json --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_eval_v2_localhw`
 
 Observed results:
 - The checked-in hardware profile loads successfully and reports `910B3`, `ai_core_count=20`, `cube_count=20`, `vector_count=40`.
@@ -136,10 +136,10 @@ Behavior changes:
 
 Validation run:
 - `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py --case-id case_10_4_4_cann --output-dir /tmp/npu_sep_modeling_dataset_v2 --drop-first-call true`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_v2`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /tmp/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_v2`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /tmp/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_v2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_v2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py --case-id case_10_4_4_cann --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_v2 --drop-first-call true`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_v2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_v2 --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_v2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_v2 --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_v2/calibration.json --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_eval_v2`
 
 Observed results:
 - The rebuilt nested dataset now contains 624 rows across 52 combos.
@@ -209,8 +209,8 @@ Behavior changes:
 
 Validation run:
 - `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_test4`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --output-dir /tmp/npu_sep_modeling_fit_test4`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test4`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_test4`
 
 Open risks:
 - The cube/vector split is inferred from the separated AI Core layout and the local `npu-smi` count; if official 910B3 documentation changes, the nested profile should be refreshed together with the README.
@@ -236,8 +236,8 @@ Behavior changes:
 
 Validation run:
 - `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_subset_test`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_subset_test/calibration.json --output-dir /tmp/npu_sep_modeling_eval_subset_test`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_subset_test`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_subset_test/calibration.json --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_eval_subset_test`
 
 Open risks:
 - The proof sketch depends on the boundedness and i.i.d. assumptions stated in the nested README, so it is a conditional guarantee rather than a universal one.
@@ -260,8 +260,8 @@ Behavior changes:
 
 Validation run:
 - `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_subset_test2`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_subset_test2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_subset_test2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_subset_test2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test4/hardware_profile_910b3.json --calibration /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_subset_test2/calibration.json --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_eval_subset_test2`
 
 Open risks:
 - The baseline is still a coarse roofline approximation and should not be expected to reach sub-20% error without better peak measurements or more detailed per-op physics.
@@ -292,10 +292,10 @@ Behavior changes:
 
 Validation run:
 - `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py --case-id case_10_4_4_cann --output-dir /tmp/npu_sep_modeling_dataset_test --drop-first-call true`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_test3`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --output-dir /tmp/npu_sep_modeling_fit_test3`
-- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_test3/calibration.json --output-dir /tmp/npu_sep_modeling_eval_test3`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py --case-id case_10_4_4_cann --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --drop-first-call true`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test3`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_test3`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset_test --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --calibration /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit_test3/calibration.json --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_eval_test3`
 
 Open risks:
 - The hardware probe still emits null peak fields because the current environment does not provide the ORT/CANN microbenchmark runtime stack needed to measure them directly.

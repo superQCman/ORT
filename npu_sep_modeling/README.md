@@ -174,24 +174,24 @@ v2 不要求每个参数都对应单一硬件寄存器，而要求它们对应�
 ```bash
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py \
   --case-id case_10_4_4_cann \
-  --output-dir /tmp/npu_sep_modeling_dataset \
+  --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset \
   --drop-first-call true
 
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py \
-  --output-dir /tmp/npu_sep_modeling_hw
+  --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_hw
 
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py \
-  --data-dir /tmp/npu_sep_modeling_dataset \
+  --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset \
   --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json \
   --calibration-fit-fraction 0.3 \
   --calibration-seed 42 \
-  --output-dir /tmp/npu_sep_modeling_fit
+  --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit
 
 python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py \
-  --data-dir /tmp/npu_sep_modeling_dataset \
+  --data-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_dataset \
   --hardware-profile /data/qc/dlrm/ORT/npu_sep_modeling/hardware_profile_910b3.json \
-  --calibration /tmp/npu_sep_modeling_fit/calibration.json \
-  --output-dir /tmp/npu_sep_modeling_eval
+  --calibration /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_fit/calibration.json \
+  --output-dir /data/qc/dlrm/ORT/npu_sep_modeling/artifacts/npu_sep_modeling_eval
 ```
 
 - `--calibration` 要填的是前一步 `fit_sep_analytical_model.py` 生成的 `calibration.json` 路径，它保存了这次训练出来的物理参数集合。
