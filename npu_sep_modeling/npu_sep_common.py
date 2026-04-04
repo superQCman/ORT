@@ -19,6 +19,11 @@ FEATURE_ROOT = ORT_ROOT / f"features_extensible_{CASE_ID}"
 PROFILE_ROOT = ORT_ROOT / f"sweep_runs_extensible_{CASE_ID}" / "onnx_profiles"
 PROFILE_GLOB = "ort_cann_profile_*.json"
 
+DEFAULT_CUBE_PEAK_EFF_GFLOPS = 20000.0
+DEFAULT_VECTOR_PEAK_EFF_GFLOPS = 8000.0
+DEFAULT_MEMORY_BW_GBPS = 50.0
+DEFAULT_TRANSFER_BW_GBPS = 50.0
+
 
 DTYPE_SIZES: dict[str, int] = {
     "bool": 1,
@@ -78,6 +83,13 @@ def dump_json(path: Path, payload: Any) -> None:
         f.write("\n")
 
 
+def load_hardware_profile(path: Path) -> dict[str, Any]:
+    payload = load_json(path)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected a JSON object in hardware profile: {path}")
+    return payload
+
+
 def safe_int(value: Any, default: int | None = None) -> int | None:
     if value is None:
         return default
@@ -101,6 +113,17 @@ def safe_int(value: Any, default: int | None = None) -> int | None:
 def safe_float(value: Any, default: float | None = None) -> float | None:
     if value is None:
         return default
+
+
+def hardware_value(profile: dict[str, Any] | None, key: str, default: Any = None) -> Any:
+    if not profile:
+        return default
+    value = profile.get(key, default)
+    if value is None:
+        return default
+    if isinstance(value, float) and math.isnan(value):
+        return default
+    return value
     if isinstance(value, bool):
         return float(int(value))
     if isinstance(value, (int, float)):
@@ -253,6 +276,131 @@ def event_name_without_kernel_suffix(name: str | None) -> str:
 
 def infer_transfer_direction(op_name: str) -> str:
     return TRANSFER_DIRECTION_BY_OP.get(op_name, "")
+
+
+def lane_baseline_components(row: dict[str, Any] | pd.Series, hardware_profile: dict[str, Any] | None = None) -> dict[str, Any]:
+    if isinstance(row, pd.Series):
+        row_dict = row.to_dict()
+    else:
+        row_dict = dict(row)
+
+    lane = str(row_dict.get("npu_lane") or infer_lane(str(row_dict.get("op_name") or "")))
+    op_name = str(row_dict.get("op_name") or "")
+    input_bytes = float(safe_float(row_dict.get("input_bytes"), 0.0) or 0.0)
+    output_bytes = float(safe_float(row_dict.get("output_bytes"), 0.0) or 0.0)
+    activation_bytes = float(safe_float(row_dict.get("activation_bytes"), 0.0) or 0.0)
+    parameter_bytes = float(safe_float(row_dict.get("parameter_bytes"), 0.0) or 0.0)
+
+    cube_peak = float(
+        safe_float(
+            hardware_value(hardware_profile, "cube_peak_eff_gflops", DEFAULT_CUBE_PEAK_EFF_GFLOPS),
+            DEFAULT_CUBE_PEAK_EFF_GFLOPS,
+        )
+        or DEFAULT_CUBE_PEAK_EFF_GFLOPS
+    )
+    vector_peak = float(
+        safe_float(
+            hardware_value(hardware_profile, "vector_peak_eff_gflops", DEFAULT_VECTOR_PEAK_EFF_GFLOPS),
+            DEFAULT_VECTOR_PEAK_EFF_GFLOPS,
+        )
+        or DEFAULT_VECTOR_PEAK_EFF_GFLOPS
+    )
+    memory_bw = float(
+        safe_float(
+            hardware_value(hardware_profile, "memory_bw_gbps", DEFAULT_MEMORY_BW_GBPS),
+            DEFAULT_MEMORY_BW_GBPS,
+        )
+        or DEFAULT_MEMORY_BW_GBPS
+    )
+    h2d_bw = float(
+        safe_float(
+            hardware_value(hardware_profile, "h2d_bw_gbps", DEFAULT_TRANSFER_BW_GBPS),
+            DEFAULT_TRANSFER_BW_GBPS,
+        )
+        or DEFAULT_TRANSFER_BW_GBPS
+    )
+    d2h_bw = float(
+        safe_float(
+            hardware_value(hardware_profile, "d2h_bw_gbps", DEFAULT_TRANSFER_BW_GBPS),
+            DEFAULT_TRANSFER_BW_GBPS,
+        )
+        or DEFAULT_TRANSFER_BW_GBPS
+    )
+
+    if lane == "cube":
+        m = float(safe_float(row_dict.get("matmul_m"), 0.0) or 0.0)
+        k = float(safe_float(row_dict.get("matmul_k"), 0.0) or 0.0)
+        n = float(safe_float(row_dict.get("matmul_n"), 0.0) or 0.0)
+        flops = 2.0 * m * k * n
+        compute_us = flops / max(cube_peak, 1e-9) / 1000.0
+        data_bytes = input_bytes + output_bytes + activation_bytes + parameter_bytes
+        memory_us = data_bytes / max(memory_bw, 1e-9) / 1000.0
+        baseline_us = max(compute_us, memory_us)
+        return {
+            "lane": lane,
+            "op_name": op_name,
+            "baseline_us": baseline_us,
+            "compute_us": compute_us,
+            "memory_us": memory_us,
+            "data_bytes": data_bytes,
+            "peak_gflops": cube_peak,
+            "bw_gbps": memory_bw,
+            "formula": "cube_roofline",
+        }
+
+    if lane == "vector":
+        elem_count = float(safe_float(row_dict.get("vector_elem_count"), 0.0) or 0.0)
+        if elem_count <= 0.0:
+            elem_count = max(output_bytes / 4.0, input_bytes / 4.0, 0.0)
+        compute_us = elem_count / max(vector_peak, 1e-9) / 1000.0
+        data_bytes = input_bytes + output_bytes + activation_bytes
+        memory_us = data_bytes / max(memory_bw, 1e-9) / 1000.0
+        baseline_us = max(compute_us, memory_us)
+        return {
+            "lane": lane,
+            "op_name": op_name,
+            "baseline_us": baseline_us,
+            "compute_us": compute_us,
+            "memory_us": memory_us,
+            "data_bytes": data_bytes,
+            "peak_gflops": vector_peak,
+            "bw_gbps": memory_bw,
+            "formula": "vector_roofline",
+        }
+
+    if lane == "transfer":
+        transfer_bytes = max(input_bytes, output_bytes, activation_bytes, parameter_bytes)
+        bw = h2d_bw if infer_transfer_direction(op_name) == "h2d" else d2h_bw
+        baseline_us = transfer_bytes / max(bw, 1e-9) / 1000.0
+        return {
+            "lane": lane,
+            "op_name": op_name,
+            "baseline_us": baseline_us,
+            "compute_us": 0.0,
+            "memory_us": baseline_us,
+            "data_bytes": transfer_bytes,
+            "peak_gflops": None,
+            "bw_gbps": bw,
+            "formula": "transfer_roofline",
+        }
+
+    data_bytes = input_bytes + output_bytes + activation_bytes + parameter_bytes
+    baseline_us = data_bytes / max(memory_bw, 1e-9) / 1000.0
+    return {
+        "lane": lane,
+        "op_name": op_name,
+        "baseline_us": baseline_us,
+        "compute_us": 0.0,
+        "memory_us": baseline_us,
+        "data_bytes": data_bytes,
+        "peak_gflops": None,
+        "bw_gbps": memory_bw,
+        "formula": "fallback_bytes_roofline",
+    }
+
+
+def baseline_prediction(row: dict[str, Any] | pd.Series, hardware_profile: dict[str, Any] | None = None) -> float:
+    return float(lane_baseline_components(row, hardware_profile)["baseline_us"])
 
 
 def infer_lane(op_name: str) -> str:
@@ -421,6 +569,8 @@ def fit_scale_bias(x: Iterable[float], y: Iterable[float]) -> tuple[float, float
     y_arr = np.asarray(list(y), dtype=float)
     if x_arr.size == 0:
         return 1.0, 0.0
+    if x_arr.size == 1 or np.allclose(x_arr, x_arr[0]):
+        return 1.0, float(y_arr.mean() - x_arr.mean())
     design = np.column_stack([x_arr, np.ones_like(x_arr)])
     coef, *_ = np.linalg.lstsq(design, y_arr, rcond=None)
     scale = float(coef[0])

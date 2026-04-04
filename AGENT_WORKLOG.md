@@ -84,3 +84,38 @@ Validation run:
 Open risks:
 - The root workflow guardrail depends on future agents honoring the new root `AGENTS.md`; existing nested-repo guardrails still apply independently.
 - The parent worktree still contains unrelated dirty files outside this change set, so commit hygiene must stay strict.
+
+### 2026-04-04 - Add 910B3 separated-architecture NPU modeling subproject
+
+Request summary:
+- Create the new `ORT/npu_sep_modeling` subproject for Ascend 910B3 separated-architecture NPU single-op modeling.
+- Add the local guardrail files plus the dedicated skill that forces future agents to read the parent and local worklogs before editing.
+- Implement the NPU dataset builder, hardware probe, analytical calibration, and evaluation report workflow.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENTS.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `/data/qc/dlrm/ORT/.codex/skills/ort-npu-sep-modeling/SKILL.md`
+- `/data/qc/dlrm/ORT/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Established a self-contained NPU modeling workflow with explicit lane separation for `cube`, `vector`, and `transfer`.
+- Captured the current data reality for `case_10_4_4_cann`: 30 parseable combos and 360 aggregated rows from `CANNExecutionProvider` trace events.
+- Added a best-effort hardware probe and a small-parameter calibration flow that exports reusable JSON artifacts for downstream evaluation.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py --case-id case_10_4_4_cann --output-dir /tmp/npu_sep_modeling_dataset_test --drop-first-call true`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_test3`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --output-dir /tmp/npu_sep_modeling_fit_test3`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_test3/calibration.json --output-dir /tmp/npu_sep_modeling_eval_test3`
+
+Open risks:
+- The hardware probe still emits null peak fields because the current environment does not provide the ORT/CANN microbenchmark runtime stack needed to measure them directly.
+- The current data tree resolves to 30 combos instead of the earlier planning assumption of 24, so downstream assertions should key off the dataset summary.

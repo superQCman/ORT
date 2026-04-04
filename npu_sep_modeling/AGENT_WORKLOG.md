@@ -102,3 +102,42 @@ Validation run:
 Open risks:
 - One combo directory under `onnx_profiles` still lacks a JSON profile, so the builder records the omission instead of fabricating labels.
 - The current observed combo count is 30 rather than the earlier 24-combo planning assumption, so any downstream fixed-count tests should use the dataset summary instead of a hardcoded row total.
+
+### 2026-04-04 - Add hardware probe, analytical calibration, and evaluation report
+
+Request summary:
+- Implement the hardware probe that reads `npu-smi` and emits `hardware_profile_910b3.json`.
+- Fit the separated analytical model with small-parameter calibration.
+- Generate a baseline-vs-calibrated comparison report and document the final workflow in the README.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Behavior changes:
+- `hardware_probe.py` now emits an 8-device 910B3 hardware JSON with `ai_core_count=20` and explicit `null` peaks when benchmark dependencies are missing.
+- `fit_sep_analytical_model.py` fits `scale + bias_us` calibration parameters for `op_name` and `npu_lane`, using built-in fallback roofline defaults when microbench peaks are absent.
+- `evaluate_sep_analytical_model.py` now writes a Markdown comparison report plus a JSON summary for baseline vs calibrated metrics.
+- The README now documents the lane split, the `op_name` vs `op_type` distinction, the current 30-combo / 360-row dataset size, and the output artifacts.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_test3`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --output-dir /tmp/npu_sep_modeling_fit_test3`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_test --hardware-profile /tmp/npu_sep_modeling_hw_test3/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_test3/calibration.json --output-dir /tmp/npu_sep_modeling_eval_test3`
+- Verified outputs:
+  - hardware JSON: `device_count=8`, `chip_count=1`, `ai_core_count=20`, `frequency_mhz=1800`
+  - fit calibration: `hardware_profile_effective.ai_core_count=20`
+  - overall metrics:
+    - train baseline MAE `3090.198` -> calibrated MAE `249.288`
+    - val baseline MAE `3145.618` -> calibrated MAE `261.388`
+    - test baseline MAE `3310.722` -> calibrated MAE `444.670`
+
+Open risks:
+- Peak values remain `null` in the hardware JSON because this environment does not yet have the ORT/CANN microbenchmark runtime stack (`onnx` / `onnxruntime`) needed to measure them directly.
+- The calibration therefore uses built-in fallback roofline defaults for `cube`, `vector`, and `transfer`; if a future environment provides real microbench values, the reported coefficients should be refreshed.
+- The current data tree still resolves to 30 combos rather than the earlier planning assumption of 24, so any downstream test assertions should key off `dataset_summary.json` instead of a fixed row count.
