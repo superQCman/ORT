@@ -54,12 +54,30 @@ v1 目标很窄：
 
 ## 建模口径
 
-这套 NPU analytical model 先做结构化 baseline，再做轻量校准：
+这套 NPU analytical model 先做结构化 roofline baseline，再做物理参数化校准：
 
 1. 先按 `npu_lane` 把算子分成 `cube`、`vector`、`transfer` 三类。
 2. 再根据算子类型与 shape/size 特征构造每一类的 roofline 下界。
-3. 对每个 lane 的 baseline 结果做 `scale + bias_us` 小参数校准。
-4. 最后只在 train 上拟合参数，在 val/test 上报告未校准与已校准的误差。
+3. 再把 `cpu_main_Wait_avg` 与 `cpu_main_DistributionEnqueue_avg` 合成 `queue_proxy_us`，作为可观测的 host-side queueing proxy。
+4. 最后不再做抽象的 `scale + bias_us`，而是拟合一组有明确物理含义的有效参数。
+
+当前 v2 的预测公式是：
+
+- `cube`:
+  - `pred_us = launch_runtime_us[op_name] + queueing_scale * queue_proxy_us + max(compute_us, hbm_mem_us)`
+- `vector`:
+  - `pred_us = launch_runtime_us[op_name] + queueing_scale * queue_proxy_us + max(compute_us, hbm_mem_us)`
+- `transfer`:
+  - `pred_us = launch_runtime_us[op_name] + queueing_scale * queue_proxy_us + transfer_us`
+
+其中：
+
+- `queue_proxy_us = (cpu_main_Wait_avg + cpu_main_DistributionEnqueue_avg) / 1000`
+- `compute_us` 仍然由 lane 对应的算子规模推导
+- `hbm_mem_us` 由数据搬运字节数除以有效带宽得到
+- `transfer_us` 由显式 H2D / D2H 带宽得到
+
+v2 不要求每个参数都对应单一硬件寄存器，而要求它们对应到可观测、可解释、可复现实验的有效物理量。
 
 硬件输入参数现在明确保留为：
 
@@ -83,25 +101,32 @@ v1 目标很窄：
 - `transfer` 基线：
   - `MemcpyFromHost` / `MemcpyToHost` 用 `bytes / h2d_or_d2h_bw`
 
-更具体地说：
+更具体地说，v2 把参数分成下面几类：
 
-- `cube` lane 主要覆盖 `MatMul`
-  - 计算项用 `2 * M * K * N`
-  - 传输项用 `input_bytes + output_bytes + activation_bytes + parameter_bytes`
-  - baseline 取 `compute_us` 与 `memory_us` 的 `max`
-- `vector` lane 主要覆盖 `Transpose`、`Add`、`Relu`
-  - 计算项用 `vector_elem_count`
-  - 传输项用 `input_bytes + output_bytes + activation_bytes`
-  - baseline 取 `compute_us` 与 `memory_us` 的 `max`
-- `transfer` lane 主要覆盖 `MemcpyFromHost`、`MemcpyToHost`
-  - 传输项用 `max(input_bytes, output_bytes, activation_bytes, parameter_bytes)`
-  - baseline 直接取带宽时间
+| 参数 | 物理含义 | 当前状态 |
+| --- | --- | --- |
+| `launch_runtime_us[op_name]` | 单个算子类型的固定启动与框架开销 | 已拟合 |
+| `queueing_scale` | host-side wait / enqueue proxy 对设备可见排队时间的缩放系数 | 已拟合 |
+| `cube_memory_bw_gbps` | `cube` lane 的有效 HBM / memory 带宽 | 当前数据上通常不可辨识，若无增益则并入 `launch_runtime_us` |
+| `vector_memory_bw_gbps` | `vector` lane 的有效 memory 带宽 | 已拟合 |
+| `transfer_h2d_bw_gbps` | Host->Device 显式拷贝带宽 | 已拟合 |
+| `transfer_d2h_bw_gbps` | Device->Host 显式拷贝带宽 | 已拟合 |
 
-校准策略是小参数而不是残差学习：
+对当前数据来说，`cube` 的 memory 项往往不如 `launch/runtime` 那么可辨识，因此脚本会自动尝试两种模型：
 
-- 先计算无参 baseline
-- 再按 `op_name` 和 `npu_lane` 拟合少量 `scale + bias_us`
-- 评估时比较 baseline、`op_name` 校准、`lane` 校准和 `global` 校准
+- `full_physical`：显式拟合 `cube_memory_bw_gbps`
+- `reduced_physical`：把 `cube_memory_us` 合并进 `launch_runtime_us`
+
+如果你只看最终导出的 `calibration.json`，就能直接看到这次选择的是哪一种。
+
+如果某个带宽参数被拟合到远高于 `IDENTIFIABILITY_BW_THRESHOLD_GBPS` 的量级，脚本会把对应项标记为 `merged_terms`，这表示它在当前数据上已经退化成“几乎不贡献时延”的合并项，而不是一个可独立解释的硬件参数。
+
+校准策略仍然是“小参数”，但现在参数的语义更物理：
+
+- 先计算无参 roofline baseline
+- 再按 `op_name` 拟合固定的 `launch_runtime_us`
+- 再拟合少量有效带宽参数和 `queueing_scale`
+- 评估时只比较 baseline 和物理校准结果
 
 ## 泛化性说明
 
@@ -110,16 +135,16 @@ v1 目标很窄：
 当前实现里，`fit_sep_analytical_model.py` 支持 `--calibration-fit-fraction < 1.0`，它会：
 
 - 按 `op_name` 做分层抽样
-- 只用抽到的那部分训练样本拟合 `scale + bias_us`
+- 只用抽到的那部分训练样本拟合物理参数
 - 把没参与拟合的训练样本留作内部 holdout
 - 在 `metrics_summary.json` 和评估报告里显式报告 holdout 误差
 
 这里不能给出“对所有未来数据都绝对成立”的无条件证明，但可以给出一个严格的条件性结论：
 
-> 对每个校准桶 `g`，我们拟合的是二维仿射模型 `h_g(x)=a_g x + b_g`。
+> 对每个校准桶 `g`，我们拟合的是一个受非负约束的低维物理模型，其中参数个数远少于样本数。
 > 如果同一桶内的样本可视为独立同分布，且 `baseline_pred_us` 与真实标签都被限制在有界区间内，那么标准的线性回归/经验风险最小化泛化理论保证：
 > 经验风险与期望风险之间的差距会随样本数 `n_g` 以 `O(1/sqrt(n_g))` 的速度收敛。
-> 也就是说，校准参数越少、每个桶里的样本越多，泛化上界就越紧。
+> 也就是说，校准参数越少、每个桶里的样本越多，泛化上界就越紧。这里的“少”指 `launch_runtime_us + queueing_scale + 少量 bandwidth`，而不是高容量黑盒。
 
 这条结论的实际含义是：
 
@@ -140,6 +165,7 @@ v1 目标很窄：
 - `cube_count` 和 `vector_count` 会写入硬件 profile，当前按 910B3 分离架构固定为 `20` 与 `40`
 - 当前环境里没有 `ascend-dmi`
 - 当前环境里也没有可直接跑这套 microbench 的 `onnx` / `onnxruntime` 依赖，所以峰值字段会先以 `null` 记录，`fit_sep_analytical_model.py` 会回退到内置默认值
+- 当前数据里 `cpu_main_Wait_avg` / `cpu_main_DistributionEnqueue_avg` 只对一部分 `transfer` 节点可见，所以 `queueing_us` 目前更像一个 host-side queueing proxy，而不是严格拆出来的 device queue depth
 
 ## 运行入口
 

@@ -11,7 +11,10 @@ from fit_sep_analytical_model import (
     LANE_COLUMN,
     OP_COLUMN,
     annotate_baselines,
-    apply_calibration,
+    apply_physical_model,
+    comparison_metrics_for_frame,
+    component_means_for_frame,
+    group_physical_metrics,
     load_optional_hardware_profile,
     load_split_frames,
 )
@@ -106,9 +109,15 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
     lines.append(f"- Label column: `{calibration.get('label_column')}`")
     lines.append(f"- Operator column: `{calibration.get('op_column')}`")
     lines.append(f"- Lane column: `{calibration.get('lane_column')}`")
+    lines.append(f"- Model variant: `{calibration.get('model_variant') or 'physical'}`")
+    lines.append(f"- Cube memory mode: `{calibration.get('cube_memory_mode') or 'merged_into_launch_runtime'}`")
+    lines.append(f"- Physical prediction column: `{calibration.get('physical_prediction_column') or 'physical_pred_us'}`")
     if calibration.get("calibration_fit_fraction") is not None:
         lines.append(f"- Calibration fit fraction: `{calibration.get('calibration_fit_fraction')}`")
         lines.append(f"- Calibration fit seed: `{calibration.get('calibration_seed')}`")
+    queue_policy = calibration.get("queue_proxy_policy") or {}
+    if queue_policy:
+        lines.append(f"- Queue proxy policy: `{queue_policy.get('definition')}` in `{queue_policy.get('units')}`")
     lines.append("")
     subset = calibration.get("calibration_subset") or {}
     if subset:
@@ -124,91 +133,122 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
             )
         )
         lines.append("")
-    lines.append("## Baseline Defaults")
-    defaults = calibration.get("baseline_defaults", {})
+    lines.append("## Hardware Inputs")
+    hardware = calibration.get("hardware_profile_effective") or {}
+    hw_headers = ["key", "value"]
+    hw_rows = []
+    for key in [
+        "device_name",
+        "ai_core_count",
+        "cube_count",
+        "vector_count",
+        "cube_peak_eff_gflops",
+        "vector_peak_eff_gflops",
+        "memory_bw_gbps",
+        "h2d_bw_gbps",
+        "d2h_bw_gbps",
+    ]:
+        hw_rows.append([key, format_float(float(hardware[key])) if isinstance(hardware.get(key), (int, float)) else str(hardware.get(key))])
+    lines.append(markdown_table(hw_headers, hw_rows))
+    lines.append("")
+    lines.append("## Fitted Parameters")
+    params = calibration.get("parameters") or {}
+    merged_terms = set(calibration.get("merged_terms") or [])
+    cube_bw = params.get("cube_memory_bw_gbps")
+    vector_bw = params.get("vector_memory_bw_gbps")
+    h2d_bw = params.get("transfer_h2d_bw_gbps")
+    d2h_bw = params.get("transfer_d2h_bw_gbps")
     lines.append(
         "- "
         + ", ".join(
-            f"{key}={value}" for key, value in defaults.items()
+            [
+                f"queueing_scale={format_float(float(params.get('queueing_scale', float('nan'))))}",
+                f"cube_memory_bw_gbps={cube_bw if cube_bw is not None else 'merged'}{' (merged)' if 'cube_memory_us' in merged_terms else ''}",
+                f"vector_memory_bw_gbps={vector_bw}{' (merged)' if 'vector_memory_us' in merged_terms else ''}",
+                f"h2d_bw_gbps={h2d_bw}{' (merged)' if 'transfer_h2d_us' in merged_terms else ''}",
+                f"d2h_bw_gbps={d2h_bw}{' (merged)' if 'transfer_d2h_us' in merged_terms else ''}",
+            ]
         )
     )
+    if merged_terms:
+        lines.append(f"- Merged terms: `{', '.join(sorted(merged_terms))}`")
     lines.append("")
+    launch_map = params.get("launch_runtime_us_by_op_name") or {}
+    if launch_map:
+        lines.append("### Launch Runtime by Op")
+        headers = ["op_name", "launch_runtime_us"]
+        rows = [[op_name, format_float(float(value))] for op_name, value in sorted(launch_map.items())]
+        lines.append(markdown_table(headers, rows))
+        lines.append("")
     lines.append("## Overall Comparison")
-    headers = [
-        "split",
-        "model",
-        "MAE",
-        "MAPE%",
-        "RMSE",
-    ]
-    rows: list[list[str]] = []
-    split_order = ["train_fit", "train_heldout", "train", "val", "test"]
-    for split in split_order:
+    headers = ["split", "model", "MAE", "MAPE%", "RMSE"]
+    rows = []
+    for split in ("train_fit", "train_heldout", "train", "val", "test"):
         if split not in summary["overall"]:
             continue
         data = summary["overall"][split]
-        for model_name in ("baseline", "calibrated", "lane_calibrated", "global_calibrated"):
+        for model_name in ("baseline", "physical"):
             metrics = data[model_name]
-            rows.append(
-                [
-                    split,
-                    model_name,
-                    format_float(metrics["mae"]),
-                    format_float(metrics["mape"]),
-                    format_float(metrics["rmse"]),
-                ]
-            )
+            rows.append([split, model_name, format_float(metrics["mae"]), format_float(metrics["mape"]), format_float(metrics["rmse"])])
     lines.append(markdown_table(headers, rows))
     lines.append("")
-    if "train_heldout" in summary["overall"] and summary["overall"]["train_heldout"]:
+    if "train_heldout" in summary["overall"]:
         lines.append("## Internal Train Holdout")
         holdout = summary["overall"]["train_heldout"]
         headers = ["model", "MAE", "MAPE%", "RMSE"]
         rows = []
-        for model_name in ("baseline", "calibrated", "lane_calibrated", "global_calibrated"):
+        for model_name in ("baseline", "physical"):
             metrics = holdout[model_name]
-            rows.append(
-                [
-                    model_name,
-                    format_float(metrics["mae"]),
-                    format_float(metrics["mape"]),
-                    format_float(metrics["rmse"]),
-                ]
-            )
+            rows.append([model_name, format_float(metrics["mae"]), format_float(metrics["mape"]), format_float(metrics["rmse"])])
         lines.append(markdown_table(headers, rows))
         lines.append("")
-    lines.append("## Baseline To Calibrated Delta")
+    lines.append("## Component Means")
+    headers = ["split", "launch_runtime_us", "queueing_us", "compute_us", "memory_us", "dominant_us", "pred_us"]
+    rows = []
+    for split in ("train_fit", "train_heldout", "train", "val", "test"):
+        if split not in summary["components"]:
+            continue
+        comp = summary["components"][split]
+        rows.append(
+            [
+                split,
+                format_float(comp.get("physical_launch_runtime_us", float("nan"))),
+                format_float(comp.get("queueing_us", float("nan"))),
+                format_float(comp.get("physical_compute_us", float("nan"))),
+                format_float(comp.get("physical_memory_us", float("nan"))),
+                format_float(comp.get("physical_dominant_us", float("nan"))),
+                format_float(comp.get("physical_pred_us", float("nan"))),
+            ]
+        )
+    lines.append(markdown_table(headers, rows))
+    lines.append("")
+    lines.append("## Baseline To Physical Delta")
     delta_headers = ["split", "MAE delta", "MAPE delta", "RMSE delta"]
     delta_rows: list[list[str]] = []
     for split in ("train", "val", "test"):
         if split not in summary["overall"]:
             continue
         delta = summary["overall"][split]["delta"]
-        delta_rows.append(
-            [
-                split,
-                format_float(delta["mae_delta"]),
-                format_float(delta["mape_delta"]),
-                format_float(delta["rmse_delta"]),
-            ]
-        )
+        delta_rows.append([split, format_float(delta["mae_delta"]), format_float(delta["mape_delta"]), format_float(delta["rmse_delta"])])
     lines.append(markdown_table(delta_headers, delta_rows))
     lines.append("")
     lines.append("## By Op Name")
     for split in ("val", "test"):
+        if split not in summary["by_op_name"]:
+            continue
         lines.append(f"### {split}")
         group_map = summary["by_op_name"][split]
         headers = [
             "op_name",
             "count",
             "baseline_MAE",
-            "calibrated_MAE",
+            "physical_MAE",
             "delta_MAE",
             "baseline_MAPE%",
-            "calibrated_MAPE%",
+            "physical_MAPE%",
             "delta_MAPE%",
             "baseline_RMSE",
-            "calibrated_RMSE",
+            "physical_RMSE",
             "delta_RMSE",
         ]
         rows = []
@@ -219,13 +259,13 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
                     op_name,
                     str(metrics["count"]),
                     format_float(metrics["baseline"]["mae"]),
-                    format_float(metrics["calibrated"]["mae"]),
+                    format_float(metrics["physical"]["mae"]),
                     format_float(metrics["delta"]["mae_delta"]),
                     format_float(metrics["baseline"]["mape"]),
-                    format_float(metrics["calibrated"]["mape"]),
+                    format_float(metrics["physical"]["mape"]),
                     format_float(metrics["delta"]["mape_delta"]),
                     format_float(metrics["baseline"]["rmse"]),
-                    format_float(metrics["calibrated"]["rmse"]),
+                    format_float(metrics["physical"]["rmse"]),
                     format_float(metrics["delta"]["rmse_delta"]),
                 ]
             )
@@ -233,19 +273,21 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
         lines.append("")
     lines.append("## By Lane")
     for split in ("val", "test"):
+        if split not in summary["by_lane"]:
+            continue
         lines.append(f"### {split}")
         group_map = summary["by_lane"][split]
         headers = [
             "lane",
             "count",
             "baseline_MAE",
-            "calibrated_MAE",
+            "physical_MAE",
             "delta_MAE",
             "baseline_MAPE%",
-            "calibrated_MAPE%",
+            "physical_MAPE%",
             "delta_MAPE%",
             "baseline_RMSE",
-            "calibrated_RMSE",
+            "physical_RMSE",
             "delta_RMSE",
         ]
         rows = []
@@ -256,13 +298,13 @@ def render_report(calibration: dict[str, Any], summary: dict[str, Any]) -> str:
                     lane,
                     str(metrics["count"]),
                     format_float(metrics["baseline"]["mae"]),
-                    format_float(metrics["calibrated"]["mae"]),
+                    format_float(metrics["physical"]["mae"]),
                     format_float(metrics["delta"]["mae_delta"]),
                     format_float(metrics["baseline"]["mape"]),
-                    format_float(metrics["calibrated"]["mape"]),
+                    format_float(metrics["physical"]["mape"]),
                     format_float(metrics["delta"]["mape_delta"]),
                     format_float(metrics["baseline"]["rmse"]),
-                    format_float(metrics["calibrated"]["rmse"]),
+                    format_float(metrics["physical"]["rmse"]),
                     format_float(metrics["delta"]["rmse_delta"]),
                 ]
             )
@@ -282,36 +324,37 @@ def evaluate_model(
     frames = load_split_frames(data_dir)
     hardware_profile = load_optional_hardware_profile(hardware_profile_path)
     calibration = load_calibration(calibration_path)
-    op_params = calibration.get("by_op_name", {})
-    lane_params = calibration.get("by_lane", {})
-    global_params = calibration.get("global", {"scale": 1.0, "bias_us": 0.0})
+    physical_params = calibration.get("parameters") or calibration
 
     annotated_frames = {split: annotate_baselines(frame, hardware_profile) for split, frame in frames.items()}
     calibrated_frames = {
-        split: apply_calibration(frame, op_params, lane_params, global_params, op_col, lane_col)
+        split: apply_physical_model(frame, physical_params, hardware_profile, op_col, lane_col)
         for split, frame in annotated_frames.items()
     }
 
-    summary: dict[str, Any] = {"overall": {}, "by_op_name": {}, "by_lane": {}}
+    summary: dict[str, Any] = {"overall": {}, "by_op_name": {}, "by_lane": {}, "components": {}}
     subset = calibration.get("calibration_subset") or {}
     for split, frame in calibrated_frames.items():
-        summary["overall"][split] = compare_frame(frame, label_col)
-        summary["by_op_name"][split] = compare_groups_with_baseline(frame, label_col, op_col, "calibrated_pred_us")
-        summary["by_lane"][split] = compare_groups_with_baseline(frame, label_col, lane_col, "lane_calibrated_pred_us")
+        summary["overall"][split] = comparison_metrics_for_frame(frame, label_col)
+        summary["by_op_name"][split] = group_physical_metrics(frame, label_col, "physical_pred_us", op_col)
+        summary["by_lane"][split] = group_physical_metrics(frame, label_col, "physical_pred_us", lane_col)
+        summary["components"][split] = component_means_for_frame(frame)
 
     fit_indices = subset.get("fit_indices") or []
     heldout_indices = subset.get("heldout_indices") or []
     train_frame = calibrated_frames["train"]
     if fit_indices:
         fit_frame = train_frame.loc[fit_indices]
-        summary["overall"]["train_fit"] = compare_frame(fit_frame, label_col)
-        summary["by_op_name"]["train_fit"] = compare_groups_with_baseline(fit_frame, label_col, op_col, "calibrated_pred_us")
-        summary["by_lane"]["train_fit"] = compare_groups_with_baseline(fit_frame, label_col, lane_col, "lane_calibrated_pred_us")
+        summary["overall"]["train_fit"] = comparison_metrics_for_frame(fit_frame, label_col)
+        summary["by_op_name"]["train_fit"] = group_physical_metrics(fit_frame, label_col, "physical_pred_us", op_col)
+        summary["by_lane"]["train_fit"] = group_physical_metrics(fit_frame, label_col, "physical_pred_us", lane_col)
+        summary["components"]["train_fit"] = component_means_for_frame(fit_frame)
     if heldout_indices:
         heldout_frame = train_frame.loc[heldout_indices]
-        summary["overall"]["train_heldout"] = compare_frame(heldout_frame, label_col)
-        summary["by_op_name"]["train_heldout"] = compare_groups_with_baseline(heldout_frame, label_col, op_col, "calibrated_pred_us")
-        summary["by_lane"]["train_heldout"] = compare_groups_with_baseline(heldout_frame, label_col, lane_col, "lane_calibrated_pred_us")
+        summary["overall"]["train_heldout"] = comparison_metrics_for_frame(heldout_frame, label_col)
+        summary["by_op_name"]["train_heldout"] = group_physical_metrics(heldout_frame, label_col, "physical_pred_us", op_col)
+        summary["by_lane"]["train_heldout"] = group_physical_metrics(heldout_frame, label_col, "physical_pred_us", lane_col)
+        summary["components"]["train_heldout"] = component_means_for_frame(heldout_frame)
     return {
         "calibration": calibration,
         "summary": summary,

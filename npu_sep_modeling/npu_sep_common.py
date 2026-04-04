@@ -56,6 +56,11 @@ TRANSFER_DIRECTION_BY_OP: dict[str, str] = {
     "MemcpyToHost": "d2h",
 }
 
+QUEUE_PROXY_FIELDS: tuple[str, ...] = (
+    "cpu_main_Wait_avg",
+    "cpu_main_DistributionEnqueue_avg",
+)
+
 
 def str2bool(value: str) -> bool:
     text = str(value).strip().lower()
@@ -276,6 +281,23 @@ def event_name_without_kernel_suffix(name: str | None) -> str:
 
 def infer_transfer_direction(op_name: str) -> str:
     return TRANSFER_DIRECTION_BY_OP.get(op_name, "")
+
+
+def queue_proxy_components(row: dict[str, Any] | pd.Series) -> dict[str, float]:
+    if isinstance(row, pd.Series):
+        row_dict = row.to_dict()
+    else:
+        row_dict = dict(row)
+
+    wait_us = float(safe_float(row_dict.get("cpu_main_Wait_avg"), 0.0) or 0.0) / 1000.0
+    enqueue_us = float(safe_float(row_dict.get("cpu_main_DistributionEnqueue_avg"), 0.0) or 0.0) / 1000.0
+    wait_us = max(wait_us, 0.0)
+    enqueue_us = max(enqueue_us, 0.0)
+    return {
+        "queue_wait_proxy_us": wait_us,
+        "queue_enqueue_proxy_us": enqueue_us,
+        "queue_proxy_us": wait_us + enqueue_us,
+    }
 
 
 def lane_baseline_components(row: dict[str, Any] | pd.Series, hardware_profile: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -52,6 +52,50 @@ The parent repo coordinates the full-model sweep, branch-parallel execution, dyn
 
 ## Change History
 
+### 2026-04-04 - Convert the nested NPU model to physical-parameter calibration
+
+Request summary:
+- Update the `ORT/npu_sep_modeling` subproject so its fitted parameters have explicit physical meaning.
+- Add queueing, launch/runtime, and memory terms where the current trace/profile data can support them.
+- Record when bandwidth-like terms become unidentifiable and have to be merged back into launch/runtime.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The nested dataset builder now emits `queue_wait_proxy_us`, `queue_enqueue_proxy_us`, and `queue_proxy_us` so the NPU model can expose queueing as an observable proxy.
+- The nested analytical model no longer relies on `scale + bias_us`; it now fits `launch_runtime_us[op_name]`, a queueing scale, and effective bandwidths for identifiable lanes.
+- The nested evaluation report now prints baseline vs physical metrics, component means, fitted launch times, and merged-term diagnostics.
+- The nested README now explains the physical formulas and how the model downgrades to merged terms when a lane-specific bandwidth becomes unidentifiable.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py --case-id case_10_4_4_cann --output-dir /tmp/npu_sep_modeling_dataset_v2 --drop-first-call true`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_v2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /tmp/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_v2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /tmp/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_v2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_v2`
+
+Observed results:
+- The rebuilt nested dataset now contains 624 rows across 52 combos.
+- The selected physical model is `full_physical`, with `cube_memory_mode=fitted`.
+- The calibration selected `queueing_scale=0.7003`, `cube_memory_bw_gbps=223.59`, `vector_memory_bw_gbps=239642.96` (merged), `h2d_bw_gbps=162.40`, and `d2h_bw_gbps=999988.87` (merged).
+- Relative error improved dramatically over the roofline baseline:
+  - train_fit MAPE `9.36%`
+  - train_heldout MAPE `10.75%`
+  - val MAPE `7.12%`
+  - test MAPE `7.09%`
+
+Open risks:
+- The current data still does not strongly identify every memory bandwidth term, so some fitted bandwidths are best interpreted as merged effective parameters instead of literal physical measurements.
+- The queueing proxy is still only visible for `MemcpyFromHost` / `MemcpyToHost` rows, so compute-lane queueing remains folded into launch/runtime.
+- The parent ORT worktree is very dirty, so commit staging must stay narrowly scoped to the nested NPU modeling files and the two worklogs.
+
 ### 2026-04-04 - Add root ORT workflow guardrail and align parent docs with metadata flow
 
 Request summary:

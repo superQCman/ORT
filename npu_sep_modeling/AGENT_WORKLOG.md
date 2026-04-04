@@ -52,6 +52,50 @@ This project is a self-contained NPU single-operator modeling pipeline for Ascen
 
 ## Change History
 
+### 2026-04-04 - Replace scale+bias calibration with physical-parameter NPU modeling
+
+Request summary:
+- Rework the nested NPU analytical model so fitted parameters have explicit physical meaning.
+- Add a visible host-side queueing proxy, and separate launch/runtime, queueing, and memory terms where the current data supports it.
+- Document which fitted terms are still unidentifiable and therefore merged into launch/runtime.
+
+Files changed:
+- `/data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/README.md`
+- `/data/qc/dlrm/ORT/npu_sep_modeling/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The dataset builder now emits `queue_wait_proxy_us`, `queue_enqueue_proxy_us`, and `queue_proxy_us` so the model can expose queueing as an observable proxy instead of a hidden bias.
+- The analytical model now fits `launch_runtime_us[op_name]`, `queueing_scale`, and lane/direction-specific effective bandwidths instead of `scale + bias_us`.
+- The model automatically records high-bandwidth terms as `merged_terms` when they are effectively unidentifiable on the current data.
+- The evaluation report now shows baseline vs physical metrics, component means, fitted launch runtimes, and merged-term diagnostics.
+- The README now spells out the physical formulas, the queue proxy definition, and the conditions under which memory terms are merged.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/npu_sep_modeling/npu_sep_common.py /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/build_npu_dataset.py --case-id case_10_4_4_cann --output-dir /tmp/npu_sep_modeling_dataset_v2 --drop-first-call true`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/hardware_probe.py --output-dir /tmp/npu_sep_modeling_hw_v2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/fit_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /tmp/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration-fit-fraction 0.3 --calibration-seed 42 --output-dir /tmp/npu_sep_modeling_fit_v2`
+- `python3 /data/qc/dlrm/ORT/npu_sep_modeling/evaluate_sep_analytical_model.py --data-dir /tmp/npu_sep_modeling_dataset_v2 --hardware-profile /tmp/npu_sep_modeling_hw_v2/hardware_profile_910b3.json --calibration /tmp/npu_sep_modeling_fit_v2/calibration.json --output-dir /tmp/npu_sep_modeling_eval_v2`
+
+Observed results:
+- The rebuilt dataset now contains 624 rows across 52 combos.
+- The selected physical model is `full_physical`, with `cube_memory_mode=fitted`.
+- The calibration selected `queueing_scale=0.7003`, `cube_memory_bw_gbps=223.59`, `vector_memory_bw_gbps=239642.96` (merged), `h2d_bw_gbps=162.40`, and `d2h_bw_gbps=999988.87` (merged).
+- Relative error stayed substantially below the raw roofline baseline:
+  - train_fit MAPE `9.36%`
+  - train_heldout MAPE `10.75%`
+  - val MAPE `7.12%`
+  - test MAPE `7.09%`
+
+Open risks:
+- `vector_memory_bw_gbps` and `transfer_d2h_bw_gbps` currently sit above the identifiability threshold, so they are best interpreted as merged effective terms rather than literal measured bandwidths.
+- The current queue proxy is only observable for `MemcpyFromHost` / `MemcpyToHost` rows; compute lanes still rely on launch/runtime absorption for unobserved queueing.
+- The data tree continues to expose more parseable combos than the original planning assumption, so any hardcoded combo-count tests should continue to key off `dataset_summary.json`.
+
 ### 2026-04-04 - Scaffold NPU separation modeling project and guardrails
 
 Request summary:
