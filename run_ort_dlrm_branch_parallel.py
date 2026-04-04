@@ -154,6 +154,33 @@ def build_providers(use_cann: bool, device_id: int) -> List[object]:
     ]
 
 
+def model_contains_ops(model_path: Path, op_types: Sequence[str]) -> bool:
+    target_ops = {op.strip() for op in op_types if op and op.strip()}
+    if not target_ops:
+        return False
+    model = onnx_load(str(model_path))
+    return any(node.op_type in target_ops for node in model.graph.node)
+
+
+def choose_task_providers(
+    base_providers: List[object],
+    use_cann: bool,
+    model_path: Path,
+    force_cpu_ops: Sequence[str],
+) -> List[object]:
+    if not use_cann:
+        return base_providers
+
+    forced_ops = {op.strip() for op in force_cpu_ops if op and op.strip()}
+    if "Reshape" in forced_ops and model_contains_ops(model_path, ["Reshape"]):
+        print(
+            f"[FORCE_CPU] {model_path.name} contains Reshape; "
+            "using CPUExecutionProvider for this submodel."
+        )
+        return ["CPUExecutionProvider"]
+    return base_providers
+
+
 def build_full_graph_node_lookup(onnx_path: Path) -> Tuple[Dict[str, Dict[str, str]], Dict[Tuple[str, str], Dict[str, str]]]:
     model = onnx_load(str(onnx_path))
     by_name: Dict[str, Dict[str, str]] = {}
@@ -357,6 +384,7 @@ def create_task_specs(
     layout: SplitLayout,
     args: argparse.Namespace,
     providers: List[object],
+    force_cpu_ops: Sequence[str],
     profile_enabled: bool,
 ) -> Tuple[List[TaskSpec], TaskSpec]:
     branch_specs: List[TaskSpec] = []
@@ -371,7 +399,7 @@ def create_task_specs(
     bottom_sess = build_session(
         bottom_path,
         intra_threads=args.intra_threads,
-        providers=providers,
+        providers=choose_task_providers(providers, args.use_cann, bottom_path, force_cpu_ops),
         disable_graph_optimizations=args.disable_graph_optimizations,
         enable_profiling=profile_enabled,
         profile_prefix=prefix("bottom"),
@@ -391,7 +419,7 @@ def create_task_specs(
         sess = build_session(
             emb_path,
             intra_threads=args.intra_threads,
-            providers=providers,
+            providers=choose_task_providers(providers, args.use_cann, emb_path, force_cpu_ops),
             disable_graph_optimizations=args.disable_graph_optimizations,
             enable_profiling=profile_enabled,
             profile_prefix=prefix(f"emb_l{idx}"),
@@ -411,7 +439,7 @@ def create_task_specs(
     tail_sess = build_session(
         tail_path,
         intra_threads=tail_threads,
-        providers=providers,
+        providers=choose_task_providers(providers, args.use_cann, tail_path, force_cpu_ops),
         disable_graph_optimizations=args.disable_graph_optimizations,
         enable_profiling=profile_enabled,
         profile_prefix=prefix("tail"),
@@ -1136,6 +1164,7 @@ def maybe_profiled_task_specs(
     tail_path: Path,
     layout: SplitLayout,
     providers: List[object],
+    force_cpu_ops: Sequence[str],
 ) -> Tuple[List[TaskSpec], TaskSpec]:
     return create_task_specs(
         bottom_path=bottom_path,
@@ -1144,6 +1173,7 @@ def maybe_profiled_task_specs(
         layout=layout,
         args=args,
         providers=providers,
+        force_cpu_ops=force_cpu_ops,
         profile_enabled=args.enable_profiling,
     )
 
@@ -1156,9 +1186,19 @@ def recreate_without_profiling_if_needed(
     tail_path: Path,
     layout: SplitLayout,
     providers: List[object],
+    force_cpu_ops: Sequence[str],
 ) -> Tuple[List[TaskSpec], TaskSpec]:
     if not args.enable_profiling or args.profile_warmup or args.warmup_batches <= 0:
-        return maybe_profiled_task_specs(args, rewritten_path, bottom_path, emb_paths, tail_path, layout, providers)
+        return maybe_profiled_task_specs(
+            args,
+            rewritten_path,
+            bottom_path,
+            emb_paths,
+            tail_path,
+            layout,
+            providers,
+            force_cpu_ops,
+        )
 
     warmup_branch_specs, warmup_tail_spec = create_task_specs(
         bottom_path=bottom_path,
@@ -1167,6 +1207,7 @@ def recreate_without_profiling_if_needed(
         layout=layout,
         args=args,
         providers=providers,
+        force_cpu_ops=force_cpu_ops,
         profile_enabled=False,
     )
     print("[PROFILE] warmup will not be included in profiling; running warmup on non-profiled sessions.")
@@ -1179,7 +1220,16 @@ def recreate_without_profiling_if_needed(
         start_batch_idx=-args.warmup_batches,
         run_batches=args.warmup_batches,
     )
-    return maybe_profiled_task_specs(args, rewritten_path, bottom_path, emb_paths, tail_path, layout, providers)
+    return maybe_profiled_task_specs(
+        args,
+        rewritten_path,
+        bottom_path,
+        emb_paths,
+        tail_path,
+        layout,
+        providers,
+        force_cpu_ops,
+    )
 
 
 def run_parallel_workload(
@@ -1341,6 +1391,7 @@ def main() -> None:
         tail_path=tail_path,
         layout=layout,
         providers=providers,
+        force_cpu_ops=ops,
     )
 
     warmup_records: List[TaskRecord] = []

@@ -1041,6 +1041,12 @@ def _force_ops_to_cpu(onnx_path: str, op_types: List[str]) -> str:
         t = t.strip()
         if not t:
             continue
+        if t == "Reshape":
+            print(
+                "[FORCE_CPU] Reshape 不能仅靠单会话 provider option 稳定下放；"
+                "请在 branch-parallel 子模型级别切换到 CPUExecutionProvider。"
+            )
+            continue
         if t not in _CPU_REPLACEMENTS:
             print(f"[FORCE_CPU] WARNING: 算子 {t!r} 暂无 CPU 替换策略，跳过。"
                   f"  当前支持: {list(_CPU_REPLACEMENTS.keys())}")
@@ -1127,7 +1133,8 @@ def build_session(
       - 否则                         → 回退到 CPU 执行
 
     force_cpu_ops : 强制卸载到 CPU 的算子列表，例如 ["Relu"]。
-                    通过将其替换为 CANN 不支持的等价算子实现。
+                    Relu 通过语义等价替换实现；
+                    Reshape 需要在 branch-parallel 子模型级别切换到 CPUExecutionProvider。
                     仅在 use_cann=True 时有效。
     """
     _setup_cann_env()
