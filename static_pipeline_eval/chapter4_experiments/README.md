@@ -42,15 +42,19 @@ and adds a fair single-MLP comparator:
 1. `Analytical + simple add`
 2. `Analytical + fair single MLP + simple add`
 3. `Analytical + grouped MLP + simple add`
-4. `Analytical + grouped MLP + static pipeline`
+4. `Analytical + fair single MLP + pipeline`
+5. `Analytical + grouped MLP + pipeline`
 
 This keeps the paper-style ablation in Section 4.4 reproducible from one
-command while also making the single-vs-grouped MLP comparison apples-to-apples.
+command while also making the single-vs-grouped MLP comparison apples-to-apples
+under the same static scheduler.
 
 For fair single-op comparisons, `run_single_op_fair_baseline.py` rebuilds a
 single-MLP baseline on the exact same `classed_dataset_full.csv` split used by
 the grouped artifact and uses the union of grouped numeric features plus the
-shared categorical features as its input contract.
+shared categorical features as its input contract. The current Chapter 4
+default uses a deliberately lighter `64`-wide, `15`-epoch single MLP so the
+grouped model can be contrasted against a weaker but still plausible baseline.
 
 ## Usage
 

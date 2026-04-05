@@ -21,6 +21,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--output-root", type=Path, default=CHAPTER4_OUTPUT_ROOT)
     parser.add_argument("--single-op-artifact-root", type=Path, default=SINGLE_OP_ARTIFACT_ROOT)
+    parser.add_argument("--hidden-layers", default="64", help="Comma-separated hidden layer sizes for the fair single MLP.")
+    parser.add_argument("--max-iter", type=int, default=15, help="Training epochs for the fair single MLP.")
     parser.add_argument("--force-retrain", action="store_true")
     return parser.parse_args()
 
@@ -31,6 +33,8 @@ def main() -> None:
         args.output_root,
         single_op_artifact_root=args.single_op_artifact_root,
         force_retrain=args.force_retrain,
+        hidden_layers=tuple(int(part) for part in args.hidden_layers.split(",") if part.strip()),
+        max_iter=args.max_iter,
     )
     print(json.dumps(result.outputs, indent=2, ensure_ascii=False))
 

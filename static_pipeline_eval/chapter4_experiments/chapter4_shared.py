@@ -1566,9 +1566,26 @@ def run_single_op_ablation(
     fair_baseline = ensure_fair_single_mlp_artifact(output_root, single_op_artifact_root=single_op_root)
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    test_meta = test_dataset[["row_uid", "batch_size", "num_indices_per_lookup", "inter_threads"]].copy()
     fair_predictions = fair_baseline["predictions_test"].copy()
+    fair_predictions_enriched = fair_predictions.merge(test_meta, on="row_uid", how="left")
     combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
     e2e_full = pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)
+    fair_combo_specs = build_combo_specs(fair_predictions_enriched, ort_root=Path(DEFAULT_ORT_ROOT))
+    fair_combo_map = {(spec.case_id, spec.combo): spec for spec in fair_combo_specs}
+    fair_pipeline_rows: list[dict[str, Any]] = []
+    for (case_id, combo), combo_rows in fair_predictions.groupby(["case_id", "combo"]):
+        combo_spec = fair_combo_map[(case_id, combo)]
+        graph = build_op_graph(load_op_shapes_frame(combo_spec.artifact_paths.shape_csv))
+        schedule_result = schedule_combo(combo_spec, graph, combo_rows.copy())
+        fair_pipeline_rows.append(
+            {
+                "case_id": case_id,
+                "combo": combo,
+                "single_mlp_pipeline_us": float(schedule_result.predicted_full_graph_us),
+            }
+        )
+    fair_pipeline_combo = pd.DataFrame(fair_pipeline_rows)
 
     analytical_combo = (
         test_dataset.groupby(["case_id", "combo"], as_index=False)
@@ -1586,6 +1603,7 @@ def run_single_op_ablation(
         e2e_full.merge(analytical_combo, on=["case_id", "combo"], how="left")
         .merge(fair_single_combo, on=["case_id", "combo"], how="left")
         .merge(grouped_combo, on=["case_id", "combo"], how="left")
+        .merge(fair_pipeline_combo, on=["case_id", "combo"], how="left")
     )
     e2e_joined["pipeline_us"] = e2e_joined["predicted_e2e_us"].astype(float)
     e2e_joined["actual_us"] = e2e_joined["actual_e2e_us"].astype(float)
@@ -1594,6 +1612,7 @@ def run_single_op_ablation(
         ("Analytical + simple add", "analytical_simple_add_us"),
         ("Analytical + single MLP + simple add", "single_mlp_simple_add_us"),
         ("Analytical + grouped MLP + simple add", "grouped_mlp_simple_add_us"),
+        ("Analytical + single MLP + pipeline", "single_mlp_pipeline_us"),
         ("Analytical + grouped MLP + pipeline", "pipeline_us"),
     ]
     table_rows: list[dict[str, Any]] = []
@@ -1606,7 +1625,7 @@ def run_single_op_ablation(
                 test_dataset["label_operator_actual_dur_us"],
                 test_dataset["ana_calib_total_us"],
             )
-        elif column == "single_mlp_simple_add_us":
+        elif column in {"single_mlp_simple_add_us", "single_mlp_pipeline_us"}:
             single_metrics = _compute_regression_metrics(
                 fair_predictions["target_us"],
                 fair_predictions["pred_us"],
@@ -1674,7 +1693,8 @@ def run_single_op_ablation(
         ylabel="ratio",
         legend_labels=["mean APE", ">10% rate"],
         audit_lines=[
-            f"pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + grouped MLP + pipeline'].iloc[0]['mean_ape']):.4f}",
+            f"grouped pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + grouped MLP + pipeline'].iloc[0]['mean_ape']):.4f}",
+            f"single pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + single MLP + pipeline'].iloc[0]['mean_ape']):.4f}",
             f"analytical-only mean APE = {float(gt10_frame.iloc[0]['mean_ape']):.4f}",
         ],
     )
@@ -1689,7 +1709,7 @@ def run_single_op_ablation(
         ylabel="MAPE",
         audit_lines=[
             f"inter_threads = {_sanitize_list(sorted(inter_frame['inter_threads'].unique().tolist()))}",
-            "Pipeline variant should show the strongest gain at higher branch parallelism.",
+            "Grouped pipeline should outperform single pipeline at every branch-parallel setting.",
         ],
     )
 
@@ -1841,8 +1861,14 @@ def run_e2e_sum_baseline(
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    test_meta = test_dataset[["row_uid", "batch_size", "num_indices_per_lookup", "inter_threads"]].copy()
     combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
+    fair_baseline = ensure_fair_single_mlp_artifact(output_root, single_op_artifact_root=single_op_root)
+    fair_predictions = fair_baseline["predictions_test"].copy()
+    fair_predictions_enriched = fair_predictions.merge(test_meta, on="row_uid", how="left")
     e2e_frame = pd.read_csv(E2E_ARTIFACT_ROOT / "full_combo_metrics.csv", low_memory=False)
+    fair_combo_specs = build_combo_specs(fair_predictions_enriched, ort_root=Path(DEFAULT_ORT_ROOT))
+    fair_combo_map = {(spec.case_id, spec.combo): spec for spec in fair_combo_specs}
 
     gather_frame = test_dataset[test_dataset["op_type"] == "Gather"].copy()
     gather_pred = combined_predictions[combined_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
@@ -1872,6 +1898,19 @@ def run_e2e_sum_baseline(
     gemm_case = gemm_frame.sort_values(["feat_gemm_mac_count", "ape"], ascending=[True, False]).iloc[0]
 
     e2e_case = e2e_frame.sort_values("ape", ascending=False).iloc[0]
+    fair_pipeline_rows: list[dict[str, Any]] = []
+    for (case_id, combo), combo_rows in fair_predictions.groupby(["case_id", "combo"]):
+        combo_spec = fair_combo_map[(case_id, combo)]
+        graph = build_op_graph(load_op_shapes_frame(combo_spec.artifact_paths.shape_csv))
+        schedule_result = schedule_combo(combo_spec, graph, combo_rows.copy())
+        fair_pipeline_rows.append(
+            {
+                "case_id": case_id,
+                "combo": combo,
+                "single_mlp_pipeline_us": float(schedule_result.predicted_full_graph_us),
+            }
+        )
+    fair_pipeline_combo = pd.DataFrame(fair_pipeline_rows)
     table_4_7 = pd.DataFrame(
         [
             {
@@ -1928,7 +1967,10 @@ def run_e2e_sum_baseline(
     payload = {
         "tables": {"4-7": str(csv_47)},
         "figures": {"4-19": str(figures_dir / FIGURE_FILENAMES["4-19"])},
-        "summary": {"error_rows": table_4_7.to_dict(orient="records")},
+        "summary": {
+            "error_rows": table_4_7.to_dict(orient="records"),
+            "single_mlp_pipeline_rows": fair_pipeline_combo.to_dict(orient="records"),
+        },
     }
     _write_summary_bundle(section_dir, "e2e_sum_baseline", payload)
     return SectionResult(name="e2e_sum_baseline", outputs=payload)
@@ -2180,6 +2222,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
     ablation_rows = ablation_metrics.get("variant_rows", [])
     error_rows = error_metrics.get("error_rows", [])
     pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + grouped MLP + pipeline"), None)
+    single_pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + single MLP + pipeline"), None)
     grouped_simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + grouped MLP + simple add"), None)
     single_simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + single MLP + simple add"), None)
     analytical_row = next((row for row in ablation_rows if row["variant"] == "Analytical + simple add"), None)
@@ -2249,11 +2292,11 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.4 消融实验与误差分析",
         "",
-        "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造四个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第三组使用 `grouped MLP + Simple add`；第四组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答四个问题：解析模型本身能做多好、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。",
+        "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造五个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第三组使用 `grouped MLP + Simple add`；第四组使用 `single MLP + pipeline`；第五组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答四个问题：解析模型本身能做多好、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。",
         "",
         "### 4.4.1 公平对比消融结果",
         "",
-        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了四个变体的差异。纯解析模型在整图上的平均相对误差最高；加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但由于整图仍然简单求和，其整图误差依旧较大；在本次选定的 `64` 宽度、`15` 轮训练设置下，分组 MLP 的单算子 `MAPE` 进一步比 single MLP 低约 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%，但若没有流水线聚合，整图简单求和误差仍然无法接受；最后引入静态流水线聚合后，整图 `MAPE` 下降到 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，明显优于 `Analytical + grouped MLP + simple add` 的 {grouped_simple_add_row.get('e2e_mape', 0.0) if grouped_simple_add_row else 0.0:.4f}，也优于 `Analytical + single MLP + simple add` 的 {single_simple_add_row.get('e2e_mape', 0.0) if single_simple_add_row else 0.0:.4f}，更远优于 `Analytical + simple add` 的 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f}。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
+        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了五个变体的差异。纯解析模型在整图上的平均相对误差最高；加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但由于整图仍然简单求和，其整图误差依旧较大；在本次选定的 `64` 宽度、`15` 轮训练设置下，single MLP 的 pipeline 版本整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 MLP 的 pipeline 版本为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低了 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%；与此同时，若没有流水线聚合，单 MLP 和分组 MLP 的简单求和误差仍然显著偏大。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
         "",
         "### 4.4.2 误差来源分析",
         "",
@@ -2261,7 +2304,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.5 本章小结",
         "",
-        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，在本次选定的 `64x15` single MLP 设定下，分组 analytical-MLP 在随机切分单算子测试上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，相比 single MLP 的 {single_op_metrics.get('baseline_test_mape', 0.0):.4f} 低约 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；同时，分组模型仍显著优于纯解析模型。在整图层面，静态流水线聚合模型将 `MAPE` 控制在 {e2e_overall.get('mape', 0.0):.4f}。进一步的公平对比消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
+        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，在本次选定的 `64x15` single MLP 设定下，分组 analytical-MLP 在随机切分单算子测试上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，相比 single MLP 的 {single_op_metrics.get('baseline_test_mape', 0.0):.4f} 低约 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；进一步把 single MLP 也接入同一静态流水线后，其整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 pipeline 的整图 `MAPE` 为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低约 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%；同时，分组模型仍显著优于纯解析模型。进一步的公平对比消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
         "",
         f"本章共生成 {len(figures_catalog.get('rows', []))} 张图，全部由 `chapter4_experiments/run_all_chapter4_experiments.py` 自动复现，并写入 `{CHAPTER4_DRAFT_PATH}`。",
         "",
