@@ -10,6 +10,7 @@ refresh the CPU experiment chapter under `ORT/static_pipeline_eval`.
 chapter4_experiments/
 ├── chapter4_config.py
 ├── run_all_chapter4_experiments.py
+├── run_single_op_fair_baseline.py
 ├── run_single_op_core_eval.py
 ├── run_single_op_ood_eval.py
 ├── run_single_op_ablation_eval.py
@@ -35,20 +36,28 @@ chapter4_experiments/
 - `Figure 4-1` to `Figure 4-19` under `artifacts/latest/chapter4_cpu/figures/`
 - a regenerated Chapter 4 draft at `chapter4_cpu_experiments_draft.md`
 
-The current Chapter 4 workflow is centered on three stages of model composition:
+The current Chapter 4 workflow keeps the Concorde-style main composition chain
+and adds a fair single-MLP comparator:
 
 1. `Analytical + simple add`
-2. `Analytical + single-op MLP + simple add`
-3. `Analytical + single-op MLP + static pipeline`
+2. `Analytical + fair single MLP + simple add`
+3. `Analytical + grouped MLP + simple add`
+4. `Analytical + grouped MLP + static pipeline`
 
-This matches the final paper-style ablation used in Section 4.4 and keeps the
-whole experiment chapter reproducible from one command.
+This keeps the paper-style ablation in Section 4.4 reproducible from one
+command while also making the single-vs-grouped MLP comparison apples-to-apples.
+
+For fair single-op comparisons, `run_single_op_fair_baseline.py` rebuilds a
+single-MLP baseline on the exact same `classed_dataset_full.csv` split used by
+the grouped artifact and uses the union of grouped numeric features plus the
+shared categorical features as its input contract.
 
 ## Usage
 
 ```bash
 cd /data/qc/dlrm/ORT/static_pipeline_eval
 python3 chapter4_experiments/run_all_chapter4_experiments.py
+python3 chapter4_experiments/run_single_op_fair_baseline.py --force-retrain
 python3 chapter4_experiments/run_all_chapter4_experiments.py --only single_op
 python3 chapter4_experiments/run_all_chapter4_experiments.py --only e2e --skip-timelines
 ```

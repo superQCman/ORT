@@ -57,6 +57,64 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Add fair single-MLP rerun and switch Chapter 4 tables to apples-to-apples comparison
+
+Request summary:
+- Add a dedicated rerun entry for a fair single-MLP baseline under `chapter4_experiments`.
+- Rebuild the Chapter 4 single-op and ablation comparisons so the single MLP and grouped MLP share the same sample split and the same total feature pool.
+- Refresh the Chapter 4 draft text to describe the new fair-comparison setup truthfully.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_single_op_fair_baseline.py`
+
+Behavior changes:
+- Added `run_single_op_fair_baseline.py` as a standalone entrypoint for retraining a fair single-MLP baseline.
+- Added an internal Chapter 4 helper that:
+  - rebuilds a dataset from `classed_dataset_full.csv`
+  - preserves the grouped artifact's `train/val/test` split exactly
+  - uses the union of grouped numeric features plus the shared categorical features as a 30-feature contract
+  - retrains the single MLP with the same main hyperparameters used by the grouped artifact
+  - prefers the `ort` conda environment Python so reruns do not depend on the caller's current shell environment
+- Updated Table 4-3 to compare:
+  - analytical only
+  - fair single MLP on the same split / same 30-feature pool
+  - grouped analytical-MLP on the same split / routed subsets from that same 30-feature pool
+- Updated Table 4-6 to a fair-comparison ablation with four variants:
+  - `Analytical + simple add`
+  - `Analytical + single MLP + simple add`
+  - `Analytical + grouped MLP + simple add`
+  - `Analytical + grouped MLP + pipeline`
+- Updated the Chapter 4 draft so the narrative no longer claims grouped MLP beats the fair single MLP on random-split single-op metrics; it now states that the two are close and that the major end-to-end gain appears only after static pipeline aggregation.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_single_op_fair_baseline.py --force-retrain`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py --only all`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/write_chapter4_draft.py`
+
+Result snapshot:
+- Fair single MLP test metrics:
+  - `MAPE = 0.0738`
+  - `R^2 = 0.9867`
+  - `feature_count = 30`
+- Grouped analytical-MLP test metrics:
+  - `MAPE = 0.0778`
+  - `R^2 = 0.9867`
+- Fair-comparison ablation E2E `MAPE`:
+  - `Analytical + simple add = 2.0450`
+  - `Analytical + single MLP + simple add = 1.8941`
+  - `Analytical + grouped MLP + simple add = 1.9097`
+  - `Analytical + grouped MLP + pipeline = 0.0638`
+
+Open risks:
+- The fair single-MLP retrain is now reproducible, but it is still relatively expensive because it retrains a full 300-epoch MLP over the full Chapter 4 dataset.
+- On the current random split, grouped MLP does not beat the fair single MLP at the isolated single-op level; the Chapter 4 conclusion therefore depends on the full pipeline story rather than a blanket single-op win.
+
 ### 2026-04-05 - Reframe Chapter 4 ablation around important features
 
 Request summary:

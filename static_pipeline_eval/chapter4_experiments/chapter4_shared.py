@@ -505,6 +505,158 @@ def _resolve_root(value: Path | None, default: Path) -> Path:
     return Path(value) if value is not None else Path(default)
 
 
+def _load_grouped_feature_pool(single_op_root: Path) -> dict[str, Any]:
+    dataset_summary = read_json(single_op_root / "dataset_summary.json")
+    categorical_features = list(dataset_summary.get("shared_categorical_features", []))
+    per_group = dataset_summary.get("per_model_group_numeric_features", {})
+    ordered_numeric: list[str] = []
+    for group_name in dataset_summary.get("model_group_order", list(MODEL_GROUP_ORDER)):
+        for column in per_group.get(group_name, []):
+            if column not in ordered_numeric:
+                ordered_numeric.append(column)
+    if not ordered_numeric:
+        raise RuntimeError(f"No grouped numeric feature pool found under {single_op_root}")
+    return {
+        "dataset_summary": dataset_summary,
+        "numeric_features": ordered_numeric,
+        "categorical_features": categorical_features,
+    }
+
+
+def ensure_fair_single_mlp_artifact(
+    output_root: Path | None = None,
+    *,
+    single_op_artifact_root: Path | None = None,
+    force_retrain: bool = False,
+) -> dict[str, Any]:
+    layout = ensure_output_layout(output_root)
+    single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
+    feature_pool = _load_grouped_feature_pool(single_op_root)
+    section_dir = layout["single_op"] / "fair_single_mlp_same_split_same_feature_pool"
+    dataset_dir = section_dir / "dataset"
+    model_dir = section_dir / "model"
+    manifest_path = section_dir / "manifest.json"
+    metrics_path = model_dir / "metrics.json"
+    predictions_test_path = model_dir / "predictions_test.csv"
+
+    manifest_payload = {
+        "source_single_op_artifact_root": str(single_op_root),
+        "source_dataset_csv": str(single_op_root / "classed_dataset_full.csv"),
+        "numeric_features": feature_pool["numeric_features"],
+        "categorical_features": feature_pool["categorical_features"],
+        "feature_count": len(feature_pool["numeric_features"]) + len(feature_pool["categorical_features"]),
+        "training_hparams": {
+            "hidden_layers": [128, 128, 128, 128, 128],
+            "batch_size": 1024,
+            "max_iter": 300,
+            "alpha": 1e-4,
+            "learning_rate_init": 1e-3,
+            "seed": 42,
+            "train_device": "auto",
+            "target_mode": "direct_us",
+            "log_target": True,
+        },
+    }
+
+    rebuild_dataset = force_retrain or not manifest_path.exists() or not dataset_dir.exists()
+    if not rebuild_dataset and manifest_path.exists():
+        existing_manifest = read_json(manifest_path)
+        rebuild_dataset = existing_manifest != manifest_payload
+
+    if rebuild_dataset:
+        dataset_dir.mkdir(parents=True, exist_ok=True)
+        dataset_frame = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
+        feature_manifest = {
+            "feature_dialect": "chapter4_fair_union_same_split",
+            "numeric_features": feature_pool["numeric_features"],
+            "categorical_features": feature_pool["categorical_features"],
+            "analytical_base_column": "ana_calib_total_us",
+            "residual_target_column": "label_operator_residual_log",
+            "feature_pool_description": "Union of all grouped-model numeric features plus shared categorical features.",
+        }
+        dataset_frame.to_csv(dataset_dir / "dataset_full.csv", index=False)
+        for split_name in ["train", "val", "test"]:
+            dataset_frame[dataset_frame["split"] == split_name].to_csv(dataset_dir / f"{split_name}.csv", index=False)
+        write_json(dataset_dir / "feature_columns.json", feature_manifest)
+        write_json(manifest_path, manifest_payload)
+
+    retrain_model = rebuild_dataset or force_retrain or not metrics_path.exists() or not predictions_test_path.exists()
+    if retrain_model:
+        model_dir.mkdir(parents=True, exist_ok=True)
+        trainer_path = DEFAULT_ORT_ROOT / "single_op_stage1_mlp" / "train_mlp.py"
+        trainer_python = Path("/data/qc/anaconda3/envs/ort/bin/python")
+        if not trainer_python.exists():
+            trainer_python = Path(sys.executable)
+        command = [
+            str(trainer_python),
+            str(trainer_path),
+            "--data-dir",
+            str(dataset_dir),
+            "--output-dir",
+            str(model_dir),
+            "--hidden-layers",
+            "128,128,128,128,128",
+            "--batch-size",
+            "1024",
+            "--max-iter",
+            "300",
+            "--alpha",
+            "0.0001",
+            "--learning-rate-init",
+            "0.001",
+            "--seed",
+            "42",
+            "--train-device",
+            "auto",
+        ]
+        completed = subprocess.run(
+            command,
+            cwd=str(trainer_path.parent),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        (model_dir / "train_stdout.log").write_text(completed.stdout or "", encoding="utf-8")
+        (model_dir / "train_stderr.log").write_text(completed.stderr or "", encoding="utf-8")
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "Fair single MLP retraining failed.\n"
+                f"command={' '.join(command)}\n"
+                f"stdout={completed.stdout}\n"
+                f"stderr={completed.stderr}"
+            )
+
+    metrics = read_json(metrics_path)
+    predictions_test = pd.read_csv(predictions_test_path, low_memory=False)
+    payload = {
+        "artifact_dir": str(section_dir),
+        "dataset_dir": str(dataset_dir),
+        "model_dir": str(model_dir),
+        "manifest_path": str(manifest_path),
+        "metrics_path": str(metrics_path),
+        "predictions_test_path": str(predictions_test_path),
+        "feature_count": manifest_payload["feature_count"],
+        "numeric_features": feature_pool["numeric_features"],
+        "categorical_features": feature_pool["categorical_features"],
+        "metrics": metrics,
+        "predictions_test": predictions_test,
+    }
+    summary_payload = {
+        "artifact_dir": payload["artifact_dir"],
+        "dataset_dir": payload["dataset_dir"],
+        "model_dir": payload["model_dir"],
+        "manifest_path": payload["manifest_path"],
+        "metrics_path": payload["metrics_path"],
+        "predictions_test_path": payload["predictions_test_path"],
+        "feature_count": payload["feature_count"],
+        "numeric_features": payload["numeric_features"],
+        "categorical_features": payload["categorical_features"],
+        "test_metrics": metrics.get("metrics", {}).get("test", {}),
+    }
+    _write_summary_bundle(layout["single_op"], "single_op_fair_baseline", summary_payload)
+    return payload
+
+
 def _metric_summary(metric_rows: list[dict[str, Any]], predicted_key: str, actual_key: str) -> dict[str, Any]:
     if not metric_rows:
         return {
@@ -961,6 +1113,29 @@ def run_platform_summary(
     return SectionResult(name="platform", outputs=manifest)
 
 
+def run_single_op_fair_baseline(
+    output_root: Path | None = None,
+    *,
+    single_op_artifact_root: Path | None = None,
+    force_retrain: bool = False,
+) -> SectionResult:
+    payload = ensure_fair_single_mlp_artifact(
+        output_root,
+        single_op_artifact_root=single_op_artifact_root,
+        force_retrain=force_retrain,
+    )
+    outputs = {
+        "artifact_dir": payload["artifact_dir"],
+        "dataset_dir": payload["dataset_dir"],
+        "model_dir": payload["model_dir"],
+        "manifest_path": payload["manifest_path"],
+        "metrics_path": payload["metrics_path"],
+        "predictions_test_path": payload["predictions_test_path"],
+        "feature_count": payload["feature_count"],
+    }
+    return SectionResult(name="single_op_fair_baseline", outputs=outputs)
+
+
 def run_single_op_core(
     output_root: Path | None = None,
     *,
@@ -974,11 +1149,22 @@ def run_single_op_core(
     section_dir = layout["single_op"]
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
-    baseline_root = _resolve_root(baseline_model_root, BASELINE_MODEL_ROOT)
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
 
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
-    baseline_metrics = read_json(baseline_root / "metrics.json")
+    if baseline_model_root is not None:
+        baseline_root = _resolve_root(baseline_model_root, BASELINE_MODEL_ROOT)
+        baseline_manifest = read_json(baseline_root / "metrics.json")
+        baseline_predictions = pd.read_csv(baseline_root / "predictions_test.csv", low_memory=False)
+        baseline_feature_count = int(
+            len(baseline_manifest.get("numeric_features", []))
+            + len(baseline_manifest.get("categorical_features", []))
+        )
+    else:
+        fair_baseline = ensure_fair_single_mlp_artifact(output_root, single_op_artifact_root=single_op_root)
+        baseline_root = Path(fair_baseline["model_dir"])
+        baseline_predictions = fair_baseline["predictions_test"]
+        baseline_feature_count = int(fair_baseline["feature_count"])
     combined_predictions = pd.read_csv(
         single_op_root / "models" / "combined" / "combined_predictions_test.csv",
         low_memory=False,
@@ -991,6 +1177,10 @@ def run_single_op_core(
     grouped_metrics = _compute_regression_metrics(
         combined_predictions["target_us"],
         combined_predictions["pred_us"],
+    )
+    baseline_metrics = _compute_regression_metrics(
+        baseline_predictions["target_us"],
+        baseline_predictions["pred_us"],
     )
 
     group_label_map = {
@@ -1035,18 +1225,11 @@ def run_single_op_core(
                 **analytical_metrics,
             },
             {
-                "model": "Single MLP baseline",
-                "count": int(len(test_dataset)),
-                "mae_us": float(baseline_metrics["metrics"]["test"]["mae_us"]),
-                "mape": float(baseline_metrics["metrics"]["test"]["mape"]),
-                "rmse_us": float(baseline_metrics["metrics"]["test"]["rmse_us"]),
-                "r2": float(baseline_metrics["metrics"]["test"]["r2"]),
-                "p50_ape": float(baseline_metrics["metrics"]["test"]["median_ape"]),
-                "p90_ape": None,
-                "gt10_rate": None,
+                "model": f"Single MLP (same split / {baseline_feature_count} features)",
+                **baseline_metrics,
             },
             {
-                "model": "Grouped analytical-MLP",
+                "model": f"Grouped analytical-MLP (same split / routed subset from {baseline_feature_count} features)",
                 **grouped_metrics,
             },
         ]
@@ -1219,7 +1402,10 @@ def run_single_op_core(
         },
         "summary": {
             "analytical_test_mape": float(analytical_metrics["mape"]),
-            "baseline_test_mape": float(baseline_metrics["metrics"]["test"]["mape"]),
+            "baseline_test_mape": float(baseline_metrics["mape"]),
+            "baseline_test_r2": float(baseline_metrics["r2"]),
+            "baseline_feature_count": baseline_feature_count,
+            "baseline_model_root": str(baseline_root),
             "grouped_test_mape": float(grouped_metrics["mape"]),
             "grouped_test_r2": float(grouped_metrics["r2"]),
             "representative_op_types": list(REPRESENTATIVE_OP_TYPES),
@@ -1363,8 +1549,10 @@ def run_single_op_ablation(
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
+    fair_baseline = ensure_fair_single_mlp_artifact(output_root, single_op_artifact_root=single_op_root)
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    fair_predictions = fair_baseline["predictions_test"].copy()
     combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
     e2e_full = pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)
 
@@ -1372,21 +1560,27 @@ def run_single_op_ablation(
         test_dataset.groupby(["case_id", "combo"], as_index=False)
         .agg(analytical_simple_add_us=("ana_calib_total_us", "sum"))
     )
-    mlp_combo = (
+    fair_single_combo = (
+        fair_predictions.groupby(["case_id", "combo"], as_index=False)
+        .agg(single_mlp_simple_add_us=("pred_us", "sum"))
+    )
+    grouped_combo = (
         combined_predictions.groupby(["case_id", "combo"], as_index=False)
-        .agg(mlp_simple_add_us=("pred_us", "sum"))
+        .agg(grouped_mlp_simple_add_us=("pred_us", "sum"))
     )
     e2e_joined = (
         e2e_full.merge(analytical_combo, on=["case_id", "combo"], how="left")
-        .merge(mlp_combo, on=["case_id", "combo"], how="left")
+        .merge(fair_single_combo, on=["case_id", "combo"], how="left")
+        .merge(grouped_combo, on=["case_id", "combo"], how="left")
     )
     e2e_joined["pipeline_us"] = e2e_joined["predicted_e2e_us"].astype(float)
     e2e_joined["actual_us"] = e2e_joined["actual_e2e_us"].astype(float)
 
     variants = [
         ("Analytical + simple add", "analytical_simple_add_us"),
-        ("Analytical + MLP + simple add", "mlp_simple_add_us"),
-        ("Analytical + MLP + pipeline", "pipeline_us"),
+        ("Analytical + single MLP + simple add", "single_mlp_simple_add_us"),
+        ("Analytical + grouped MLP + simple add", "grouped_mlp_simple_add_us"),
+        ("Analytical + grouped MLP + pipeline", "pipeline_us"),
     ]
     table_rows: list[dict[str, Any]] = []
     cdf_map: dict[str, list[float]] = {}
@@ -1397,6 +1591,11 @@ def run_single_op_ablation(
             single_metrics = _compute_regression_metrics(
                 test_dataset["label_operator_actual_dur_us"],
                 test_dataset["ana_calib_total_us"],
+            )
+        elif column == "single_mlp_simple_add_us":
+            single_metrics = _compute_regression_metrics(
+                fair_predictions["target_us"],
+                fair_predictions["pred_us"],
             )
         else:
             single_metrics = _compute_regression_metrics(
@@ -1438,13 +1637,13 @@ def run_single_op_ablation(
         table_4_6,
         tables_dir / TABLE_FILENAMES["4-6"],
         tables_dir / "table_4_6_ablation_summary.md",
-        "Table 4-6 Three-stage ablation summary",
+        "Table 4-6 Fair-comparison ablation summary",
     )
 
     plot_cdf(
         cdf_map,
         figures_dir / FIGURE_FILENAMES["4-16"],
-        "Figure 4-16 CDF of E2E relative error under three ablation variants",
+        "Figure 4-16 CDF of E2E relative error under fair-comparison variants",
         xlabel="relative error",
         audit_lines=[
             f"full combos = {len(e2e_joined):,}",
@@ -1461,7 +1660,7 @@ def run_single_op_ablation(
         ylabel="ratio",
         legend_labels=["mean APE", ">10% rate"],
         audit_lines=[
-            f"pipeline mean APE = {float(gt10_frame.iloc[-1]['mean_ape']):.4f}",
+            f"pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + grouped MLP + pipeline'].iloc[0]['mean_ape']):.4f}",
             f"analytical-only mean APE = {float(gt10_frame.iloc[0]['mean_ape']):.4f}",
         ],
     )
@@ -1916,9 +2115,9 @@ def build_figures_catalog(output_root: Path | None = None) -> SectionResult:
         "4-13": ("e2e core", "parallelism sensitivity"),
         "4-14": ("timeline", "timeline replay comparison"),
         "4-15": ("timeline", "critical path breakdown"),
-        "4-16": ("ablation", "three-stage ablation CDF"),
+        "4-16": ("ablation", "fair-comparison ablation CDF"),
         "4-17": ("ablation", "mean error and >10% error rate"),
-        "4-18": ("ablation", "parallelism sensitivity of ablation variants"),
+        "4-18": ("ablation", "parallelism sensitivity of fair-comparison variants"),
         "4-19": ("error analysis", "representative failure cases"),
     }
     for figure_no, filename in FIGURE_FILENAMES.items():
@@ -1966,8 +2165,9 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
     e2e_overall = e2e_metrics.get("overall", {})
     ablation_rows = ablation_metrics.get("variant_rows", [])
     error_rows = error_metrics.get("error_rows", [])
-    pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + MLP + pipeline"), None)
-    simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + MLP + simple add"), None)
+    pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + grouped MLP + pipeline"), None)
+    grouped_simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + grouped MLP + simple add"), None)
+    single_simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + single MLP + simple add"), None)
     analytical_row = next((row for row in ablation_rows if row["variant"] == "Analytical + simple add"), None)
 
     lines = [
@@ -1999,7 +2199,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "### 4.2.1 单算子总体预测精度",
         "",
-        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、单一 MLP 基线以及本文采用的分组 analytical-MLP。最终分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；纯解析模型由于在小张量和视图类节点上存在显著比例误差，其 `MAPE` 高达 {single_op_metrics.get('analytical_test_mape', 0.0):.4f}。单一 MLP 基线的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}，在随机切分的单算子指标上略优于分组模型，但缺少显式的机理分组与解析代理约束。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
+        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、同数据同特征池重跑的 single MLP，以及本文采用的分组 analytical-MLP。后两者都使用相同的 `case-combo` 划分，并共享总计 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征池，只是分组模型按算子机理做静态路由并使用对应子集。最终分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；公平 single MLP 的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}；纯解析模型由于在小张量和视图类节点上存在显著比例误差，其 `MAPE` 高达 {single_op_metrics.get('analytical_test_mape', 0.0):.4f}。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
         "",
         "### 4.2.2 分类别预测精度",
         "",
@@ -2035,11 +2235,11 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.4 消融实验与误差分析",
         "",
-        "这一节采用与 Concorde 类似的逐步加组件消融方式，而不是简单做特征删除。具体构造三组模型：第一组仅使用 `Analytical model + Simple add`；第二组在单算子层面加入分组 MLP，但整图仍采用 `Simple add`；第三组使用 `Analytical + MLP + pipeline`，即本文完整方法。这样的设计能够更清晰地回答三个问题：解析模型本身能做多好、单算子学习器能带来多少收益、以及静态流水线聚合是否对整图预测确有必要。",
+        "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造四个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第三组使用 `grouped MLP + Simple add`；第四组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答四个问题：解析模型本身能做多好、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。",
         "",
-        "### 4.4.1 三阶段消融结果",
+        "### 4.4.1 公平对比消融结果",
         "",
-        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了三阶段模型的差异。纯解析模型在整图上的平均相对误差最高；加入分组 MLP 后，单算子精度显著提高，但若仍对节点时延简单相加，整图误差仍然较大；进一步引入静态流水线聚合后，整图 `MAPE` 下降到 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，明显优于 `Analytical + MLP + simple add` 的 {simple_add_row.get('e2e_mape', 0.0) if simple_add_row else 0.0:.4f}，更远优于 `Analytical + simple add` 的 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f}。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
+        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了四个变体的差异。纯解析模型在整图上的平均相对误差最高；加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但由于整图仍然简单求和，其整图误差依旧较大；在相同特征池下改为分组 MLP 后，随机切分的单算子指标与 single MLP 接近，但若没有流水线聚合，整图简单求和误差仍然无法接受；最后引入静态流水线聚合后，整图 `MAPE` 下降到 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，明显优于 `Analytical + grouped MLP + simple add` 的 {grouped_simple_add_row.get('e2e_mape', 0.0) if grouped_simple_add_row else 0.0:.4f}，也优于 `Analytical + single MLP + simple add` 的 {single_simple_add_row.get('e2e_mape', 0.0) if single_simple_add_row else 0.0:.4f}，更远优于 `Analytical + simple add` 的 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f}。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
         "",
         "### 4.4.2 误差来源分析",
         "",
@@ -2047,7 +2247,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.5 本章小结",
         "",
-        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，分组 analytical-MLP 单算子模型在测试集上取得了 {single_op_metrics.get('grouped_test_mape', 0.0):.4f} 的 `MAPE`，显著优于纯解析模型，并为后续整图聚合提供了带机理约束的节点级输入；在整图层面，静态流水线聚合模型将 `MAPE` 控制在 {e2e_overall.get('mape', 0.0):.4f}。进一步的三阶段消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
+        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，公平 single MLP 与分组 analytical-MLP 在随机切分单算子测试上取得了相近精度，后者的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，同时显著优于纯解析模型；在整图层面，静态流水线聚合模型将 `MAPE` 控制在 {e2e_overall.get('mape', 0.0):.4f}。进一步的公平对比消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
         "",
         f"本章共生成 {len(figures_catalog.get('rows', []))} 张图，全部由 `chapter4_experiments/run_all_chapter4_experiments.py` 自动复现，并写入 `{CHAPTER4_DRAFT_PATH}`。",
         "",

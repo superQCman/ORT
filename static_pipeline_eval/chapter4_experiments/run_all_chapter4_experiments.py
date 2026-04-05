@@ -28,6 +28,7 @@ from chapter4_experiments.chapter4_shared import (  # noqa: E402
     run_platform_summary,
     run_single_op_ablation,
     run_single_op_core,
+    run_single_op_fair_baseline,
     run_single_op_ood,
     run_timeline_cases,
 )
@@ -62,6 +63,12 @@ def main() -> None:
     )
 
     if args.only in {"all", "single_op"}:
+        sections.append(
+            run_single_op_fair_baseline(
+                args.output_root,
+                single_op_artifact_root=args.single_op_artifact_root,
+            )
+        )
         sections.append(
             run_single_op_core(
                 args.output_root,
