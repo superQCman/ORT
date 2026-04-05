@@ -83,6 +83,8 @@ def main() -> None:
                 run_single_op_ablation(
                     args.output_root,
                     ablation_artifact_root=ABLATION_ARTIFACT_ROOT,
+                    single_op_artifact_root=args.single_op_artifact_root,
+                    e2e_artifact_root=args.e2e_artifact_root,
                 )
             )
 

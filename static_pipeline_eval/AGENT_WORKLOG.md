@@ -358,3 +358,58 @@ Validation run:
 Open risks:
 - The original workspace had pre-existing dirty state, so this migration was carried out in a temporary clean worktree and then mirrored back into the visible workspace.
 - The subtree import preserved history, but future edits should continue to avoid reintroducing a nested `.git` directory under `static_pipeline_eval`.
+
+### 2026-04-06 - Rework Chapter 4 into a paper-style CPU experiment package
+
+Request summary:
+- Rework the existing Chapter 4 experiment bundle under `chapter4_experiments/` and `artifacts/latest/chapter4_cpu/`.
+- Replace the previous feature-drop-style ablation with a Concorde-inspired three-stage composition study:
+  - `Analytical + simple add`
+  - `Analytical + single-op MLP + simple add`
+  - `Analytical + single-op MLP + static pipeline`
+- Align the figures and generated draft more closely with a thesis/paper presentation, and write a full Section 4.1-4.5 draft instead of an outline.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_single_op_ablation_eval.py`
+
+Behavior changes:
+- Replaced the old Chapter 4 feature-ablation outputs with a new three-stage ablation that compares analytical-only summation, MLP-enhanced summation, and the full static pipeline composition on the same full-graph combos.
+- Reworked the Chapter 4 tables so they now match the thesis structure more closely:
+  - platform/software configuration
+  - dataset composition
+  - single-op overall accuracy
+  - category-wise single-op accuracy
+  - E2E accuracy
+  - ablation summary
+  - representative error cases
+- Replaced the old audit-style figures with paper-oriented plots, including:
+  - workflow diagrams for data collection
+  - predicted-vs-actual scatter plots
+  - category/operator behavior plots
+  - E2E stability and parallelism plots
+  - ablation CDF / >10% error comparisons
+  - representative failure-case visualization
+- Rewrote `chapter4_cpu_experiments_draft.md` into a full Chapter 4 draft with prose for:
+  - `4.1 实验平台与数据采集方法`
+  - `4.2 算子级性能建模实验`
+  - `4.3 整图性能聚合实验`
+  - `4.4 消融实验与误差分析`
+  - `4.5 本章小结`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py --only all`
+- Manual review of:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/tables/table_4_1_platform_dataset.csv`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/tables/table_4_6_e2e_sum_baseline.csv`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/tables/table_4_7_single_op_ablation_summary.csv`
+
+Open risks:
+- The current single-op random-split metric still shows the legacy single-MLP baseline slightly ahead of the grouped analytical-MLP on pure single-op `MAPE`; the Chapter 4 text now states this explicitly instead of overstating the grouped model.
+- The analytical-only single-op `MAPE` is dominated by very small latency operators, so Section 4.4 focuses the main ablation discussion on E2E relative error rather than that raw percentage alone.

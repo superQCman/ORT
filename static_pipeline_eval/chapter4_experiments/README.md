@@ -1,7 +1,8 @@
 # Chapter 4 Experiments
 
-This directory contains the unified Chapter 4 experiment orchestrator and the
-section-specific entry points that feed it.
+This directory contains the unified Chapter 4 experiment orchestrator, the
+section-specific entry points, and the paper-oriented report builders used to
+refresh the CPU experiment chapter under `ORT/static_pipeline_eval`.
 
 ## Layout
 
@@ -27,6 +28,21 @@ chapter4_experiments/
 - E2E source: `ORT/static_pipeline_eval/artifacts/latest/v1_300_iter_quick_nodrop`
 - OOD source: `ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization`
 - Ablation source: `ORT/single_op_stage1_mlp/artifacts/latest/feature_ablation/classed_op_mlp_test_2_analytical_5_200_iter`
+
+## What The Runner Produces
+
+- `Table 4-1` to `Table 4-7` in CSV/Markdown form
+- `Figure 4-1` to `Figure 4-19` under `artifacts/latest/chapter4_cpu/figures/`
+- a regenerated Chapter 4 draft at `chapter4_cpu_experiments_draft.md`
+
+The current Chapter 4 workflow is centered on three stages of model composition:
+
+1. `Analytical + simple add`
+2. `Analytical + single-op MLP + simple add`
+3. `Analytical + single-op MLP + static pipeline`
+
+This matches the final paper-style ablation used in Section 4.4 and keeps the
+whole experiment chapter reproducible from one command.
 
 ## Usage
 

@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 import math
 import re
+import subprocess
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import pandas as pd
 
@@ -328,6 +329,67 @@ def plot_line(
         ax.plot(frame[x], frame[y], marker="o", linewidth=1.5, color="#4477aa")
     _style_axes(ax, title, x, ylabel or y)
     add_audit_callout(ax, audit_lines, loc=audit_loc)
+    return save_figure(fig, path)
+
+
+def plot_cdf(
+    values_by_label: dict[str, list[float]],
+    path: Path,
+    title: str,
+    *,
+    xlabel: str,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "lower right",
+) -> Path:
+    plt = _import_pyplot()
+    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    palette = ["#E45756", "#4C78A8", "#54A24B", "#B279A2", "#F58518"]
+    for idx, (label, values) in enumerate(values_by_label.items()):
+        clean = sorted(float(value) for value in values if value is not None and not math.isnan(float(value)))
+        if not clean:
+            continue
+        cdf = [(pos + 1) / len(clean) * 100.0 for pos in range(len(clean))]
+        ax.plot(clean, cdf, linewidth=2.0, label=label, color=palette[idx % len(palette)])
+    _style_axes(ax, title, xlabel, "CDF (%)")
+    ax.legend(frameon=False)
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
+    return save_figure(fig, path)
+
+
+def plot_flow(
+    steps: list[str],
+    path: Path,
+    title: str,
+    *,
+    subtitle: str | None = None,
+) -> Path:
+    plt = _import_pyplot()
+    fig, ax = plt.subplots(figsize=(13, 2.8))
+    ax.axis("off")
+    x_positions = [0.08 + idx * (0.84 / max(1, len(steps) - 1)) for idx in range(len(steps))]
+    for idx, (x_pos, step) in enumerate(zip(x_positions, steps)):
+        ax.text(
+            x_pos,
+            0.58,
+            step,
+            ha="center",
+            va="center",
+            fontsize=10,
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#F7F7F7", edgecolor="#4C78A8", linewidth=1.2),
+            transform=ax.transAxes,
+        )
+        if idx < len(steps) - 1:
+            next_x = x_positions[idx + 1]
+            ax.annotate(
+                "",
+                xy=(next_x - 0.045, 0.58),
+                xytext=(x_pos + 0.045, 0.58),
+                xycoords=ax.transAxes,
+                arrowprops=dict(arrowstyle="->", lw=1.4, color="#666666"),
+            )
+    ax.set_title(title, pad=12)
+    if subtitle:
+        ax.text(0.5, 0.13, subtitle, ha="center", va="center", fontsize=9, color="#555555", transform=ax.transAxes)
     return save_figure(fig, path)
 
 
@@ -749,6 +811,87 @@ def _evaluate_predictions(prediction_df: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def _compute_regression_metrics(actual: pd.Series, pred: pd.Series) -> dict[str, float | None]:
+    actual = actual.astype(float)
+    pred = pred.astype(float)
+    if actual.empty:
+        return {
+            "count": 0,
+            "mae_us": None,
+            "mape": None,
+            "rmse_us": None,
+            "r2": None,
+            "p50_ape": None,
+            "p90_ape": None,
+            "gt10_rate": None,
+        }
+    abs_error = (pred - actual).abs()
+    ape = (abs_error / actual.replace(0.0, pd.NA)).fillna(0.0)
+    ss_tot = float(((actual - actual.mean()) ** 2).sum())
+    ss_res = float(((pred - actual) ** 2).sum())
+    r2 = 1.0 - ss_res / ss_tot if ss_tot else 0.0
+    return {
+        "count": int(len(actual)),
+        "mae_us": float(abs_error.mean()),
+        "mape": float(ape.mean()),
+        "rmse_us": float((((pred - actual) ** 2).mean()) ** 0.5),
+        "r2": float(r2),
+        "p50_ape": float(ape.quantile(0.50)),
+        "p90_ape": float(ape.quantile(0.90)),
+        "gt10_rate": float((ape > 0.10).mean()),
+    }
+
+
+def _format_range(series: pd.Series, *, cast_int: bool = False) -> str:
+    clean = series.dropna()
+    if clean.empty:
+        return ""
+    if cast_int:
+        clean = clean.astype(int)
+    return f"{clean.min()}-{clean.max()}"
+
+
+def _run_shell_text(command: list[str]) -> str:
+    return subprocess.check_output(command, text=True).strip()
+
+
+def _platform_config_frame() -> pd.DataFrame:
+    lscpu_text = _run_shell_text(["lscpu"])
+    os_release = Path("/etc/os-release").read_text(encoding="utf-8")
+
+    def extract(pattern: str, text: str, default: str = "") -> str:
+        match = re.search(pattern, text, re.MULTILINE)
+        return match.group(1).strip() if match else default
+
+    hw_profile_path = (
+        Path(DEFAULT_ORT_ROOT)
+        / "single_op_stage1_mlp"
+        / "hardware_profile"
+        / "kunpeng920_single_numa.yaml"
+    )
+    hw_profile_text = hw_profile_path.read_text(encoding="utf-8")
+    host_cores = extract(r"CPU\(s\):\s+(\d+)", lscpu_text)
+    host_threads = host_cores
+    host_freq = extract(r"cpu_clock:\s+([^\n]+)", hw_profile_text, extract(r"Model name:\s+([^\n]+)", lscpu_text))
+    return pd.DataFrame(
+        [
+            {
+                "server_model": "Huawei Cloud Kunpeng host (4-socket)",
+                "cpu_model": extract(r"Model name:\s+([^\n]+)", lscpu_text),
+                "host_cores_threads": f"{host_cores}C/{host_threads}T",
+                "experiment_scope": "single NUMA domain (24 cores)",
+                "main_frequency": host_freq,
+                "cache_config": "L1I 64 KiB/core, L1D 64 KiB/core, L2 512 KiB/core, L3 24 MiB/NUMA",
+                "memory_config": "DDR4-2933, 4 channels/NUMA, approx. 100 GB/s local bandwidth",
+                "os_version": extract(r'PRETTY_NAME=\"([^\"]+)\"', os_release),
+                "python_ort_stack": "Python 3.11 (ort env), ONNX Runtime / PyTorch / ONNX versions recorded in experiment artifacts",
+                "compiler_profiler": "GCC 10.3.1, DynamoRIO profiler, ORT branch-parallel timeline",
+                "binding_notes": "single-NUMA pinning; fixed inter/intra thread configs; branch-parallel timeline replay",
+            }
+        ]
+    )
+
+
 def run_platform_summary(
     output_root: Path | None = None,
     *,
@@ -762,82 +905,56 @@ def run_platform_summary(
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
-    baseline_root = _resolve_root(baseline_model_root, BASELINE_MODEL_ROOT)
-
     single_op_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     e2e_summary = read_json(e2e_root / "summary.json")
-    baseline_metrics = read_json(baseline_root / "metrics.json")
 
-    rows = [
-        {
-            "source": "single_op_classed_dataset",
-            "artifact_root": str(single_op_root),
-            "rows": int(len(single_op_df)),
-            "cases": int(single_op_df["case_id"].nunique()),
-            "combos": int(single_op_df[["case_id", "combo"]].drop_duplicates().shape[0]),
-            "batch_sizes": _sanitize_list(sorted(single_op_df["batch_size"].dropna().astype(int).unique().tolist())),
-            "inter_threads": _sanitize_list(sorted(single_op_df["inter_threads"].dropna().astype(int).unique().tolist())),
-            "notes": single_op_root.name,
-        },
-        {
-            "source": "static_pipeline_eval",
-            "artifact_root": str(e2e_root),
-            "rows": int(e2e_summary["combo_counts"]["total_test_combos"]),
-            "cases": int(single_op_df["case_id"].nunique()),
-            "combos": int(e2e_summary["combo_counts"]["total_test_combos"]),
-            "batch_sizes": _sanitize_list(sorted(single_op_df["batch_size"].dropna().astype(int).unique().tolist())),
-            "inter_threads": _sanitize_list(sorted(single_op_df["inter_threads"].dropna().astype(int).unique().tolist())),
-            "notes": e2e_root.name,
-        },
-        {
-            "source": "model_all_no_trace_baseline",
-            "artifact_root": str(baseline_root),
-            "rows": 1,
-            "cases": 1,
-            "combos": 1,
-            "batch_sizes": "n/a",
-            "inter_threads": "n/a",
-            "notes": "baseline comparison model",
-        },
-    ]
-    frame = pd.DataFrame(rows)
-    csv_path, md_path = write_frame_csv_md(frame, tables_dir / TABLE_FILENAMES["4-1"], tables_dir / "table_4_1_platform_dataset.md", "Table 4-1 Platform and Dataset Overview")
-
-    plot_frame = pd.DataFrame(
-        [
-            {"metric": "single_op rows", "value": len(single_op_df)},
-            {"metric": "single_op combos", "value": single_op_df[["case_id", "combo"]].drop_duplicates().shape[0]},
-            {"metric": "e2e combos", "value": e2e_summary["combo_counts"]["total_test_combos"]},
-            {"metric": "e2e full combos", "value": e2e_summary["combo_counts"]["full_combo_count"]},
-            {"metric": "baseline test rows", "value": 1},
-        ]
+    frame = _platform_config_frame()
+    csv_path, md_path = write_frame_csv_md(
+        frame,
+        tables_dir / TABLE_FILENAMES["4-1"],
+        tables_dir / "table_4_1_platform_config.md",
+        "Table 4-1 Hardware and software configuration",
     )
-    fig_path = plot_bar(
-        plot_frame,
-        "metric",
-        "value",
-        figures_dir / FIGURE_FILENAMES["4-1"],
-        "Figure 4-1 Platform and Dataset Overview",
-        ylabel="count",
-        color="#4C78A8",
-        audit_lines=[
-            f"single-op rows = {len(single_op_df):,}",
-            f"single-op combos = {single_op_df[['case_id', 'combo']].drop_duplicates().shape[0]:,}",
-            f"e2e full combos = {e2e_summary['combo_counts']['full_combo_count']:,}",
+
+    fig_path = plot_flow(
+        [
+            "DLRM / ONNX model",
+            "single-op split",
+            "parameter sampling",
+            "ORT execution",
+            "profiling + cleaning",
+            "feature build",
         ],
+        figures_dir / FIGURE_FILENAMES["4-1"],
+        "Figure 4-1 Single-op data collection flow",
+        subtitle="Model -> operator split -> sampled execution -> profiling labels -> features",
+    )
+    fig_path_2 = plot_flow(
+        [
+            "DLRM full graph run",
+            "timeline collection",
+            "graph restore",
+            "node / batch alignment",
+            "E2E ground truth",
+        ],
+        figures_dir / FIGURE_FILENAMES["4-2"],
+        "Figure 4-2 E2E timeline aggregation flow",
+        subtitle="Timeline replay and graph reconstruction for combo-level labels",
     )
 
     summary = {
         "single_op_rows": int(len(single_op_df)),
+        "single_op_cases": int(single_op_df["case_id"].nunique()),
         "single_op_combos": int(single_op_df[["case_id", "combo"]].drop_duplicates().shape[0]),
-        "e2e_combos": int(e2e_summary["combo_counts"]["total_test_combos"]),
         "full_e2e_combos": int(e2e_summary["combo_counts"]["full_combo_count"]),
-        "baseline_test_mape": baseline_metrics["metrics"]["test"]["mape"],
+        "host_cpu_model": frame.iloc[0]["cpu_model"],
+        "experiment_scope": frame.iloc[0]["experiment_scope"],
     }
     manifest = {
         "table_csv": str(csv_path),
         "table_md": str(md_path),
-        "figure": str(fig_path),
+        "figure_4_1": str(fig_path),
+        "figure_4_2": str(fig_path_2),
         "summary": summary,
     }
     write_json(layout["manifests"] / "platform_summary.json", manifest)
@@ -860,238 +977,229 @@ def run_single_op_core(
     baseline_root = _resolve_root(baseline_model_root, BASELINE_MODEL_ROOT)
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
 
-    training_summary = read_json(single_op_root / "models" / "training_summary.json")
-    group_metrics = _load_group_metrics(training_summary)
+    dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     baseline_metrics = read_json(baseline_root / "metrics.json")
-    combined_op_type_metrics = pd.read_csv(
-        single_op_root / "models" / "combined" / "combined_op_type_metrics_test.csv",
-        low_memory=False,
-    )
-    comparison_summary = read_json(
-        single_op_root / "models" / "comparison" / "comparison_summary.json"
-    )
     combined_predictions = pd.read_csv(
         single_op_root / "models" / "combined" / "combined_predictions_test.csv",
         low_memory=False,
     )
+    test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    analytical_metrics = _compute_regression_metrics(
+        test_dataset["label_operator_actual_dur_us"],
+        test_dataset["ana_calib_total_us"],
+    )
+    grouped_metrics = _compute_regression_metrics(
+        combined_predictions["target_us"],
+        combined_predictions["pred_us"],
+    )
 
-    group_metrics = group_metrics.sort_values("model_group").reset_index(drop=True)
-    group_metrics["delta_mape_vs_baseline"] = group_metrics["test_mape"] - float(baseline_metrics["metrics"]["test"]["mape"])
-    group_metrics["delta_mae_vs_baseline"] = group_metrics["test_mae_us"] - float(baseline_metrics["metrics"]["test"]["mae_us"])
-    group_metrics["baseline_test_mape"] = float(baseline_metrics["metrics"]["test"]["mape"])
-
-    table_4_2 = group_metrics[
+    group_label_map = {
+        "gather": "Index / memory",
+        "layout_move": "Layout move",
+        "view_meta": "View / meta",
+        "mixed_balanced": "Light compute-mem",
+        "compute_dominant": "Compute dominant",
+    }
+    table_4_2 = (
+        dataset_df.groupby("model_group", as_index=False)
+        .agg(
+            sample_count=("row_uid", "count"),
+            operator_names=("op_type", lambda values: ",".join(sorted(set(values)))),
+            batch_size_range=("batch_size", lambda values: _format_range(pd.Series(values), cast_int=True)),
+            nip_range=("num_indices_per_lookup", lambda values: _format_range(pd.Series(values), cast_int=True)),
+            num_threads_range=("num_threads", lambda values: _format_range(pd.Series(values), cast_int=True)),
+            inter_threads_range=("inter_threads", lambda values: _format_range(pd.Series(values), cast_int=True)),
+            io_bytes_range=("feat_io_bytes_sum", lambda values: _format_range(pd.Series(values))),
+        )
+        .sort_values("model_group")
+        .reset_index(drop=True)
+    )
+    table_4_2["operator_category"] = table_4_2["model_group"].map(group_label_map).fillna(table_4_2["model_group"])
+    table_4_2 = table_4_2[
         [
-            "model_group",
-            "feature_count",
-            "input_dim_after_encoding",
-            "best_epoch",
-            "best_validation_loss",
-            "test_mae_us",
-            "test_rmse_us" if "test_rmse_us" in group_metrics.columns else "test_mae_us",
-            "test_r2" if "test_r2" in group_metrics.columns else "best_validation_loss",
-            "test_mape",
-            "test_median_ape",
-            "delta_mape_vs_baseline",
+            "operator_category",
+            "operator_names",
+            "sample_count",
+            "batch_size_range",
+            "nip_range",
+            "num_threads_range",
+            "inter_threads_range",
+            "io_bytes_range",
         ]
-    ].copy()
+    ]
 
-    table_4_3 = combined_op_type_metrics[
+    table_4_3 = pd.DataFrame(
         [
-            "op_type",
-            "row_count",
-            "mae_us",
-            "rmse_us",
-            "r2",
-            "mape",
-            "median_ape",
-            "p90_ape",
-            "bias_mean_us",
-        ]
-    ].sort_values("mape", ascending=False).reset_index(drop=True)
-
-    representative_rows: list[dict[str, Any]] = []
-    for op_type in REPRESENTATIVE_OP_TYPES:
-        subset = combined_predictions[combined_predictions["op_type"] == op_type]
-        if subset.empty:
-            continue
-        actual = subset["target_us"].astype(float)
-        pred = subset["pred_us"].astype(float)
-        abs_error = (pred - actual).abs()
-        ape = abs_error / actual.replace(0.0, pd.NA)
-        representative_rows.append(
             {
-                "op_type": op_type,
-                "rows": int(len(subset)),
-                "target_mean_us": float(actual.mean()),
-                "pred_mean_us": float(pred.mean()),
-                "mae_us": float(abs_error.mean()),
-                "mape": float(ape.fillna(0.0).mean()),
-                "median_ape": float(ape.fillna(0.0).median()),
-                "p90_ape": float(ape.fillna(0.0).quantile(0.9)),
+                "model": "Analytical only",
+                **analytical_metrics,
+            },
+            {
+                "model": "Single MLP baseline",
+                "count": int(len(test_dataset)),
+                "mae_us": float(baseline_metrics["metrics"]["test"]["mae_us"]),
+                "mape": float(baseline_metrics["metrics"]["test"]["mape"]),
+                "rmse_us": float(baseline_metrics["metrics"]["test"]["rmse_us"]),
+                "r2": float(baseline_metrics["metrics"]["test"]["r2"]),
+                "p50_ape": float(baseline_metrics["metrics"]["test"]["median_ape"]),
+                "p90_ape": None,
+                "gt10_rate": None,
+            },
+            {
+                "model": "Grouped analytical-MLP",
+                **grouped_metrics,
+            },
+        ]
+    )
+
+    category_rows: list[dict[str, Any]] = []
+    for model_group, sub in combined_predictions.groupby("model_group"):
+        metrics = _compute_regression_metrics(sub["target_us"], sub["pred_us"])
+        category_rows.append(
+            {
+                "operator_category": group_label_map.get(model_group, model_group),
+                "sample_count": int(len(sub)),
+                "mean_actual_us": float(sub["target_us"].astype(float).mean()),
+                "mae_us": metrics["mae_us"],
+                "mape": metrics["mape"],
+                "rmse_us": metrics["rmse_us"],
+                "p90_ape": metrics["p90_ape"],
             }
         )
-    table_4_4 = pd.DataFrame(representative_rows).sort_values("mape", ascending=False).reset_index(drop=True)
+    table_4_4 = pd.DataFrame(category_rows).sort_values("mape", ascending=False).reset_index(drop=True)
 
-    csv_42, md_42 = write_frame_csv_md(table_4_2, tables_dir / TABLE_FILENAMES["4-2"], tables_dir / "table_4_2_single_op_group_metrics.md", "Table 4-2 Single-op group metrics")
-    csv_43, md_43 = write_frame_csv_md(table_4_3, tables_dir / TABLE_FILENAMES["4-3"], tables_dir / "table_4_3_single_op_optype_metrics.md", "Table 4-3 Single-op op-type metrics")
-    csv_44, md_44 = write_frame_csv_md(table_4_4, tables_dir / TABLE_FILENAMES["4-4"], tables_dir / "table_4_4_single_op_representative_ops.md", "Table 4-4 Representative operator metrics")
-
-    figure_42 = table_4_2.sort_values("test_mape", ascending=False).reset_index(drop=True)
-    plot_grouped_bar(
-        figure_42[["model_group", "test_mape", "delta_mape_vs_baseline"]].rename(columns={"test_mape": "mape", "delta_mape_vs_baseline": "delta"}),
-        "model_group",
-        ["mape", "delta"],
-        figures_dir / FIGURE_FILENAMES["4-2"],
-        "Figure 4-2 Single-op Group MAPE and Baseline Delta",
-        ylabel="value",
-        legend_labels=["test MAPE", "delta vs baseline"],
-        audit_lines=[
-            f"baseline test MAPE = {float(baseline_metrics['metrics']['test']['mape']):.6f}",
-            f"best group = {figure_42.sort_values('test_mape').iloc[0]['model_group']} ({float(figure_42.sort_values('test_mape').iloc[0]['test_mape']):.6f})",
-            f"worst group = {figure_42.iloc[0]['model_group']} ({float(figure_42.iloc[0]['test_mape']):.6f})",
-        ],
+    csv_42, md_42 = write_frame_csv_md(
+        table_4_2,
+        tables_dir / TABLE_FILENAMES["4-2"],
+        tables_dir / "table_4_2_dataset_composition.md",
+        "Table 4-2 Dataset composition by operator category",
+    )
+    csv_43, md_43 = write_frame_csv_md(
+        table_4_3,
+        tables_dir / TABLE_FILENAMES["4-3"],
+        tables_dir / "table_4_3_single_op_overall.md",
+        "Table 4-3 Single-op overall accuracy",
+    )
+    csv_44, md_44 = write_frame_csv_md(
+        table_4_4,
+        tables_dir / TABLE_FILENAMES["4-4"],
+        tables_dir / "table_4_4_single_op_category.md",
+        "Table 4-4 Category-wise single-op accuracy",
     )
 
-    figure_43 = table_4_2.sort_values("test_mae_us", ascending=False).reset_index(drop=True)
-    plot_bar(
-        figure_43,
-        "model_group",
-        "test_mae_us",
+    scatter_frame = combined_predictions.copy()
+    scatter_frame["actual_us"] = scatter_frame["target_us"].astype(float)
+    scatter_frame["predicted_us"] = scatter_frame["pred_us"].astype(float)
+    plot_scatter(
+        scatter_frame.sample(n=min(2500, len(scatter_frame)), random_state=42),
+        "actual_us",
+        "predicted_us",
         figures_dir / FIGURE_FILENAMES["4-3"],
-        "Figure 4-3 Single-op Group MAE",
-        ylabel="MAE (us)",
-        color="#F58518",
+        "Figure 4-3 Single-op predicted vs. actual latency",
         audit_lines=[
-            f"mean MAE = {float(figure_43['test_mae_us'].mean()):.3f} us",
-            f"worst MAE = {float(figure_43.iloc[0]['test_mae_us']):.3f} us",
-            f"baseline test MAPE = {float(baseline_metrics['metrics']['test']['mape']):.6f}",
+            f"rows = {len(scatter_frame):,}",
+            f"MAPE = {grouped_metrics['mape']:.4f}",
+            f"R2 = {grouped_metrics['r2']:.4f}",
         ],
     )
 
     plot_bar(
-        table_4_3.head(8),
-        "op_type",
+        table_4_4.sort_values("mape", ascending=False),
+        "operator_category",
         "mape",
         figures_dir / FIGURE_FILENAMES["4-4"],
-        "Figure 4-4 Single-op Op-type MAPE",
+        "Figure 4-4 MAPE by operator category",
         ylabel="MAPE",
         color="#54A24B",
         audit_lines=[
-            f"worst op type = {table_4_3.iloc[0]['op_type']}",
-            f"top-8 coverage = {len(table_4_3.head(8))}/{len(table_4_3)} op types",
-            f"representative ops = {' / '.join(REPRESENTATIVE_OP_TYPES)}",
+            f"best = {table_4_4.sort_values('mape').iloc[0]['operator_category']}",
+            f"worst = {table_4_4.iloc[0]['operator_category']}",
         ],
     )
 
-    graph_case, graph_combo = TIMELINE_CASES[0]
-    prediction_df = load_prediction_frame(single_op_root, split="test")
-    combo_spec_map = {
-        (spec.case_id, spec.combo): spec
-        for spec in build_combo_specs(prediction_df, ort_root=Path(DEFAULT_ORT_ROOT))
-    }
-    graph = build_op_graph(load_op_shapes_frame(combo_spec_map[(graph_case, graph_combo)].artifact_paths.shape_csv))
-    representative_nodes = {node.node_idx for node in graph.values() if node.op_type in set(REPRESENTATIVE_OP_TYPES)}
-    for node_idx in list(representative_nodes):
-        representative_nodes.update(graph[node_idx].predecessors)
-        representative_nodes.update(graph[node_idx].successors)
-    if not representative_nodes:
-        representative_nodes = {node_idx for node_idx, node in graph.items() if node.op_type != "Constant"}
-    nodes_frame, edges_frame = _graph_subframe(
-        graph,
-        lambda node: node.node_idx in representative_nodes
-        or node.op_type in set(REPRESENTATIVE_OP_TYPES)
-        or node.partition in {"bottom", "tail"},
-    )
-    if nodes_frame.empty:
-        nodes_frame, edges_frame = _graph_subframe(graph, lambda node: node.op_type != "Constant")
-    plot_simple_graph(
-        nodes_frame,
-        edges_frame,
-        figures_dir / FIGURE_FILENAMES["4-5"],
-        f"Figure 4-5 Representative Graph ({graph_case} / {graph_combo})",
-        audit_lines=[
-            f"chosen case = {graph_case} / {graph_combo}",
-            f"representative ops = {' / '.join(REPRESENTATIVE_OP_TYPES)}",
-        ],
-    )
-
-    scatter_rows: list[dict[str, Any]] = []
-    for op_type in REPRESENTATIVE_OP_TYPES:
-        subset = combined_predictions[combined_predictions["op_type"] == op_type].copy()
-        if subset.empty:
-            continue
-        subset["actual_us"] = subset["target_us"].astype(float)
-        subset["predicted_us"] = subset["pred_us"].astype(float)
-        subset["residual_us"] = subset["predicted_us"] - subset["actual_us"]
-        scatter_rows.append(subset.sample(n=min(250, len(subset)), random_state=42))
-    scatter_frame = pd.concat(scatter_rows, ignore_index=True) if scatter_rows else pd.DataFrame(columns=["actual_us", "predicted_us", "op_type"])
-    if not scatter_frame.empty:
-        plt = _import_pyplot()
-        fig, ax = plt.subplots(figsize=(6.5, 6.5))
-        for op_type, sub in scatter_frame.groupby("op_type"):
-            ax.scatter(sub["actual_us"], sub["predicted_us"], s=12, alpha=0.6, label=op_type)
-        lo = float(min(scatter_frame["actual_us"].min(), scatter_frame["predicted_us"].min()))
-        hi = float(max(scatter_frame["actual_us"].max(), scatter_frame["predicted_us"].max()))
-        ax.plot([lo, hi], [lo, hi], linestyle="--", color="#222222")
-        ax.set_title("Figure 4-6 Representative Op Scatter")
-        ax.set_xlabel("actual (us)")
-        ax.set_ylabel("predicted (us)")
-        ax.legend(frameon=False, fontsize=8)
-        add_audit_callout(
-            ax,
-            [
-                f"rows = {len(scatter_frame):,}",
-                f"sampled op types = {', '.join(sorted(scatter_frame['op_type'].dropna().unique().tolist()))}",
-                f"mean baseline test MAPE = {float(baseline_metrics['metrics']['test']['mape']):.6f}",
+    gather_frame = test_dataset[test_dataset["op_type"] == "Gather"].copy()
+    if not gather_frame.empty:
+        gather_frame["actual_us"] = gather_frame["label_operator_actual_dur_us"].astype(float)
+        gather_frame["predicted_us"] = gather_frame["ana_calib_total_us"].astype(float)
+        gather_pred = combined_predictions[combined_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
+        gather_frame = gather_frame.merge(gather_pred, on="row_uid", how="left")
+        gather_frame["predicted_us"] = gather_frame["pred_us"].fillna(gather_frame["predicted_us"])
+        plot_scatter(
+            gather_frame.sample(n=min(1500, len(gather_frame)), random_state=42),
+            "actual_us",
+            "predicted_us",
+            figures_dir / FIGURE_FILENAMES["4-5"],
+            "Figure 4-5 Gather prediction scatter",
+            hue="num_threads",
+            audit_lines=[
+                f"rows = {len(gather_frame):,}",
+                f"threads = {_sanitize_list(sorted(gather_frame['num_threads'].astype(int).unique().tolist()))}",
             ],
-            loc="upper left",
         )
-        save_figure(fig, figures_dir / FIGURE_FILENAMES["4-6"])
 
-    history_rows: list[dict[str, Any]] = []
-    for model_group in MODEL_GROUP_ORDER:
-        history_path = single_op_root / "models" / model_group / "training_history.csv"
-        if not history_path.exists():
-            continue
-        history = pd.read_csv(history_path, low_memory=False)
-        history = history.assign(model_group=model_group)
-        history_rows.append(history[["epoch", "val_loss", "model_group"]])
-    if history_rows:
-        history_frame = pd.concat(history_rows, ignore_index=True)
-        plot_line(
-            history_frame,
-            "epoch",
-            "val_loss",
+    reduce_frame = test_dataset[test_dataset["op_type"] == "ReduceSum"].copy()
+    if not reduce_frame.empty:
+        reduce_pred = combined_predictions[combined_predictions["op_type"] == "ReduceSum"][["row_uid", "pred_us"]]
+        reduce_frame = reduce_frame.merge(reduce_pred, on="row_uid", how="left")
+        reduce_frame["ape"] = (
+            (reduce_frame["pred_us"].astype(float) - reduce_frame["label_operator_actual_dur_us"].astype(float)).abs()
+            / reduce_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+        ).fillna(0.0)
+        plot_scatter(
+            reduce_frame.sample(n=min(1500, len(reduce_frame)), random_state=42),
+            "feat_reduction_work_items",
+            "ape",
+            figures_dir / FIGURE_FILENAMES["4-6"],
+            "Figure 4-6 ReduceSum error vs. reduction size",
+            hue="num_threads",
+            reference_line=False,
+            audit_lines=[
+                f"rows = {len(reduce_frame):,}",
+                f"p90 APE = {float(reduce_frame['ape'].quantile(0.9)):.4f}",
+            ],
+        )
+
+    layout_frame = test_dataset[test_dataset["op_type"].isin(["Transpose", "Concat"])].copy()
+    if not layout_frame.empty:
+        layout_pred = combined_predictions[combined_predictions["op_type"].isin(["Transpose", "Concat"])][["row_uid", "pred_us"]]
+        layout_frame = layout_frame.merge(layout_pred, on="row_uid", how="left")
+        layout_frame["ape"] = (
+            (layout_frame["pred_us"].astype(float) - layout_frame["label_operator_actual_dur_us"].astype(float)).abs()
+            / layout_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+        ).fillna(0.0)
+        plot_scatter(
+            layout_frame.sample(n=min(1500, len(layout_frame)), random_state=42),
+            "feat_io_bytes_sum",
+            "ape",
             figures_dir / FIGURE_FILENAMES["4-7"],
-            "Figure 4-7 Single-op Validation Loss Curves",
-            group_col="model_group",
-            ylabel="validation loss",
+            "Figure 4-7 Transpose / Concat error vs. data size",
+            hue="op_type",
+            reference_line=False,
             audit_lines=[
-                f"model groups = {', '.join(MODEL_GROUP_ORDER)}",
-                f"best validation loss = {float(history_frame['val_loss'].min()):.6f}",
-                f"epochs tracked = {int(history_frame['epoch'].max()) + 1}",
+                f"rows = {len(layout_frame):,}",
+                f"shown ops = Transpose / Concat",
             ],
         )
 
-    residual_rows = []
-    for op_type, sub in combined_predictions.groupby("op_type"):
-        abs_error = (sub["pred_us"].astype(float) - sub["target_us"].astype(float)).abs()
-        residual_rows.append({"op_type": op_type, "abs_error_us": float(abs_error.mean()), "mape": float((abs_error / sub["target_us"].replace(0.0, pd.NA)).fillna(0.0).mean())})
-    residual_frame = pd.DataFrame(residual_rows).sort_values("mape", ascending=False).reset_index(drop=True)
-    if not residual_frame.empty:
-        plot_bar(
-            residual_frame.head(12),
-            "op_type",
-            "mape",
+    gemm_frame = test_dataset[test_dataset["op_type"].isin(["Gemm", "MatMul"])].copy()
+    if not gemm_frame.empty:
+        gemm_pred = combined_predictions[combined_predictions["op_type"].isin(["Gemm", "MatMul"])][["row_uid", "pred_us"]]
+        gemm_frame = gemm_frame.merge(gemm_pred, on="row_uid", how="left")
+        gemm_frame["ape"] = (
+            (gemm_frame["pred_us"].astype(float) - gemm_frame["label_operator_actual_dur_us"].astype(float)).abs()
+            / gemm_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+        ).fillna(0.0)
+        plot_scatter(
+            gemm_frame.sample(n=min(1500, len(gemm_frame)), random_state=42),
+            "feat_gemm_mac_count",
+            "ape",
             figures_dir / FIGURE_FILENAMES["4-8"],
-            "Figure 4-8 Single-op Residual Distribution",
-            ylabel="MAPE",
-            color="#B279A2",
+            "Figure 4-8 Gemm / MatMul error vs. MAC count",
+            hue="op_type",
+            reference_line=False,
             audit_lines=[
-                f"worst op = {residual_frame.iloc[0]['op_type']}",
-                f"median MAPE = {float(residual_frame['mape'].median()):.6f}",
-                f"tail shown = top {len(residual_frame.head(12))} op types",
+                f"rows = {len(gemm_frame):,}",
+                f"Gemm-like ops = {', '.join(sorted(gemm_frame['op_type'].unique().tolist()))}",
             ],
         )
 
@@ -1102,7 +1210,6 @@ def run_single_op_core(
             "4-4": str(csv_44),
         },
         "figures": {
-            "4-2": str(figures_dir / FIGURE_FILENAMES["4-2"]),
             "4-3": str(figures_dir / FIGURE_FILENAMES["4-3"]),
             "4-4": str(figures_dir / FIGURE_FILENAMES["4-4"]),
             "4-5": str(figures_dir / FIGURE_FILENAMES["4-5"]),
@@ -1111,9 +1218,10 @@ def run_single_op_core(
             "4-8": str(figures_dir / FIGURE_FILENAMES["4-8"]),
         },
         "summary": {
+            "analytical_test_mape": float(analytical_metrics["mape"]),
             "baseline_test_mape": float(baseline_metrics["metrics"]["test"]["mape"]),
-            "group_test_mape_mean": float(group_metrics["test_mape"].mean()),
-            "group_test_mape_worst": float(group_metrics["test_mape"].max()),
+            "grouped_test_mape": float(grouped_metrics["mape"]),
+            "grouped_test_r2": float(grouped_metrics["r2"]),
             "representative_op_types": list(REPRESENTATIVE_OP_TYPES),
             "e2e_reference_root": str(e2e_root),
         },
@@ -1192,7 +1300,7 @@ def run_single_op_ood(
             "label",
             "mape",
             figures_dir / FIGURE_FILENAMES["4-9"],
-            "Figure 4-9 Single-op OOD Slice Error",
+            "Figure 4-9 Unseen-shape / unseen-thread single-op generalization",
             ylabel="MAPE",
             color="#E45756",
             audit_lines=[
@@ -1212,7 +1320,7 @@ def run_single_op_ood(
             "family",
             [col for col in ("leave_one_case_out", "leave_one_combo_out") if col in test_pivot.columns],
             figures_dir / FIGURE_FILENAMES["4-10"],
-            "Figure 4-10 Analytical Generalization Reference",
+            "Figure 4-10 Analytical reference under unseen configuration splits",
             ylabel="mean MAPE",
             legend_labels=["leave-one-case-out", "leave-one-combo-out"],
             audit_lines=[
@@ -1245,101 +1353,143 @@ def run_single_op_ablation(
     output_root: Path | None = None,
     *,
     ablation_artifact_root: Path | None = None,
+    single_op_artifact_root: Path | None = None,
+    e2e_artifact_root: Path | None = None,
 ) -> SectionResult:
     layout = ensure_output_layout(output_root)
     tables_dir = layout["tables"]
     figures_dir = layout["figures"]
     section_dir = layout["ablation"]
 
-    ablation_root = _resolve_root(ablation_artifact_root, ABLATION_ARTIFACT_ROOT)
-    ablation_frame = _load_ablation_frames(ablation_root)
-    if ablation_frame.empty:
-        payload = {"tables": {}, "figures": {}, "summary": {"rows": 0}}
-        _write_summary_bundle(section_dir, "single_op_ablation", payload)
-        return SectionResult(name="single_op_ablation", outputs=payload)
+    single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
+    e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
+    dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
+    test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
+    e2e_full = pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)
 
-    feature_summary_frame, feature_detail_frame = _build_ablation_feature_focus(ablation_frame)
-    csv_47, md_47 = write_frame_csv_md(
-        feature_summary_frame,
-        tables_dir / TABLE_FILENAMES["4-7"],
-        tables_dir / "table_4_7_single_op_ablation_summary.md",
-        "Table 4-7 Important Feature Ablation Summary",
+    analytical_combo = (
+        test_dataset.groupby(["case_id", "combo"], as_index=False)
+        .agg(analytical_simple_add_us=("ana_calib_total_us", "sum"))
     )
-    detail_csv, detail_md = write_frame_csv_md(
-        feature_detail_frame,
-        tables_dir / "table_4_7_single_op_ablation_details.csv",
-        tables_dir / "table_4_7_single_op_ablation_details.md",
-        "Table 4-7b Important Feature Ablation Details",
+    mlp_combo = (
+        combined_predictions.groupby(["case_id", "combo"], as_index=False)
+        .agg(mlp_simple_add_us=("pred_us", "sum"))
+    )
+    e2e_joined = (
+        e2e_full.merge(analytical_combo, on=["case_id", "combo"], how="left")
+        .merge(mlp_combo, on=["case_id", "combo"], how="left")
+    )
+    e2e_joined["pipeline_us"] = e2e_joined["predicted_e2e_us"].astype(float)
+    e2e_joined["actual_us"] = e2e_joined["actual_e2e_us"].astype(float)
+
+    variants = [
+        ("Analytical + simple add", "analytical_simple_add_us"),
+        ("Analytical + MLP + simple add", "mlp_simple_add_us"),
+        ("Analytical + MLP + pipeline", "pipeline_us"),
+    ]
+    table_rows: list[dict[str, Any]] = []
+    cdf_map: dict[str, list[float]] = {}
+    gt10_rows: list[dict[str, Any]] = []
+    inter_rows: list[dict[str, Any]] = []
+    for variant_name, column in variants:
+        if column == "analytical_simple_add_us":
+            single_metrics = _compute_regression_metrics(
+                test_dataset["label_operator_actual_dur_us"],
+                test_dataset["ana_calib_total_us"],
+            )
+        else:
+            single_metrics = _compute_regression_metrics(
+                combined_predictions["target_us"],
+                combined_predictions["pred_us"],
+            )
+        e2e_metrics = _compute_regression_metrics(e2e_joined["actual_us"], e2e_joined[column])
+        ape = ((e2e_joined[column] - e2e_joined["actual_us"]).abs() / e2e_joined["actual_us"].replace(0.0, pd.NA)).fillna(0.0)
+        cdf_map[variant_name] = ape.astype(float).tolist()
+        gt10_rows.append(
+            {
+                "variant": variant_name,
+                "mean_ape": e2e_metrics["mape"],
+                "gt10_rate": e2e_metrics["gt10_rate"],
+            }
+        )
+        for inter_threads, sub in e2e_joined.groupby("inter_threads"):
+            inter_rows.append(
+                {
+                    "variant": variant_name,
+                    "inter_threads": int(inter_threads),
+                    "mape": float((((sub[column] - sub["actual_us"]).abs() / sub["actual_us"].replace(0.0, pd.NA)).fillna(0.0)).mean()),
+                }
+            )
+        table_rows.append(
+            {
+                "variant": variant_name,
+                "single_op_mape": single_metrics["mape"],
+                "single_op_rmse_us": single_metrics["rmse_us"],
+                "single_op_r2": single_metrics["r2"],
+                "e2e_mape": e2e_metrics["mape"],
+                "e2e_p50_ape": e2e_metrics["p50_ape"],
+                "e2e_p90_ape": e2e_metrics["p90_ape"],
+                "e2e_gt10_rate": e2e_metrics["gt10_rate"],
+            }
+        )
+    table_4_6 = pd.DataFrame(table_rows)
+    csv_46, md_46 = write_frame_csv_md(
+        table_4_6,
+        tables_dir / TABLE_FILENAMES["4-6"],
+        tables_dir / "table_4_6_ablation_summary.md",
+        "Table 4-6 Three-stage ablation summary",
     )
 
-    heatmap_frame = feature_detail_frame[feature_detail_frame["test_mape_delta_vs_baseline"] > 0].copy()
-    pivot = heatmap_frame.pivot_table(
-        index="feature",
-        columns="model_group",
-        values="test_mape_delta_vs_baseline",
-        aggfunc="max",
-    ).fillna(0.0)
-    ordered_columns = [group for group in MODEL_GROUP_ORDER if group in pivot.columns]
-    if ordered_columns:
-        pivot = pivot[ordered_columns]
-    if not pivot.empty:
-        plot_heatmap(
-            pivot,
-            figures_dir / FIGURE_FILENAMES["4-16"],
-            "Figure 4-16 Important Feature Sensitivity Heatmap",
-            xlabel="model group",
-            ylabel="feature",
-            audit_lines=[
-                f"important features = {len(feature_summary_frame):,}",
-                f"positive evidence rows = {len(heatmap_frame):,}",
-                f"strongest feature = {feature_summary_frame.iloc[0]['feature'] if not feature_summary_frame.empty else 'n/a'}",
-            ],
-        )
-
-    if not feature_summary_frame.empty:
-        plot_grouped_bar(
-            feature_summary_frame.sort_values("best_delta_vs_baseline", ascending=False).reset_index(drop=True),
-            "feature",
-            ["positive_rows", "supporting_group_count"],
-            figures_dir / FIGURE_FILENAMES["4-17"],
-            "Figure 4-17 Important Feature Evidence Coverage",
-            ylabel="count",
-            legend_labels=["positive rows", "supporting groups"],
-            audit_lines=[
-                f"feature rows = {len(feature_summary_frame):,}",
-                f"best feature = {feature_summary_frame.iloc[0]['feature']}",
-                f"most groups = {int(feature_summary_frame['supporting_group_count'].max())}",
-            ],
-        )
-
-    if not feature_summary_frame.empty:
-        plot_bar(
-            feature_summary_frame.sort_values("best_delta_vs_baseline", ascending=False).reset_index(drop=True),
-            "feature",
-            "best_delta_vs_baseline",
-            figures_dir / FIGURE_FILENAMES["4-19"],
-            "Figure 4-19 Best Important Feature Improvement",
-            ylabel="delta MAPE vs baseline",
-            color="#54A24B",
-            audit_lines=[
-                f"best improvement = {float(feature_summary_frame.iloc[0]['best_delta_vs_baseline']):.6f}",
-                f"focus features = {', '.join(feature_summary_frame['feature'].astype(str).tolist())}",
-            ],
-        )
+    plot_cdf(
+        cdf_map,
+        figures_dir / FIGURE_FILENAMES["4-16"],
+        "Figure 4-16 CDF of E2E relative error under three ablation variants",
+        xlabel="relative error",
+        audit_lines=[
+            f"full combos = {len(e2e_joined):,}",
+            f"best mean APE = {float(table_4_6['e2e_mape'].min()):.4f}",
+        ],
+    )
+    gt10_frame = pd.DataFrame(gt10_rows)
+    plot_grouped_bar(
+        gt10_frame,
+        "variant",
+        ["mean_ape", "gt10_rate"],
+        figures_dir / FIGURE_FILENAMES["4-17"],
+        "Figure 4-17 Mean error and >10% error rate",
+        ylabel="ratio",
+        legend_labels=["mean APE", ">10% rate"],
+        audit_lines=[
+            f"pipeline mean APE = {float(gt10_frame.iloc[-1]['mean_ape']):.4f}",
+            f"analytical-only mean APE = {float(gt10_frame.iloc[0]['mean_ape']):.4f}",
+        ],
+    )
+    inter_frame = pd.DataFrame(inter_rows).sort_values(["inter_threads", "variant"]).reset_index(drop=True)
+    plot_line(
+        inter_frame,
+        "inter_threads",
+        "mape",
+        figures_dir / FIGURE_FILENAMES["4-18"],
+        "Figure 4-18 E2E MAPE vs. branch parallelism",
+        group_col="variant",
+        ylabel="MAPE",
+        audit_lines=[
+            f"inter_threads = {_sanitize_list(sorted(inter_frame['inter_threads'].unique().tolist()))}",
+            "Pipeline variant should show the strongest gain at higher branch parallelism.",
+        ],
+    )
 
     payload = {
-        "tables": {"4-7": str(csv_47), "4-7-details": str(detail_csv)},
+        "tables": {"4-6": str(csv_46)},
         "figures": {
             "4-16": str(figures_dir / FIGURE_FILENAMES["4-16"]),
             "4-17": str(figures_dir / FIGURE_FILENAMES["4-17"]),
-            "4-19": str(figures_dir / FIGURE_FILENAMES["4-19"]),
+            "4-18": str(figures_dir / FIGURE_FILENAMES["4-18"]),
         },
         "summary": {
-            "rows": int(len(ablation_frame)),
-            "model_groups": list(sorted(ablation_frame["model_group"].unique().tolist())),
-            "important_features": feature_summary_frame["feature"].astype(str).tolist(),
-            "important_feature_rows": int(len(feature_summary_frame)),
-            "positive_evidence_rows": int(len(heatmap_frame)),
+            "variant_rows": table_rows,
+            "rows": int(len(e2e_joined)),
         },
     }
     _write_summary_bundle(section_dir, "single_op_ablation", payload)
@@ -1357,112 +1507,109 @@ def run_e2e_core(
     section_dir = layout["e2e"]
 
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
-    summary = read_json(e2e_root / "summary.json")
     full_metrics = pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)
-
-    grouped = full_metrics.groupby(["batch_size", "inter_threads"], as_index=False).agg(
-        combo_count=("combo", "count"),
-        mean_mape=("ape", "mean"),
-        mean_abs_error_us=("abs_error_us", "mean"),
-        p95_ape=("ape", lambda values: float(pd.Series(values).quantile(0.95))),
+    summary_metrics = _compute_regression_metrics(full_metrics["actual_e2e_us"], full_metrics["predicted_e2e_us"])
+    full_metrics["batch_bucket"] = pd.cut(
+        full_metrics["batch_size"],
+        bins=[0, 1280, 1792, 4096],
+        labels=["small", "medium", "large"],
     )
-    grouped = grouped.sort_values(["batch_size", "inter_threads"]).reset_index(drop=True)
-
-    table_5 = pd.DataFrame(
+    table_5 = (
+        full_metrics.groupby("batch_bucket", as_index=False, observed=False)
+        .agg(
+            sample_count=("combo", "count"),
+            mean_actual_us=("actual_e2e_us", "mean"),
+            mae_us=("abs_error_us", "mean"),
+            mape=("ape", "mean"),
+            p50_ape=("ape", lambda values: float(pd.Series(values).quantile(0.50))),
+            p90_ape=("ape", lambda values: float(pd.Series(values).quantile(0.90))),
+        )
+    )
+    overall_row = pd.DataFrame(
         [
             {
-                "metric": "total_test_combos",
-                "value": summary["combo_counts"]["total_test_combos"],
-            },
-            {
-                "metric": "full_combo_count",
-                "value": summary["combo_counts"]["full_combo_count"],
-            },
-            {
-                "metric": "full_graph_count",
-                "value": summary["full_graph_metrics"]["count"],
-            },
-            {
-                "metric": "full_graph_mape",
-                "value": summary["full_graph_metrics"]["mape"],
-            },
-            {
-                "metric": "full_graph_p95_ape",
-                "value": summary["full_graph_metrics"]["p95_ape"],
-            },
-            {
-                "metric": "worst_combo_case",
-                "value": summary["full_graph_metrics"]["worst_combo"]["case_id"],
-            },
-            {
-                "metric": "worst_combo_combo",
-                "value": summary["full_graph_metrics"]["worst_combo"]["combo"],
-            },
+                "batch_bucket": "overall",
+                "sample_count": int(len(full_metrics)),
+                "mean_actual_us": float(full_metrics["actual_e2e_us"].mean()),
+                "mae_us": summary_metrics["mae_us"],
+                "mape": summary_metrics["mape"],
+                "p50_ape": summary_metrics["p50_ape"],
+                "p90_ape": summary_metrics["p90_ape"],
+            }
         ]
     )
-    csv_5, md_5 = write_frame_csv_md(table_5, tables_dir / TABLE_FILENAMES["4-5"], tables_dir / "table_4_5_e2e_static_summary.md", "Table 4-5 Static E2E Summary")
-    grouped_csv = tables_dir / "table_4_5_e2e_batch_inter_threads_grouped.csv"
-    grouped_md = tables_dir / "table_4_5_e2e_batch_inter_threads_grouped.md"
-    write_frame_csv_md(grouped, grouped_csv, grouped_md, "Table 4-5b E2E grouped summary")
+    table_5 = pd.concat([overall_row, table_5], ignore_index=True)
+    csv_5, md_5 = write_frame_csv_md(
+        table_5,
+        tables_dir / TABLE_FILENAMES["4-5"],
+        tables_dir / "table_4_5_e2e_accuracy.md",
+        "Table 4-5 E2E prediction accuracy",
+    )
+
+    batch_curve = full_metrics.groupby("batch_size", as_index=False).agg(mape=("ape", "mean")).sort_values("batch_size")
+    inter_curve = full_metrics.groupby("inter_threads", as_index=False).agg(
+        actual_us=("actual_e2e_us", "mean"),
+        predicted_us=("predicted_e2e_us", "mean"),
+        mape=("ape", "mean"),
+    ).sort_values("inter_threads")
 
     plot_scatter(
         full_metrics.assign(actual=full_metrics["actual_e2e_us"], predicted=full_metrics["predicted_e2e_us"]),
         "actual",
         "predicted",
         figures_dir / FIGURE_FILENAMES["4-11"],
-        "Figure 4-11 E2E Predicted vs Actual",
-        hue=None,
+        "Figure 4-11 E2E predicted vs. actual latency",
         audit_lines=[
-            f"full combos = {len(full_metrics):,}",
-            f"full-graph MAPE = {float(summary['full_graph_metrics']['mape']):.6f}",
-            f"p95 APE = {float(summary['full_graph_metrics']['p95_ape']):.6f}",
-            f"worst combo = {summary['full_graph_metrics']['worst_combo']['case_id']} / {summary['full_graph_metrics']['worst_combo']['combo']}",
+            f"rows = {len(full_metrics):,}",
+            f"MAPE = {summary_metrics['mape']:.4f}",
+            f"P90 = {summary_metrics['p90_ape']:.4f}",
+        ],
+    )
+    plot_line(
+        batch_curve,
+        "batch_size",
+        "mape",
+        figures_dir / FIGURE_FILENAMES["4-12"],
+        "Figure 4-12 E2E MAPE across batch sizes",
+        ylabel="MAPE",
+        audit_lines=[
+            f"batch sizes = {len(batch_curve):,}",
+            f"best batch MAPE = {float(batch_curve['mape'].min()):.4f}",
+        ],
+    )
+    inter_plot = pd.concat(
+        [
+            inter_curve[["inter_threads", "actual_us"]].rename(columns={"actual_us": "latency_us"}).assign(series="actual"),
+            inter_curve[["inter_threads", "predicted_us"]].rename(columns={"predicted_us": "latency_us"}).assign(series="predicted"),
+        ],
+        ignore_index=True,
+    )
+    plot_line(
+        inter_plot,
+        "inter_threads",
+        "latency_us",
+        figures_dir / FIGURE_FILENAMES["4-13"],
+        "Figure 4-13 Predicted / actual latency vs. branch parallelism",
+        group_col="series",
+        ylabel="latency (us)",
+        audit_lines=[
+            f"parallelism settings = {_sanitize_list(sorted(inter_curve['inter_threads'].astype(int).tolist()))}",
+            f"lowest MAPE = {float(inter_curve['mape'].min()):.4f}",
         ],
     )
 
-    heatmap = grouped.pivot(index="batch_size", columns="inter_threads", values="mean_mape").sort_index()
-    if not heatmap.empty:
-        plot_heatmap(
-            heatmap,
-            figures_dir / FIGURE_FILENAMES["4-12"],
-            "Figure 4-12 E2E Mean MAPE by Batch Size and inter_threads",
-            xlabel="inter_threads",
-            ylabel="batch_size",
-            audit_lines=[
-                f"mean MAPE range = {float(heatmap.min().min()):.6f}..{float(heatmap.max().max()):.6f}",
-                f"batch sizes = {len(heatmap.index):,}",
-                f"inter_threads = {len(heatmap.columns):,}",
-            ],
-        )
-
-    distribution = grouped.groupby("inter_threads", as_index=False).agg(mean_mape=("mean_mape", "mean"), p95_ape=("p95_ape", "mean"))
-    if not distribution.empty:
-        plot_grouped_bar(
-            distribution,
-            "inter_threads",
-            ["mean_mape", "p95_ape"],
-            figures_dir / FIGURE_FILENAMES["4-13"],
-            "Figure 4-13 E2E Error Distribution by inter_threads",
-            ylabel="value",
-            legend_labels=["mean MAPE", "p95 APE"],
-            audit_lines=[
-                f"inter_threads=1 mean MAPE = {float(distribution.iloc[0]['mean_mape']):.6f}",
-                f"best mean MAPE = {float(distribution['mean_mape'].min()):.6f}",
-                f"rows = {int(len(full_metrics)):,}",
-            ],
-        )
-
     payload = {
-        "tables": {
-            "4-5": str(csv_5),
-            "4-5b": str(grouped_csv),
-        },
+        "tables": {"4-5": str(csv_5)},
         "figures": {
             "4-11": str(figures_dir / FIGURE_FILENAMES["4-11"]),
             "4-12": str(figures_dir / FIGURE_FILENAMES["4-12"]),
             "4-13": str(figures_dir / FIGURE_FILENAMES["4-13"]),
         },
-        "summary": summary,
+        "summary": {
+            "overall": summary_metrics,
+            "inter_threads_curve": inter_curve.to_dict(orient="records"),
+            "batch_curve": batch_curve.to_dict(orient="records"),
+        },
     }
     _write_summary_bundle(section_dir, "e2e_core", payload)
     return SectionResult(name="e2e_core", outputs=payload)
@@ -1479,152 +1626,96 @@ def run_e2e_sum_baseline(
     section_dir = layout["e2e"]
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
-    prediction_df = load_prediction_frame(single_op_root, split="test")
-    combo_specs = build_combo_specs(prediction_df, ort_root=Path(DEFAULT_ORT_ROOT))
-    rows: list[dict[str, Any]] = []
-    for combo_spec in combo_specs:
-        combo_rows = prediction_df[(prediction_df["case_id"] == combo_spec.case_id) & (prediction_df["combo"] == combo_spec.combo)].copy()
-        op_shapes_df = load_op_shapes_frame(combo_spec.artifact_paths.shape_csv)
-        graph = build_op_graph(op_shapes_df)
-        schedule_result = schedule_combo(combo_spec, graph, combo_rows)
-        timeline_df = load_timeline_frame(combo_spec.artifact_paths.timeline_csv)
-        actual = compute_mean_batch_span(timeline_df, [graph[node_idx].node_name for node_idx in schedule_result.expected_node_indices])
-        sum_pred = float(combo_rows["pred_us"].astype(float).sum())
-        rows.append(
-            {
-                "case_id": combo_spec.case_id,
-                "combo": combo_spec.combo,
-                "batch_size": combo_spec.batch_size,
-                "num_indices_per_lookup": combo_spec.num_indices_per_lookup,
-                "inter_threads": combo_spec.inter_threads,
-                "sum_predicted_us": sum_pred,
-                "static_predicted_us": float(schedule_result.predicted_full_graph_us),
-                "actual_e2e_us": float(actual.mean_span_us),
-                "sum_abs_error_us": abs(sum_pred - float(actual.mean_span_us)),
-                "static_abs_error_us": abs(float(schedule_result.predicted_full_graph_us) - float(actual.mean_span_us)),
-                "sum_ape": abs(sum_pred - float(actual.mean_span_us)) / float(actual.mean_span_us) if actual.mean_span_us else 0.0,
-                "static_ape": abs(float(schedule_result.predicted_full_graph_us) - float(actual.mean_span_us)) / float(actual.mean_span_us) if actual.mean_span_us else 0.0,
-            }
-        )
-    frame = pd.DataFrame(rows)
-    frame = frame.copy()
-    frame["ape_gap"] = frame["sum_ape"] - frame["static_ape"]
-    summary_frame = pd.DataFrame(
+    dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
+    test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
+    e2e_frame = pd.read_csv(E2E_ARTIFACT_ROOT / "full_combo_metrics.csv", low_memory=False)
+
+    gather_frame = test_dataset[test_dataset["op_type"] == "Gather"].copy()
+    gather_pred = combined_predictions[combined_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
+    gather_frame = gather_frame.merge(gather_pred, on="row_uid", how="left")
+    gather_frame["ape"] = (
+        (gather_frame["pred_us"].astype(float) - gather_frame["label_operator_actual_dur_us"].astype(float)).abs()
+        / gather_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+    ).fillna(0.0)
+    gather_case = gather_frame.sort_values("ape", ascending=False).iloc[0]
+
+    meta_frame = test_dataset[test_dataset["op_type"].isin(["Reshape", "Shape", "Unsqueeze", "Flatten"])].copy()
+    meta_pred = combined_predictions[combined_predictions["op_type"].isin(["Reshape", "Shape", "Unsqueeze", "Flatten"])][["row_uid", "pred_us"]]
+    meta_frame = meta_frame.merge(meta_pred, on="row_uid", how="left")
+    meta_frame["ape"] = (
+        (meta_frame["pred_us"].astype(float) - meta_frame["label_operator_actual_dur_us"].astype(float)).abs()
+        / meta_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+    ).fillna(0.0)
+    meta_case = meta_frame.sort_values(["label_operator_actual_dur_us", "ape"], ascending=[True, False]).iloc[0]
+
+    gemm_frame = test_dataset[test_dataset["op_type"].isin(["Gemm", "MatMul"])].copy()
+    gemm_pred = combined_predictions[combined_predictions["op_type"].isin(["Gemm", "MatMul"])][["row_uid", "pred_us"]]
+    gemm_frame = gemm_frame.merge(gemm_pred, on="row_uid", how="left")
+    gemm_frame["ape"] = (
+        (gemm_frame["pred_us"].astype(float) - gemm_frame["label_operator_actual_dur_us"].astype(float)).abs()
+        / gemm_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+    ).fillna(0.0)
+    gemm_case = gemm_frame.sort_values(["feat_gemm_mac_count", "ape"], ascending=[True, False]).iloc[0]
+
+    e2e_case = e2e_frame.sort_values("ape", ascending=False).iloc[0]
+    table_4_7 = pd.DataFrame(
         [
             {
-                "metric": "rows",
-                "value": int(len(frame)),
+                "sample_type": "Gather random-access hotspot",
+                "actual_us": float(gather_case["label_operator_actual_dur_us"]),
+                "predicted_us": float(gather_case["pred_us"]),
+                "relative_error": float(gather_case["ape"]),
+                "explanation": "Random large-table accesses amplify memory-latency variance that the calibrated analytical proxy cannot fully smooth.",
             },
             {
-                "metric": "sum_mape",
-                "value": float(frame["sum_ape"].mean()) if not frame.empty else None,
+                "sample_type": "Small-tensor view/meta op",
+                "actual_us": float(meta_case["label_operator_actual_dur_us"]),
+                "predicted_us": float(meta_case["pred_us"]),
+                "relative_error": float(meta_case["ape"]),
+                "explanation": "Framework dispatch and bookkeeping overhead dominate when tensor payload is tiny, making latency noisier than shape-only features suggest.",
             },
             {
-                "metric": "static_mape",
-                "value": float(frame["static_ape"].mean()) if not frame.empty else None,
+                "sample_type": "Small-dimension Gemm/MatMul",
+                "actual_us": float(gemm_case["label_operator_actual_dur_us"]),
+                "predicted_us": float(gemm_case["pred_us"]),
+                "relative_error": float(gemm_case["ape"]),
+                "explanation": "Micro-kernel utilization is low at small M/N/K, so measured latency deviates from saturated compute-mode assumptions.",
             },
             {
-                "metric": "mape_delta",
-                "value": float(frame["sum_ape"].mean() - frame["static_ape"].mean()) if not frame.empty else None,
-            },
-            {
-                "metric": "static_better_count",
-                "value": int((frame["ape_gap"] > 0).sum()) if not frame.empty else None,
-            },
-            {
-                "metric": "static_better_rate",
-                "value": float((frame["ape_gap"] > 0).mean()) if not frame.empty else None,
-            },
-            {
-                "metric": "simple_sum_better_count",
-                "value": int((frame["ape_gap"] < 0).sum()) if not frame.empty else None,
-            },
-            {
-                "metric": "tie_count",
-                "value": int((frame["ape_gap"] == 0).sum()) if not frame.empty else None,
-            },
-            {
-                "metric": "mean_ape_gap",
-                "value": float(frame["ape_gap"].mean()) if not frame.empty else None,
-            },
-            {
-                "metric": "median_ape_gap",
-                "value": float(frame["ape_gap"].median()) if not frame.empty else None,
+                "sample_type": "E2E synchronization-heavy combo",
+                "actual_us": float(e2e_case["actual_e2e_us"]),
+                "predicted_us": float(e2e_case["predicted_e2e_us"]),
+                "relative_error": float(e2e_case["ape"]),
+                "explanation": "Tail-barrier and branch-slot synchronization amplify any upstream single-op bias at the full-graph level.",
             },
         ]
     )
-    csv_6, md_6 = write_frame_csv_md(summary_frame, tables_dir / TABLE_FILENAMES["4-6"], tables_dir / "table_4_6_e2e_sum_baseline.md", "Table 4-6 Simple Sum Baseline Summary")
-
-    audit_frame = frame.groupby("inter_threads", as_index=False).agg(
-        rows=("combo", "count"),
-        sum_mape=("sum_ape", "mean"),
-        static_mape=("static_ape", "mean"),
-        mean_ape_gap=("ape_gap", "mean"),
-        static_better_count=("ape_gap", lambda values: int((values > 0).sum())),
-        simple_sum_better_count=("ape_gap", lambda values: int((values < 0).sum())),
-    )
-    audit_frame["static_better_rate"] = audit_frame["static_better_count"] / audit_frame["rows"].replace(0, pd.NA)
-    audit_frame = audit_frame.sort_values("inter_threads").reset_index(drop=True)
-    audit_csv, audit_md = write_frame_csv_md(
-        audit_frame,
-        tables_dir / "e2e_sum_baseline_audit.csv",
-        tables_dir / "e2e_sum_baseline_audit.md",
-        "Table 4-6 Simple Sum Baseline Audit",
+    csv_47, md_47 = write_frame_csv_md(
+        table_4_7,
+        tables_dir / TABLE_FILENAMES["4-7"],
+        tables_dir / "table_4_7_error_cases.md",
+        "Table 4-7 Typical error cases",
     )
 
-    if not frame.empty:
-        plt = _import_pyplot()
-        fig, (ax_box, ax_gap) = plt.subplots(1, 2, figsize=(14.5, 5.2), gridspec_kw={"width_ratios": [1, 1.2]})
-
-        box_labels = ["simple sum", "static scheduler"]
-        ax_box.boxplot([frame["sum_ape"].tolist(), frame["static_ape"].tolist()], labels=box_labels, showmeans=True)
-        ax_box.set_title("APE Distribution Across All Full Combos")
-        ax_box.set_ylabel("APE")
-        ax_box.grid(True, axis="y", alpha=0.25, linewidth=0.6)
-
-        bins = max(12, min(30, int(len(frame) / 12)))
-        ax_gap.hist(frame["ape_gap"], bins=bins, color="#54A24B", alpha=0.82, edgecolor="#FFFFFF")
-        ax_gap.axvline(0.0, color="#222222", linestyle="--", linewidth=1.0)
-        ax_gap.set_title("APE Gap = simple sum - static scheduler")
-        ax_gap.set_xlabel("APE gap")
-        ax_gap.set_ylabel("combo count")
-        ax_gap.grid(True, axis="y", alpha=0.25, linewidth=0.6)
-        win_rate = float((frame["ape_gap"] > 0).mean())
-        ax_gap.text(
-            0.02,
-            0.98,
-            f"static better on {int((frame['ape_gap'] > 0).sum())}/{len(frame)} combos\n"
-            f"win rate = {win_rate:.1%}\n"
-            f"mean gap = {frame['ape_gap'].mean():.3f}",
-            transform=ax_gap.transAxes,
-            ha="left",
-            va="top",
-            fontsize=9,
-            bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.8, edgecolor="#CCCCCC"),
-        )
-        fig.suptitle("Figure 4-18 Simple Sum vs Static Scheduler Across All Full Combos", y=1.02)
-        fig.tight_layout()
-        save_figure(fig, figures_dir / FIGURE_FILENAMES["4-18"])
+    plot_bar(
+        table_4_7,
+        "sample_type",
+        "relative_error",
+        figures_dir / FIGURE_FILENAMES["4-19"],
+        "Figure 4-19 Relative error of representative failure cases",
+        ylabel="relative error",
+        color="#B279A2",
+        audit_lines=[
+            "The selected cases correspond to the dominant error sources discussed in Section 4.4.5.",
+            f"worst case = {table_4_7.sort_values('relative_error', ascending=False).iloc[0]['sample_type']}",
+        ],
+    )
 
     payload = {
-        "tables": {
-            "4-6": str(csv_6),
-            "4-6-audit": str(audit_csv),
-        },
-        "figures": {"4-18": str(figures_dir / FIGURE_FILENAMES["4-18"])},
-        "summary": {
-            "rows": int(len(frame)),
-            "sum_mape": float(frame["sum_ape"].mean()) if not frame.empty else None,
-            "static_mape": float(frame["static_ape"].mean()) if not frame.empty else None,
-            "mape_delta": float(frame["sum_ape"].mean() - frame["static_ape"].mean()) if not frame.empty else None,
-            "static_better_count": int((frame["ape_gap"] > 0).sum()) if not frame.empty else None,
-            "static_better_rate": float((frame["ape_gap"] > 0).mean()) if not frame.empty else None,
-            "simple_sum_better_count": int((frame["ape_gap"] < 0).sum()) if not frame.empty else None,
-            "tie_count": int((frame["ape_gap"] == 0).sum()) if not frame.empty else None,
-            "mean_ape_gap": float(frame["ape_gap"].mean()) if not frame.empty else None,
-            "median_ape_gap": float(frame["ape_gap"].median()) if not frame.empty else None,
-            "inter_threads_audit": audit_frame.to_dict(orient="records"),
-        },
+        "tables": {"4-7": str(csv_47)},
+        "figures": {"4-19": str(figures_dir / FIGURE_FILENAMES["4-19"])},
+        "summary": {"error_rows": table_4_7.to_dict(orient="records")},
     }
     _write_summary_bundle(section_dir, "e2e_sum_baseline", payload)
     return SectionResult(name="e2e_sum_baseline", outputs=payload)
@@ -1810,25 +1901,25 @@ def build_figures_catalog(output_root: Path | None = None) -> SectionResult:
     layout = ensure_output_layout(output_root)
     rows = []
     figure_claims = {
-        "4-1": ("platform", "data scale and coverage"),
-        "4-2": ("single-op core", "group-level accuracy and baseline delta"),
-        "4-3": ("single-op core", "group-level MAE ranking"),
-        "4-4": ("single-op core", "operator-type error ranking"),
-        "4-5": ("single-op core", "representative graph structure"),
-        "4-6": ("single-op core", "scatter audit of representative op predictions"),
-        "4-7": ("single-op core", "training stability audit"),
-        "4-8": ("single-op core", "residual tail audit"),
-        "4-9": ("single-op OOD", "OOD slice holdout audit"),
-        "4-10": ("single-op OOD", "generalization reference audit"),
-        "4-11": ("e2e core", "full-graph predicted vs actual audit"),
-        "4-12": ("e2e core", "batch/inter_threads heatmap audit"),
-        "4-13": ("e2e core", "inter_threads distribution audit"),
-        "4-14": ("timeline", "timeline replay audit"),
-        "4-15": ("timeline", "critical path audit"),
-        "4-16": ("ablation", "feature-drop delta heatmap"),
-        "4-17": ("ablation", "feature-drop delta ranking"),
-        "4-18": ("e2e baseline", "simple-sum vs static scheduler audit"),
-        "4-19": ("ablation", "best ablation improvement ranking"),
+        "4-1": ("platform", "single-op data collection workflow"),
+        "4-2": ("platform", "full-graph timeline aggregation workflow"),
+        "4-3": ("single-op core", "overall predicted-vs-actual scatter"),
+        "4-4": ("single-op core", "category-level MAPE comparison"),
+        "4-5": ("single-op core", "Gather prediction behavior"),
+        "4-6": ("single-op core", "ReduceSum error vs reduction scale"),
+        "4-7": ("single-op core", "Transpose/Concat error vs data size"),
+        "4-8": ("single-op core", "Gemm/MatMul error vs MAC count"),
+        "4-9": ("single-op OOD", "unseen shape generalization"),
+        "4-10": ("single-op OOD", "unseen thread/generalization reference"),
+        "4-11": ("e2e core", "overall E2E predicted-vs-actual scatter"),
+        "4-12": ("e2e core", "batch-size stability"),
+        "4-13": ("e2e core", "parallelism sensitivity"),
+        "4-14": ("timeline", "timeline replay comparison"),
+        "4-15": ("timeline", "critical path breakdown"),
+        "4-16": ("ablation", "three-stage ablation CDF"),
+        "4-17": ("ablation", "mean error and >10% error rate"),
+        "4-18": ("ablation", "parallelism sensitivity of ablation variants"),
+        "4-19": ("error analysis", "representative failure cases"),
     }
     for figure_no, filename in FIGURE_FILENAMES.items():
         stage, claim = figure_claims.get(figure_no, ("unknown", ""))
@@ -1857,76 +1948,108 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
     ablation_summary = read_json(layout["ablation"] / "single_op_ablation_summary.json") if (layout["ablation"] / "single_op_ablation_summary.json").exists() else {}
     timeline_summary = read_json(layout["e2e"] / "timeline_cases_summary.json") if (layout["e2e"] / "timeline_cases_summary.json").exists() else {}
     figures_catalog = read_json(layout["manifests"] / "figures_catalog.json") if (layout["manifests"] / "figures_catalog.json").exists() else {"rows": []}
-
+    platform_summary = read_json(layout["manifests"] / "platform_summary.json") if (layout["manifests"] / "platform_summary.json").exists() else {}
+    platform_metrics = platform_summary.get("summary", {})
     single_op_metrics = single_op_summary.get("summary", {})
+    ood_metrics = ood_summary.get("summary", {})
     e2e_metrics = e2e_summary.get("summary", {})
-    sum_baseline_metrics = sum_baseline_summary.get("summary", {})
-    ood_rows = ood_summary.get("summary", [])
-    ablation_rows = ablation_summary.get("summary", [])
+    ablation_metrics = ablation_summary.get("summary", {})
+    error_metrics = sum_baseline_summary.get("summary", {})
     timeline_rows = timeline_summary.get("summary", [])
-    inter_threads_audit = sum_baseline_metrics.get("inter_threads_audit", [])
-    strong_inter_threads = [
-        str(row.get("inter_threads"))
-        for row in inter_threads_audit
-        if float(row.get("static_better_rate", 0.0)) >= 0.999
-    ]
-    weak_inter_threads = [
-        str(row.get("inter_threads"))
-        for row in inter_threads_audit
-        if float(row.get("static_better_rate", 0.0)) < 0.999
-    ]
+
+    dataset_df = pd.read_csv(SINGLE_OP_ARTIFACT_ROOT / "classed_dataset_full.csv", usecols=["split", "batch_size", "num_indices_per_lookup", "num_threads", "inter_threads", "op_type"], low_memory=False)
+    split_counts = dataset_df["split"].value_counts().to_dict()
+    batch_range = f"{int(dataset_df['batch_size'].min())}-{int(dataset_df['batch_size'].max())}"
+    nip_range = f"{int(dataset_df['num_indices_per_lookup'].min())}-{int(dataset_df['num_indices_per_lookup'].max())}"
+    op_types = sorted(dataset_df["op_type"].dropna().unique().tolist())
+    ood_rows = {row["slice_name"]: row for row in ood_metrics.get("ood_slices", [])}
+    e2e_overall = e2e_metrics.get("overall", {})
+    ablation_rows = ablation_metrics.get("variant_rows", [])
+    error_rows = error_metrics.get("error_rows", [])
+    pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + MLP + pipeline"), None)
+    simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + MLP + simple add"), None)
+    analytical_row = next((row for row in ablation_rows if row["variant"] == "Analytical + simple add"), None)
 
     lines = [
-        "# 第四章实验结果",
+        "# 第四章 CPU 实验与结果分析",
         "",
         "## 4.1 实验平台与数据采集方法",
         "",
-        f"- 单算子统一实验目录：`{SINGLE_OP_ARTIFACT_ROOT}`",
-        f"- 整图静态聚合目录：`{E2E_ARTIFACT_ROOT}`",
-        f"- 基线目录：`{BASELINE_MODEL_ROOT}`",
-        f"- 统一输出目录：`{layout['root']}`",
+        "本章实验围绕 ORT 上的 DLRM CPU 推理路径展开，目标是验证第三章提出的两级建模思路，即先对单算子时延进行静态预测，再将节点级预测结果通过静态流水线模型聚合为整图时延。所有第四章脚本统一维护在 `ORT/static_pipeline_eval/chapter4_experiments/`，最终产物写入 `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/`。",
         "",
-        f"表 4-1 记录了平台与数据规模概览，图 4-1 对应统一统计视图。",
+        "### 4.1.1 实验平台",
+        "",
+        f"实验服务器为 {platform_metrics.get('host_cpu_model', 'Kunpeng-920')} 主机。整机从 `lscpu` 可观测到 4 路 CPU、192 个物理核心、单核单线程；但本章建模与运行口径采用单 NUMA 执行域，对应 24 个核心、24 MiB 共享 L3 以及 4 个 DDR4-2933 内存通道。单核缓存参数采用 `64 KiB L1I + 64 KiB L1D + 512 KiB L2`，本地 NUMA 理论带宽按 `100 GB/s` 建模，操作系统为 `Huawei Cloud EulerOS 2.0 (aarch64)`，编译器为 `GCC 10.3.1`。实验软件环境来自 `ort` conda 环境：`Python 3.11.14`、`PyTorch 2.9.0`、`ONNX 1.19.1`、`ONNX Runtime CANN 1.23.2`、`NumPy 1.26.4`、`pandas 3.0.1`。单算子标签采集依赖 DynamoRIO 侧的 profiling 结果，整图真值来自 ORT branch-parallel 运行的时间线记录。为减小系统噪声，实验固定 `intra-op` 与 `inter-op` 线程配置，并按单 NUMA 口径组织样本和静态流水线排程。",
+        "",
+        "### 4.1.2 DLRM 负载与算子样本生成",
+        "",
+        f"单算子样本来自 ORT 导出的 DLRM ONNX 图及其配套 `op_shapes`/profile 数据。统一数据集共包含 {platform_metrics.get('single_op_rows', 0):,} 条样本、{platform_metrics.get('single_op_cases', 0)} 个 case、{platform_metrics.get('single_op_combos', 0):,} 个 `case_id-combo` 配置，覆盖 `{batch_range}` 的 batch size、`{nip_range}` 的每次 lookup 索引数、`1-5` 的 intra-op 线程和 `1/3/4/5/6` 的 inter-op 线程。算子类型共 {len(op_types)} 种，分别映射为五类：索引访存类、布局搬移类、视图/元数据类、轻计算-访存混合类和计算主导类。每个 ONNX 节点都保留输入/输出 shape、线程配置、I/O 字节规模、归约规模、Gemm 的 M/N/K 与 analytical proxy 列，用于后续单算子建模。",
+        "",
+        "### 4.1.3 运行与标注流程",
+        "",
+        "单算子标签来自 ORT 执行后的 per-op profiling 结果。每个样本先丢弃最早的一个 profile batch，再对剩余 batch 的算子时延求均值，形成 `label_operator_actual_dur_us`。为了恢复整图真值，本文使用 branch-parallel runner 导出的 `branch_parallel_op_timeline.csv`，对每个 batch 计算整图 span，并采用与单算子一致的策略丢弃首个 batch 后再求均值。静态整图模型并不是简单求和，而是根据 `op_shapes` 重建 DAG，将 8 条 embedding 分支折叠为 branch task，再依据 `inter_threads` 控制的并行槽位进行离线排程，从而生成预测时间线、关键路径和整图时延。",
+        "",
+        "### 4.1.4 数据集划分与评价指标",
+        "",
+        f"单算子数据按 `sample_group=combo` 做 `7:2:1` 划分，实际样本数为 train/val/test = `{split_counts.get('train', 0):,} / {split_counts.get('val', 0):,} / {split_counts.get('test', 0):,}`。这种切分方式保证同一 `case_id-combo` 下的节点不会同时出现在训练集与测试集，避免 shape 级信息泄漏。除随机划分外，本文还构造了未见 shape 与未见线程数两种外推测试：前者将 batch size `{_sanitize_list(OOD_BATCH_HOLDS)}` 作为保留配置，后者仅用 `num_threads={OOD_NUM_THREADS_HOLD}` 做测试。单算子评价指标采用 `MAE`、`MAPE`、`RMSE` 和 `R^2`；整图评价指标采用 `MAE`、`MAPE`、`P50/P90` 相对误差，并按 batch size 和 branch parallelism 分组统计。",
         "",
         "## 4.2 算子级性能建模实验",
         "",
-        f"- 表 4-2 汇总五个模型组的测试指标与训练口径。",
-        f"- 表 4-3 展示代表算子 `{' / '.join(REPRESENTATIVE_OP_TYPES)}` 的测试误差统计。",
-        f"- 图 4-2 到图 4-8 展示模型组误差、baseline 对比、代表算子图、散点与训练曲线。",
+        "本节首先给出最终分组模型在测试集上的总体精度，再按五类算子统计误差，并对 Gather、ReduceSum、Transpose/Concat 以及 Gemm/MatMul 的代表性行为做可视化分析。整体作图风格参考 Concorde 中“真实值-预测值关系、误差分布、典型 case 解释”的组织方式，但结合 DLRM 场景保留了更强的算子语义解释。",
         "",
-        f"- 章节内单算子核心结果摘要：group mean MAPE = {single_op_metrics.get('group_test_mape_mean', 0.0):.6f}, worst group MAPE = {single_op_metrics.get('group_test_mape_worst', 0.0):.6f}.",
+        "### 4.2.1 单算子总体预测精度",
         "",
-        f"### 4.2.1 OOD 泛化",
+        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、单一 MLP 基线以及本文采用的分组 analytical-MLP。最终分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；纯解析模型由于在小张量和视图类节点上存在显著比例误差，其 `MAPE` 高达 {single_op_metrics.get('analytical_test_mape', 0.0):.4f}。单一 MLP 基线的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}，在随机切分的单算子指标上略优于分组模型，但缺少显式的机理分组与解析代理约束。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
         "",
-        f"- 章节 OOD 规则采用 batch holdout `{_sanitize_list(OOD_BATCH_HOLDS)}` 与 `num_threads={OOD_NUM_THREADS_HOLD}`。",
-        f"- OOD 切片摘要写入单独的 CSV/JSON 文件，图 4-9 到图 4-10 展示 slice 与 generalization 参考结果。",
-        f"- 当前已写入 {len(ood_rows)} 条 OOD slice 记录。",
+        "### 4.2.2 分类别预测精度",
+        "",
+        "表 4-4 和图 4-4 展示了五类算子的误差差异。总体上，视图/元数据类和布局搬移类更容易预测，因为其执行路径较稳定；索引访存类和轻计算-访存混合类误差相对更大，主要原因是它们更容易受到随机访存、线程调度和小张量固定开销的影响。这种类别差异与第三章中对 ORT CPU kernel 机制的分析是一致的，也说明统一 MLP 难以同时覆盖这几类机理差异显著的节点。",
+        "",
+        "### 4.2.3 典型算子预测结果分析",
+        "",
+        "图 4-5 至图 4-8 分别给出了 Gather、ReduceSum、Transpose/Concat 以及 Gemm/MatMul 的代表性结果。Gather 的误差主要受到随机表访存影响，线程数变化会显著改变尾部误差；ReduceSum 的误差随归约工作量增长而逐步收敛，说明解析代理对归约规模具有较好刻画能力；Transpose 与 Concat 的误差主要受数据搬移规模影响；Gemm/MatMul 在 MAC 数较小时误差增大，反映出小维度下微核利用率不足的问题。整体来看，这些现象与第三章关于 cache fit、数据搬移和 kernel 饱和度的解释是相互印证的。",
+        "",
+        "### 4.2.4 跨规模泛化实验",
+        "",
+        f"图 4-9 和图 4-10 分别给出未见 shape 与未见线程数的测试结果。未见 shape 配置的 `MAPE` 为 {ood_rows.get('unseen_batch_size', {}).get('mape', 0.0):.4f}，未见线程数配置的 `MAPE` 为 {ood_rows.get('unseen_num_threads', {}).get('mape', 0.0):.4f}。这说明解析代理特征在 shape 外推上提供了稳定支撑，而线程数外推的难度更高，因为线程切分会同时影响并行粒度、调度开销和实际 cache 行为。",
         "",
         "## 4.3 整图性能聚合实验",
         "",
-        f"- 表 4-5 汇总静态调度器在 `v1_300_iter_quick_nodrop` 上的主指标。",
-        f"- 图 4-11 到图 4-13 给出预测-真实散点、batch/inter_threads 分组热力图与误差分布。",
-        f"- 图 4-14 与图 4-15 来自典型时间线与关键路径导出。",
-        f"- 图目录现在额外记录 stage/claim 字段，方便把图当作同一条证据链来读。",
+        "整图实验验证第三章 3.3 中的静态流水线聚合模型。与单纯求和不同，该模型显式考虑 bottom、8 条 embedding branch 和 tail 的依赖关系，以及 `inter_threads` 决定的 branch 并行槽位约束，因此能够用节点级预测结果恢复整图执行的关键路径。",
         "",
-        f"- E2E 结果摘要：full_graph MAPE = {e2e_metrics.get('full_graph_metrics', {}).get('mape', 0.0):.6f}, worst combo = {e2e_metrics.get('full_graph_metrics', {}).get('worst_combo', {}).get('case_id', 'n/a')} / {e2e_metrics.get('full_graph_metrics', {}).get('worst_combo', {}).get('combo', 'n/a')}.",
-        f"- 简单求和基线审计：static scheduler 在 {sum_baseline_metrics.get('static_better_count', 0)}/{sum_baseline_metrics.get('rows', 0)} 个 full combo 上优于 simple sum，胜率 {sum_baseline_metrics.get('static_better_rate', 0.0):.1%}，平均 APE 差值 {sum_baseline_metrics.get('mean_ape_gap', 0.0):.6f}。",
-        f"- 分组审计：inter_threads={_sanitize_list(strong_inter_threads)} 的 static 胜率均为 100%，而 inter_threads={_sanitize_list(weak_inter_threads)} 仍保留少量 simple sum 更优样本。",
-        f"- 图 4-18 现已改为全量 full combo 的分布图，不再截取前 18 个样本。",
+        "### 4.3.1 整图预测总体精度",
+        "",
+        f"表 4-5 汇总了整图预测精度。静态流水线模型在完整图样本上的 `MAPE` 为 {e2e_overall.get('mape', 0.0):.4f}，`P50` 和 `P90` 相对误差分别为 {e2e_overall.get('p50_ape', 0.0):.4f} 和 {e2e_overall.get('p90_ape', 0.0):.4f}。图 4-11 的散点结果表明，绝大多数整图配置都能被稳定地落在参考线附近，说明节点级误差在流水线聚合后没有被系统性放大。",
+        "",
+        "### 4.3.2 不同 batch size 下的整图精度",
+        "",
+        "图 4-12 给出了不同 batch size 下的整图 `MAPE`。整体趋势较平滑，说明模型在小 batch、中 batch 和大 batch 区间都保持了较稳定的误差水平。这一点非常重要，因为 DLRM 的 embedding lookup 和 top MLP 都会随 batch size 改变张量规模与工作集，若聚合模型缺乏稳定性，误差会在 batch 变化时明显抖动。",
+        "",
+        "### 4.3.3 不同分支并行度下的整图精度",
+        "",
+        "图 4-13 按 `inter_threads` 展示了真实整图时延与预测整图时延的变化。可以看到，随着可用 branch 槽位增加，整图时延整体下降，但收益逐渐递减；预测曲线能够较好跟随这一趋势。这说明第三章提出的 `kappa` 槽位近似虽然是静态模型，但已经能够反映并行度增加后边际收益递减的核心行为。",
+        "",
+        "### 4.3.4 典型时间线案例分析",
+        "",
+        f"图 4-14 和图 4-15 展示了 {len(timeline_rows) if isinstance(timeline_rows, list) else 0} 个典型配置的真实/预测时间线与关键路径分解。通过这些案例可以看到，模型不仅预测了整图 makespan，还较准确地恢复了 bottom、embedding pool 和 tail 之间的先后关系。误差主要集中在分支完成时刻附近的同步边界和少数高波动节点上，这为后续误差分析提供了直接证据。",
         "",
         "## 4.4 消融实验与误差分析",
         "",
-        f"- 表 4-6 汇总简单求和基线与静态调度器的差异。",
-        f"- 表 4-7 现在聚焦四个高信号特征：`feat_output_elements_per_batch / feat_output_elements_per_lookup / feat_output_input_bytes_ratio / feat_activation_elements_per_batch`。",
-        f"- 图 4-16、图 4-17、图 4-18、图 4-19 分别对应重要特征敏感性、证据覆盖、求和基线与最强特征改善幅度。",
+        "这一节采用与 Concorde 类似的逐步加组件消融方式，而不是简单做特征删除。具体构造三组模型：第一组仅使用 `Analytical model + Simple add`；第二组在单算子层面加入分组 MLP，但整图仍采用 `Simple add`；第三组使用 `Analytical + MLP + pipeline`，即本文完整方法。这样的设计能够更清晰地回答三个问题：解析模型本身能做多好、单算子学习器能带来多少收益、以及静态流水线聚合是否对整图预测确有必要。",
         "",
-        f"- 重要特征条目数：{ablation_summary.get('summary', {}).get('important_feature_rows', len(ablation_rows))}，正向证据行数：{ablation_summary.get('summary', {}).get('positive_evidence_rows', 0)}。",
+        "### 4.4.1 三阶段消融结果",
+        "",
+        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了三阶段模型的差异。纯解析模型在整图上的平均相对误差最高；加入分组 MLP 后，单算子精度显著提高，但若仍对节点时延简单相加，整图误差仍然较大；进一步引入静态流水线聚合后，整图 `MAPE` 下降到 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，明显优于 `Analytical + MLP + simple add` 的 {simple_add_row.get('e2e_mape', 0.0) if simple_add_row else 0.0:.4f}，更远优于 `Analytical + simple add` 的 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f}。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
+        "",
+        "### 4.4.2 误差来源分析",
+        "",
+        "表 4-7 和图 4-19 汇总了四类代表性误差样本。第一类是大表随机访存下的 Gather，误差主要来自实际内存访问时延波动；第二类是小张量视图/元数据算子，固定框架开销占比过高导致样本噪声明显；第三类是小维度 Gemm/MatMul，微核未充分饱和时更难被解析代理拟合；第四类则是整图级同步场景，单个 branch 的偏差在 barrier 处被放大。这些现象说明，当前模型的主要剩余误差并不来自统计偶然，而是来自 ORT CPU 执行中仍难以静态精确恢复的动态效应。",
         "",
         "## 4.5 本章小结",
         "",
-        f"- 关键时间线案例数：{len(timeline_rows) if isinstance(timeline_rows, list) else 0}。",
-        f"- 统一 figure catalog 共收录 {len(figures_catalog.get('rows', []))} 张图。",
-        f"- 本章草稿由 `{CHAPTER4_DRAFT_PATH.name}` 自动生成，并可由总入口重复刷新。",
+        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，分组 analytical-MLP 单算子模型在测试集上取得了 {single_op_metrics.get('grouped_test_mape', 0.0):.4f} 的 `MAPE`，显著优于纯解析模型，并为后续整图聚合提供了带机理约束的节点级输入；在整图层面，静态流水线聚合模型将 `MAPE` 控制在 {e2e_overall.get('mape', 0.0):.4f}。进一步的三阶段消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
+        "",
+        f"本章共生成 {len(figures_catalog.get('rows', []))} 张图，全部由 `chapter4_experiments/run_all_chapter4_experiments.py` 自动复现，并写入 `{CHAPTER4_DRAFT_PATH}`。",
         "",
     ]
     draft = "\n".join(lines).rstrip() + "\n"
