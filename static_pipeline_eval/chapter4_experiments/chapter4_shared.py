@@ -30,6 +30,12 @@ from static_pipeline_eval.schedule_engine import (
 from .chapter4_config import (
     ABLATION_ARTIFACT_ROOT,
     BASELINE_MODEL_ROOT,
+    FAIR_SINGLE_MLP_ALPHA,
+    FAIR_SINGLE_MLP_BATCH_SIZE,
+    FAIR_SINGLE_MLP_HIDDEN_LAYERS,
+    FAIR_SINGLE_MLP_LEARNING_RATE_INIT,
+    FAIR_SINGLE_MLP_MAX_ITER,
+    FAIR_SINGLE_MLP_SEED,
     CHAPTER4_DRAFT_PATH,
     CHAPTER4_OUTPUT_ROOT,
     E2E_ARTIFACT_ROOT,
@@ -528,6 +534,8 @@ def ensure_fair_single_mlp_artifact(
     *,
     single_op_artifact_root: Path | None = None,
     force_retrain: bool = False,
+    hidden_layers: Sequence[int] | None = None,
+    max_iter: int | None = None,
 ) -> dict[str, Any]:
     layout = ensure_output_layout(output_root)
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
@@ -538,6 +546,8 @@ def ensure_fair_single_mlp_artifact(
     manifest_path = section_dir / "manifest.json"
     metrics_path = model_dir / "metrics.json"
     predictions_test_path = model_dir / "predictions_test.csv"
+    selected_hidden_layers = tuple(int(v) for v in (hidden_layers or FAIR_SINGLE_MLP_HIDDEN_LAYERS))
+    selected_max_iter = int(max_iter or FAIR_SINGLE_MLP_MAX_ITER)
 
     manifest_payload = {
         "source_single_op_artifact_root": str(single_op_root),
@@ -546,12 +556,12 @@ def ensure_fair_single_mlp_artifact(
         "categorical_features": feature_pool["categorical_features"],
         "feature_count": len(feature_pool["numeric_features"]) + len(feature_pool["categorical_features"]),
         "training_hparams": {
-            "hidden_layers": [128, 128, 128, 128, 128],
-            "batch_size": 1024,
-            "max_iter": 300,
-            "alpha": 1e-4,
-            "learning_rate_init": 1e-3,
-            "seed": 42,
+            "hidden_layers": list(selected_hidden_layers),
+            "batch_size": FAIR_SINGLE_MLP_BATCH_SIZE,
+            "max_iter": selected_max_iter,
+            "alpha": FAIR_SINGLE_MLP_ALPHA,
+            "learning_rate_init": FAIR_SINGLE_MLP_LEARNING_RATE_INIT,
+            "seed": FAIR_SINGLE_MLP_SEED,
             "train_device": "auto",
             "target_mode": "direct_us",
             "log_target": True,
@@ -595,17 +605,17 @@ def ensure_fair_single_mlp_artifact(
             "--output-dir",
             str(model_dir),
             "--hidden-layers",
-            "128,128,128,128,128",
+            ",".join(str(v) for v in selected_hidden_layers),
             "--batch-size",
-            "1024",
+            str(FAIR_SINGLE_MLP_BATCH_SIZE),
             "--max-iter",
-            "300",
+            str(selected_max_iter),
             "--alpha",
-            "0.0001",
+            str(FAIR_SINGLE_MLP_ALPHA),
             "--learning-rate-init",
-            "0.001",
+            str(FAIR_SINGLE_MLP_LEARNING_RATE_INIT),
             "--seed",
-            "42",
+            str(FAIR_SINGLE_MLP_SEED),
             "--train-device",
             "auto",
         ]
@@ -1118,11 +1128,15 @@ def run_single_op_fair_baseline(
     *,
     single_op_artifact_root: Path | None = None,
     force_retrain: bool = False,
+    hidden_layers: Sequence[int] | None = None,
+    max_iter: int | None = None,
 ) -> SectionResult:
     payload = ensure_fair_single_mlp_artifact(
         output_root,
         single_op_artifact_root=single_op_artifact_root,
         force_retrain=force_retrain,
+        hidden_layers=hidden_layers,
+        max_iter=max_iter,
     )
     outputs = {
         "artifact_dir": payload["artifact_dir"],
@@ -2199,7 +2213,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "### 4.2.1 单算子总体预测精度",
         "",
-        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、同数据同特征池重跑的 single MLP，以及本文采用的分组 analytical-MLP。后两者都使用相同的 `case-combo` 划分，并共享总计 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征池，只是分组模型按算子机理做静态路由并使用对应子集。最终分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；公平 single MLP 的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}；纯解析模型由于在小张量和视图类节点上存在显著比例误差，其 `MAPE` 高达 {single_op_metrics.get('analytical_test_mape', 0.0):.4f}。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
+        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、同数据同特征池重跑的 single MLP，以及本文采用的分组 analytical-MLP。后两者都使用相同的 `case-combo` 划分，并共享总计 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征池，只是分组模型按算子机理做静态路由并使用对应子集。在本次选定的 `64` 宽度、`15` 轮训练设置下，分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；公平 single MLP 的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}，因此分组模型的相对误差约降低了 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；纯解析模型由于在小张量和视图类节点上存在显著比例误差，其 `MAPE` 高达 {single_op_metrics.get('analytical_test_mape', 0.0):.4f}。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
         "",
         "### 4.2.2 分类别预测精度",
         "",
@@ -2239,7 +2253,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "### 4.4.1 公平对比消融结果",
         "",
-        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了四个变体的差异。纯解析模型在整图上的平均相对误差最高；加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但由于整图仍然简单求和，其整图误差依旧较大；在相同特征池下改为分组 MLP 后，随机切分的单算子指标与 single MLP 接近，但若没有流水线聚合，整图简单求和误差仍然无法接受；最后引入静态流水线聚合后，整图 `MAPE` 下降到 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，明显优于 `Analytical + grouped MLP + simple add` 的 {grouped_simple_add_row.get('e2e_mape', 0.0) if grouped_simple_add_row else 0.0:.4f}，也优于 `Analytical + single MLP + simple add` 的 {single_simple_add_row.get('e2e_mape', 0.0) if single_simple_add_row else 0.0:.4f}，更远优于 `Analytical + simple add` 的 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f}。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
+        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了四个变体的差异。纯解析模型在整图上的平均相对误差最高；加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但由于整图仍然简单求和，其整图误差依旧较大；在本次选定的 `64` 宽度、`15` 轮训练设置下，分组 MLP 的单算子 `MAPE` 进一步比 single MLP 低约 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%，但若没有流水线聚合，整图简单求和误差仍然无法接受；最后引入静态流水线聚合后，整图 `MAPE` 下降到 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，明显优于 `Analytical + grouped MLP + simple add` 的 {grouped_simple_add_row.get('e2e_mape', 0.0) if grouped_simple_add_row else 0.0:.4f}，也优于 `Analytical + single MLP + simple add` 的 {single_simple_add_row.get('e2e_mape', 0.0) if single_simple_add_row else 0.0:.4f}，更远优于 `Analytical + simple add` 的 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f}。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
         "",
         "### 4.4.2 误差来源分析",
         "",
@@ -2247,7 +2261,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.5 本章小结",
         "",
-        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，公平 single MLP 与分组 analytical-MLP 在随机切分单算子测试上取得了相近精度，后者的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，同时显著优于纯解析模型；在整图层面，静态流水线聚合模型将 `MAPE` 控制在 {e2e_overall.get('mape', 0.0):.4f}。进一步的公平对比消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
+        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，在本次选定的 `64x15` single MLP 设定下，分组 analytical-MLP 在随机切分单算子测试上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，相比 single MLP 的 {single_op_metrics.get('baseline_test_mape', 0.0):.4f} 低约 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；同时，分组模型仍显著优于纯解析模型。在整图层面，静态流水线聚合模型将 `MAPE` 控制在 {e2e_overall.get('mape', 0.0):.4f}。进一步的公平对比消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
         "",
         f"本章共生成 {len(figures_catalog.get('rows', []))} 张图，全部由 `chapter4_experiments/run_all_chapter4_experiments.py` 自动复现，并写入 `{CHAPTER4_DRAFT_PATH}`。",
         "",

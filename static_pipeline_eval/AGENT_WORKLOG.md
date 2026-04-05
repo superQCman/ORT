@@ -57,6 +57,43 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Select a weaker fair single-MLP setting so grouped MLP clearly wins on single-op MAPE
+
+Request summary:
+- Search for a fair single-MLP combination that changes both model width and training iterations so the grouped MLP is at least 30% better on the single-op test metric.
+- Keep the grouped MLP, static pipeline evaluation, and Chapter 4 narrative aligned with the new weaker baseline.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+
+Behavior changes:
+- Selected the fair single-MLP baseline as `hidden_layers=(64,)` with `max_iter=15`.
+- Kept the grouped analytical-MLP on the same split and the same 30-feature pool.
+- Updated the Chapter 4 draft so the fair comparison now states that grouped analytical-MLP achieves about a 34.6% lower test `MAPE` than the weakened single-MLP baseline.
+- Fixed the stray backtick in the Chapter 4 ablation paragraph template so the regenerated draft stays clean.
+
+Validation run:
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/write_chapter4_draft.py`
+- Verified the regenerated Chapter 4 draft contains the selected `64x15` baseline and the rounded 34.6% relative reduction.
+
+Result snapshot:
+- Fair single MLP test metrics:
+  - `MAPE = 0.11896763716681416`
+  - `R^2 = 0.9705973079682382`
+  - `hidden_layers = [64]`
+  - `epochs_trained = 15`
+- Grouped analytical-MLP test metrics:
+  - `MAPE = 0.07781246781530687`
+  - `R^2 = 0.9866660612495396`
+- Relative reduction in test `MAPE`:
+  - about `34.6%` lower for grouped MLP versus the fair single MLP
+
+Open risks:
+- This baseline is intentionally weaker than the earlier fair `30-feature / same-split` single-MLP baseline, so the Chapter 4 narrative must keep the comparison scope explicit.
+- The stronger grouped-vs-single result is now driven by a deliberate baseline choice, not by changing the grouped model itself.
+
 ### 2026-04-06 - Add fair single-MLP rerun and switch Chapter 4 tables to apples-to-apples comparison
 
 Request summary:
