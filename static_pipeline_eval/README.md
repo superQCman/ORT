@@ -336,7 +336,49 @@ CLI 参数：
 2. branch handoff gap correction
 3. join 后微尾段 bundle correction
 
-## 10. 开发约束
+## 10. 第四章统一实验目录
+
+第四章相关的实验脚本、总控入口、图表构建和章节草稿，已经统一收口到：
+
+- `ORT/static_pipeline_eval/chapter4_experiments`
+- 统一产物目录：`ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu`
+- 统一章节草稿：`ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+
+推荐的一键复现入口是：
+
+```bash
+cd /data/qc/dlrm/ORT/static_pipeline_eval
+python3 chapter4_experiments/run_all_chapter4_experiments.py
+```
+
+这条入口会顺序生成：
+
+1. 平台与数据集统计
+2. 单算子总体评估
+3. 单算子分类评估
+4. 单算子代表算子图
+5. 单算子 OOD 泛化
+6. 单算子基线与消融
+7. 整图静态聚合评估
+8. 整图简单求和基线
+9. 典型时间线与关键路径
+10. 图表汇总
+11. 章节草稿
+
+第四章脚本的固定入口与配置文件包括：
+
+- `chapter4_experiments/chapter4_config.py`
+- `chapter4_experiments/run_single_op_core_eval.py`
+- `chapter4_experiments/run_single_op_ood_eval.py`
+- `chapter4_experiments/run_single_op_ablation_eval.py`
+- `chapter4_experiments/run_e2e_core_eval.py`
+- `chapter4_experiments/run_e2e_sum_baseline.py`
+- `chapter4_experiments/export_timeline_cases.py`
+- `chapter4_experiments/build_chapter4_figures.py`
+- `chapter4_experiments/write_chapter4_draft.py`
+- `chapter4_experiments/run_all_chapter4_experiments.py`
+
+## 11. 开发约束
 
 这个目录下的 agent 工作流是强约束的：
 

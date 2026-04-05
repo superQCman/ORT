@@ -57,6 +57,59 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-05 - Add unified Chapter 4 experiment directory and one-click runner
+
+Request summary:
+- Reorganize Chapter 4 into a single `static_pipeline_eval/chapter4_experiments` directory.
+- Add one top-level runner that can rebuild the Chapter 4 tables, figures, manifests, and chapter draft in one command.
+- Keep the existing `single_op_stage1_mlp` and `static_pipeline_eval` artifacts as the data sources, but move the control surface into `static_pipeline_eval`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/__init__.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_config.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_single_op_core_eval.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_single_op_ood_eval.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_single_op_ablation_eval.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_e2e_core_eval.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_e2e_sum_baseline.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/export_timeline_cases.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/build_chapter4_figures.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/write_chapter4_draft.py`
+
+Behavior changes:
+- Added a unified Chapter 4 control plane under `chapter4_experiments/` with shared configuration and helper code.
+- Added `run_all_chapter4_experiments.py` as the single entry point for:
+  - platform statistics
+  - single-op core evaluation
+  - single-op OOD evaluation
+  - single-op ablation evaluation
+  - E2E static aggregation
+  - E2E simple-sum baseline
+  - timeline and critical-path export
+  - figure catalog generation
+  - chapter draft generation
+- Standardized the Chapter 4 output root to `artifacts/latest/chapter4_cpu`.
+- Standardized the draft output path to `chapter4_cpu_experiments_draft.md`.
+- Kept the Chapter 4 scripts configurable through explicit artifact-root arguments so they can reuse existing `single_op_stage1_mlp` and `static_pipeline_eval` outputs without hard-coded local paths.
+
+Validation run:
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py --help`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py --only single_op --skip-ood --skip-ablation`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py --only e2e --skip-timelines`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_experiments.py --only all`
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+
+Open risks:
+- The generated Chapter 4 draft is intentionally auto-assembled and still reads like a structured technical draft rather than a publication-polished manuscript.
+- The output tree under `artifacts/latest/chapter4_cpu` is reproducible locally, but it is not yet clear whether every generated table/figure should be checked into git or kept as derived output only.
+- If upstream artifact schemas change, the chapter runner will need another compatibility pass to keep the one-click workflow stable.
+
 ### 2026-04-03 - Bootstrap static pipeline evaluation project
 
 Request summary:
