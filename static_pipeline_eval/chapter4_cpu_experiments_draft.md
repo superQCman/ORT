@@ -30,6 +30,9 @@
 - 图 4-14 与图 4-15 来自典型时间线与关键路径导出。
 
 - E2E 结果摘要：full_graph MAPE = 0.063821, worst combo = case_8_1_1 / bs2048_nip2000.
+- 简单求和基线审计：static scheduler 在 288/331 个 full combo 上优于 simple sum，胜率 87.0%，平均 APE 差值 1.845872。
+- 分组审计：inter_threads=3|4|5|6 的 static 胜率均为 100%，而 inter_threads=1 仍保留少量 simple sum 更优样本。
+- 图 4-18 现已改为全量 full combo 的分布图，不再截取前 18 个样本。
 
 ## 4.4 消融实验与误差分析
 

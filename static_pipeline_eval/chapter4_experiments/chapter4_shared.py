@@ -1242,6 +1242,8 @@ def run_e2e_sum_baseline(
             }
         )
     frame = pd.DataFrame(rows)
+    frame = frame.copy()
+    frame["ape_gap"] = frame["sum_ape"] - frame["static_ape"]
     summary_frame = pd.DataFrame(
         [
             {
@@ -1260,30 +1262,103 @@ def run_e2e_sum_baseline(
                 "metric": "mape_delta",
                 "value": float(frame["sum_ape"].mean() - frame["static_ape"].mean()) if not frame.empty else None,
             },
+            {
+                "metric": "static_better_count",
+                "value": int((frame["ape_gap"] > 0).sum()) if not frame.empty else None,
+            },
+            {
+                "metric": "static_better_rate",
+                "value": float((frame["ape_gap"] > 0).mean()) if not frame.empty else None,
+            },
+            {
+                "metric": "simple_sum_better_count",
+                "value": int((frame["ape_gap"] < 0).sum()) if not frame.empty else None,
+            },
+            {
+                "metric": "tie_count",
+                "value": int((frame["ape_gap"] == 0).sum()) if not frame.empty else None,
+            },
+            {
+                "metric": "mean_ape_gap",
+                "value": float(frame["ape_gap"].mean()) if not frame.empty else None,
+            },
+            {
+                "metric": "median_ape_gap",
+                "value": float(frame["ape_gap"].median()) if not frame.empty else None,
+            },
         ]
     )
     csv_6, md_6 = write_frame_csv_md(summary_frame, tables_dir / TABLE_FILENAMES["4-6"], tables_dir / "table_4_6_e2e_sum_baseline.md", "Table 4-6 Simple Sum Baseline Summary")
 
+    audit_frame = frame.groupby("inter_threads", as_index=False).agg(
+        rows=("combo", "count"),
+        sum_mape=("sum_ape", "mean"),
+        static_mape=("static_ape", "mean"),
+        mean_ape_gap=("ape_gap", "mean"),
+        static_better_count=("ape_gap", lambda values: int((values > 0).sum())),
+        simple_sum_better_count=("ape_gap", lambda values: int((values < 0).sum())),
+    )
+    audit_frame["static_better_rate"] = audit_frame["static_better_count"] / audit_frame["rows"].replace(0, pd.NA)
+    audit_frame = audit_frame.sort_values("inter_threads").reset_index(drop=True)
+    audit_csv, audit_md = write_frame_csv_md(
+        audit_frame,
+        tables_dir / "e2e_sum_baseline_audit.csv",
+        tables_dir / "e2e_sum_baseline_audit.md",
+        "Table 4-6 Simple Sum Baseline Audit",
+    )
+
     if not frame.empty:
-        comparison = frame[["combo", "sum_ape", "static_ape"]].copy()
-        comparison["combo"] = comparison["combo"].astype(str)
-        plot_grouped_bar(
-            comparison.head(min(18, len(comparison))),
-            "combo",
-            ["sum_ape", "static_ape"],
-            figures_dir / FIGURE_FILENAMES["4-18"],
-            "Figure 4-18 Simple Sum vs Static Scheduler",
-            ylabel="APE",
-            legend_labels=["simple sum", "static scheduler"],
+        plt = _import_pyplot()
+        fig, (ax_box, ax_gap) = plt.subplots(1, 2, figsize=(14.5, 5.2), gridspec_kw={"width_ratios": [1, 1.2]})
+
+        box_labels = ["simple sum", "static scheduler"]
+        ax_box.boxplot([frame["sum_ape"].tolist(), frame["static_ape"].tolist()], labels=box_labels, showmeans=True)
+        ax_box.set_title("APE Distribution Across All Full Combos")
+        ax_box.set_ylabel("APE")
+        ax_box.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+
+        bins = max(12, min(30, int(len(frame) / 12)))
+        ax_gap.hist(frame["ape_gap"], bins=bins, color="#54A24B", alpha=0.82, edgecolor="#FFFFFF")
+        ax_gap.axvline(0.0, color="#222222", linestyle="--", linewidth=1.0)
+        ax_gap.set_title("APE Gap = simple sum - static scheduler")
+        ax_gap.set_xlabel("APE gap")
+        ax_gap.set_ylabel("combo count")
+        ax_gap.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+        win_rate = float((frame["ape_gap"] > 0).mean())
+        ax_gap.text(
+            0.02,
+            0.98,
+            f"static better on {int((frame['ape_gap'] > 0).sum())}/{len(frame)} combos\n"
+            f"win rate = {win_rate:.1%}\n"
+            f"mean gap = {frame['ape_gap'].mean():.3f}",
+            transform=ax_gap.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.8, edgecolor="#CCCCCC"),
         )
+        fig.suptitle("Figure 4-18 Simple Sum vs Static Scheduler Across All Full Combos", y=1.02)
+        fig.tight_layout()
+        save_figure(fig, figures_dir / FIGURE_FILENAMES["4-18"])
 
     payload = {
-        "tables": {"4-6": str(csv_6)},
+        "tables": {
+            "4-6": str(csv_6),
+            "4-6-audit": str(audit_csv),
+        },
         "figures": {"4-18": str(figures_dir / FIGURE_FILENAMES["4-18"])},
         "summary": {
             "rows": int(len(frame)),
             "sum_mape": float(frame["sum_ape"].mean()) if not frame.empty else None,
             "static_mape": float(frame["static_ape"].mean()) if not frame.empty else None,
+            "mape_delta": float(frame["sum_ape"].mean() - frame["static_ape"].mean()) if not frame.empty else None,
+            "static_better_count": int((frame["ape_gap"] > 0).sum()) if not frame.empty else None,
+            "static_better_rate": float((frame["ape_gap"] > 0).mean()) if not frame.empty else None,
+            "simple_sum_better_count": int((frame["ape_gap"] < 0).sum()) if not frame.empty else None,
+            "tie_count": int((frame["ape_gap"] == 0).sum()) if not frame.empty else None,
+            "mean_ape_gap": float(frame["ape_gap"].mean()) if not frame.empty else None,
+            "median_ape_gap": float(frame["ape_gap"].median()) if not frame.empty else None,
+            "inter_threads_audit": audit_frame.to_dict(orient="records"),
         },
     }
     _write_summary_bundle(section_dir, "e2e_sum_baseline", payload)
@@ -1470,15 +1545,28 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
     single_op_summary = read_json(layout["single_op"] / "single_op_core_summary.json") if (layout["single_op"] / "single_op_core_summary.json").exists() else {}
     ood_summary = read_json(layout["single_op"] / "single_op_ood_summary.json") if (layout["single_op"] / "single_op_ood_summary.json").exists() else {}
     e2e_summary = read_json(layout["e2e"] / "e2e_core_summary.json") if (layout["e2e"] / "e2e_core_summary.json").exists() else {}
+    sum_baseline_summary = read_json(layout["e2e"] / "e2e_sum_baseline_summary.json") if (layout["e2e"] / "e2e_sum_baseline_summary.json").exists() else {}
     ablation_summary = read_json(layout["ablation"] / "single_op_ablation_summary.json") if (layout["ablation"] / "single_op_ablation_summary.json").exists() else {}
     timeline_summary = read_json(layout["e2e"] / "timeline_cases_summary.json") if (layout["e2e"] / "timeline_cases_summary.json").exists() else {}
     figures_catalog = read_json(layout["manifests"] / "figures_catalog.json") if (layout["manifests"] / "figures_catalog.json").exists() else {"rows": []}
 
     single_op_metrics = single_op_summary.get("summary", {})
     e2e_metrics = e2e_summary.get("summary", {})
+    sum_baseline_metrics = sum_baseline_summary.get("summary", {})
     ood_rows = ood_summary.get("summary", [])
     ablation_rows = ablation_summary.get("summary", [])
     timeline_rows = timeline_summary.get("summary", [])
+    inter_threads_audit = sum_baseline_metrics.get("inter_threads_audit", [])
+    strong_inter_threads = [
+        str(row.get("inter_threads"))
+        for row in inter_threads_audit
+        if float(row.get("static_better_rate", 0.0)) >= 0.999
+    ]
+    weak_inter_threads = [
+        str(row.get("inter_threads"))
+        for row in inter_threads_audit
+        if float(row.get("static_better_rate", 0.0)) < 0.999
+    ]
 
     lines = [
         "# 第四章实验结果",
@@ -1513,6 +1601,9 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         f"- 图 4-14 与图 4-15 来自典型时间线与关键路径导出。",
         "",
         f"- E2E 结果摘要：full_graph MAPE = {e2e_metrics.get('full_graph_metrics', {}).get('mape', 0.0):.6f}, worst combo = {e2e_metrics.get('full_graph_metrics', {}).get('worst_combo', {}).get('case_id', 'n/a')} / {e2e_metrics.get('full_graph_metrics', {}).get('worst_combo', {}).get('combo', 'n/a')}.",
+        f"- 简单求和基线审计：static scheduler 在 {sum_baseline_metrics.get('static_better_count', 0)}/{sum_baseline_metrics.get('rows', 0)} 个 full combo 上优于 simple sum，胜率 {sum_baseline_metrics.get('static_better_rate', 0.0):.1%}，平均 APE 差值 {sum_baseline_metrics.get('mean_ape_gap', 0.0):.6f}。",
+        f"- 分组审计：inter_threads={_sanitize_list(strong_inter_threads)} 的 static 胜率均为 100%，而 inter_threads={_sanitize_list(weak_inter_threads)} 仍保留少量 simple sum 更优样本。",
+        f"- 图 4-18 现已改为全量 full combo 的分布图，不再截取前 18 个样本。",
         "",
         "## 4.4 消融实验与误差分析",
         "",
