@@ -28,6 +28,7 @@
 - 表 4-5 汇总静态调度器在 `v1_300_iter_quick_nodrop` 上的主指标。
 - 图 4-11 到图 4-13 给出预测-真实散点、batch/inter_threads 分组热力图与误差分布。
 - 图 4-14 与图 4-15 来自典型时间线与关键路径导出。
+- 图目录现在额外记录 stage/claim 字段，方便把图当作同一条证据链来读。
 
 - E2E 结果摘要：full_graph MAPE = 0.063821, worst combo = case_8_1_1 / bs2048_nip2000.
 - 简单求和基线审计：static scheduler 在 288/331 个 full combo 上优于 simple sum，胜率 87.0%，平均 APE 差值 1.845872。
@@ -37,10 +38,10 @@
 ## 4.4 消融实验与误差分析
 
 - 表 4-6 汇总简单求和基线与静态调度器的差异。
-- 表 4-7 汇总单算子特征消融实验结果。
-- 图 4-16、图 4-17、图 4-18、图 4-19 分别对应特征消融热图、增量误差、求和基线与最佳消融结果。
+- 表 4-7 现在聚焦四个高信号特征：`feat_output_elements_per_batch / feat_output_elements_per_lookup / feat_output_input_bytes_ratio / feat_activation_elements_per_batch`。
+- 图 4-16、图 4-17、图 4-18、图 4-19 分别对应重要特征敏感性、证据覆盖、求和基线与最强特征改善幅度。
 
-- 总体消融样本数：34。
+- 重要特征条目数：4，正向证据行数：27。
 
 ## 4.5 本章小结
 

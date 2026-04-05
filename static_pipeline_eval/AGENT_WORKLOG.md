@@ -57,6 +57,35 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-05 - Reframe Chapter 4 ablation around important features
+
+Request summary:
+- Rework the Chapter 4 ablation section so it demonstrates why the currently selected features are important, rather than using ablation to search for weak features to drop.
+- Keep the Chapter 4 evidence chain consistent by updating the figures, summary tables, and draft text together.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced the generic ablation framing with a feature-focused audit around four high-signal features:
+  - `feat_output_elements_per_batch`
+  - `feat_output_elements_per_lookup`
+  - `feat_output_input_bytes_ratio`
+  - `feat_activation_elements_per_batch`
+- The ablation summary table now reports feature-level evidence, positive rows, supporting model groups, and best observed deltas.
+- The ablation figures now visualize important-feature sensitivity, evidence coverage, and best improvement instead of suggesting feature search over weak candidates.
+- The draft text now describes Chapter 4.4 as a proof-oriented ablation section and keeps the figure catalog aligned with the audit-style narrative.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+- Verified the generated `table_4_7_single_op_ablation_summary.csv` contains exactly the four target features and positive evidence rows.
+- Verified `artifacts/latest/chapter4_cpu/manifests/figures_catalog.md` still carries the `stage` and `claim` metadata used for the evidence-chain reading order.
+
+Open risks:
+- The ablation narrative is now intentionally selective and proof-oriented; if future readers expect feature selection methodology, they will need a short note explaining the switch in purpose.
+- Derived figures and tables remain generated outputs, so any upstream artifact refresh may require rerunning the Chapter 4 orchestrator to keep them synchronized.
+
 ### 2026-04-05 - Add unified Chapter 4 experiment directory and one-click runner
 
 Request summary:

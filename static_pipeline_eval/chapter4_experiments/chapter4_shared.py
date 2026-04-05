@@ -152,12 +152,50 @@ def save_figure(fig, path: Path) -> Path:
     return path
 
 
-def plot_bar(frame: pd.DataFrame, x: str, y: str, path: Path, title: str, *, xlabel: str = "", ylabel: str = "", color: str = "#4477aa") -> Path:
+def add_audit_callout(ax, lines: Sequence[str] | None, *, loc: str = "upper right") -> None:
+    if not lines:
+        return
+    anchors = {
+        "upper left": (0.02, 0.98, "left", "top"),
+        "upper right": (0.98, 0.98, "right", "top"),
+        "lower left": (0.02, 0.02, "left", "bottom"),
+        "lower right": (0.98, 0.02, "right", "bottom"),
+    }
+    x, y, ha, va = anchors.get(loc, anchors["upper right"])
+    text = "\n".join(str(line) for line in lines if line is not None and str(line).strip())
+    if not text:
+        return
+    ax.text(
+        x,
+        y,
+        text,
+        transform=ax.transAxes,
+        ha=ha,
+        va=va,
+        fontsize=8.5,
+        bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.83, edgecolor="#C8C8C8"),
+    )
+
+
+def plot_bar(
+    frame: pd.DataFrame,
+    x: str,
+    y: str,
+    path: Path,
+    title: str,
+    *,
+    xlabel: str = "",
+    ylabel: str = "",
+    color: str = "#4477aa",
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper right",
+) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.bar(frame[x].astype(str), frame[y].astype(float), color=color)
     _style_axes(ax, title, xlabel or x, ylabel or y)
     ax.tick_params(axis="x", rotation=30)
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
@@ -170,6 +208,8 @@ def plot_grouped_bar(
     *,
     ylabel: str,
     legend_labels: list[str] | None = None,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper right",
 ) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(11, 5))
@@ -183,6 +223,7 @@ def plot_grouped_bar(
     ax.set_xticklabels(frame[index_col].astype(str).tolist(), rotation=30, ha="right")
     _style_axes(ax, title, index_col, ylabel)
     ax.legend(frameon=False, ncols=min(len(value_cols), 3))
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
@@ -195,6 +236,8 @@ def plot_scatter(
     *,
     hue: str | None = None,
     reference_line: bool = True,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper left",
 ) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(6.5, 6.5))
@@ -209,10 +252,21 @@ def plot_scatter(
         hi = float(max(frame[x].max(), frame[y].max()))
         ax.plot([lo, hi], [lo, hi], color="#222222", linewidth=1.0, linestyle="--")
     _style_axes(ax, title, x, y)
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
-def plot_heatmap(frame: pd.DataFrame, path: Path, title: str, *, xlabel: str = "", ylabel: str = "", annot: bool = True) -> Path:
+def plot_heatmap(
+    frame: pd.DataFrame,
+    path: Path,
+    title: str,
+    *,
+    xlabel: str = "",
+    ylabel: str = "",
+    annot: bool = True,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper right",
+) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(10, 5))
     matrix = frame.to_numpy(dtype=float)
@@ -228,10 +282,19 @@ def plot_heatmap(frame: pd.DataFrame, path: Path, title: str, *, xlabel: str = "
             for col_idx, col_label in enumerate(frame.columns):
                 value = matrix[row_idx, col_idx]
                 ax.text(col_idx, row_idx, f"{value:.2f}", ha="center", va="center", color="white", fontsize=8)
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
-def plot_boxplot(values_by_label: dict[str, list[float]], path: Path, title: str, *, ylabel: str) -> Path:
+def plot_boxplot(
+    values_by_label: dict[str, list[float]],
+    path: Path,
+    title: str,
+    *,
+    ylabel: str,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper right",
+) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(10, 5))
     labels = list(values_by_label.keys())
@@ -239,10 +302,22 @@ def plot_boxplot(values_by_label: dict[str, list[float]], path: Path, title: str
     ax.boxplot(values, labels=labels, showmeans=True)
     _style_axes(ax, title, "", ylabel)
     ax.tick_params(axis="x", rotation=25)
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
-def plot_line(frame: pd.DataFrame, x: str, y: str, path: Path, title: str, *, group_col: str | None = None, ylabel: str | None = None) -> Path:
+def plot_line(
+    frame: pd.DataFrame,
+    x: str,
+    y: str,
+    path: Path,
+    title: str,
+    *,
+    group_col: str | None = None,
+    ylabel: str | None = None,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper right",
+) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(10, 5))
     if group_col and group_col in frame.columns:
@@ -252,10 +327,22 @@ def plot_line(frame: pd.DataFrame, x: str, y: str, path: Path, title: str, *, gr
     else:
         ax.plot(frame[x], frame[y], marker="o", linewidth=1.5, color="#4477aa")
     _style_axes(ax, title, x, ylabel or y)
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
-def plot_gantt(frame: pd.DataFrame, path: Path, title: str, *, label_col: str, start_col: str, end_col: str, hue_col: str | None = None) -> Path:
+def plot_gantt(
+    frame: pd.DataFrame,
+    path: Path,
+    title: str,
+    *,
+    label_col: str,
+    start_col: str,
+    end_col: str,
+    hue_col: str | None = None,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper right",
+) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(12, max(4.5, 0.3 * len(frame))))
     labels = frame[label_col].astype(str).tolist()
@@ -271,10 +358,19 @@ def plot_gantt(frame: pd.DataFrame, path: Path, title: str, *, label_col: str, s
     ax.set_yticks(range(len(labels)))
     ax.set_yticklabels(labels)
     _style_axes(ax, title, "time (us)", "")
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
-def plot_simple_graph(nodes: pd.DataFrame, edges: pd.DataFrame, path: Path, title: str) -> Path:
+def plot_simple_graph(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    path: Path,
+    title: str,
+    *,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper right",
+) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(12, 7))
     if nodes.empty:
@@ -322,6 +418,7 @@ def plot_simple_graph(nodes: pd.DataFrame, edges: pd.DataFrame, path: Path, titl
     ax.set_ylabel("node layer")
     ax.set_yticks([])
     ax.grid(False)
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
 
@@ -516,6 +613,80 @@ def _load_generalization_summary(path: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _build_ablation_feature_focus(ablation_frame: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    focus_features = (
+        "feat_output_elements_per_batch",
+        "feat_output_elements_per_lookup",
+        "feat_output_input_bytes_ratio",
+        "feat_activation_elements_per_batch",
+    )
+    summary_rows: list[dict[str, Any]] = []
+    detail_frames: list[pd.DataFrame] = []
+
+    for feature in focus_features:
+        mask = ablation_frame["dropped_features"].fillna("").astype(str).str.contains(feature, regex=False)
+        feature_rows = ablation_frame[mask].copy()
+        if feature_rows.empty:
+            continue
+
+        positive_rows = feature_rows[feature_rows["test_mape_delta_vs_baseline"] > 0].copy()
+        evidence_rows = positive_rows if not positive_rows.empty else feature_rows
+        best_row = evidence_rows.sort_values("test_mape_delta_vs_baseline", ascending=False).iloc[0]
+        supporting_groups = sorted(positive_rows["model_group"].unique().tolist() if not positive_rows.empty else feature_rows["model_group"].unique().tolist())
+
+        summary_rows.append(
+            {
+                "feature": feature,
+                "rows": int(len(feature_rows)),
+                "positive_rows": int(len(positive_rows)),
+                "supporting_groups": _sanitize_list(supporting_groups),
+                "supporting_group_count": int(len(supporting_groups)),
+                "best_group": best_row["model_group"],
+                "best_variant": best_row["variant"],
+                "best_delta_vs_baseline": float(best_row["test_mape_delta_vs_baseline"]),
+                "mean_positive_delta": float(positive_rows["test_mape_delta_vs_baseline"].mean()) if not positive_rows.empty else float(best_row["test_mape_delta_vs_baseline"]),
+                "median_positive_delta": float(positive_rows["test_mape_delta_vs_baseline"].median()) if not positive_rows.empty else float(best_row["test_mape_delta_vs_baseline"]),
+                "worst_delta_vs_baseline": float(feature_rows["test_mape_delta_vs_baseline"].min()),
+            }
+        )
+
+        detail_frames.append(
+            feature_rows.assign(feature=feature)[
+                [
+                    "feature",
+                    "model_group",
+                    "variant",
+                    "dropped_features",
+                    "test_mape",
+                    "test_mape_delta_vs_baseline",
+                ]
+            ]
+        )
+
+    summary_frame = pd.DataFrame(summary_rows)
+    if not summary_frame.empty:
+        summary_frame = summary_frame.sort_values(
+            ["best_delta_vs_baseline", "mean_positive_delta"],
+            ascending=False,
+        ).reset_index(drop=True)
+    detail_frame = pd.concat(detail_frames, ignore_index=True) if detail_frames else pd.DataFrame(
+        columns=[
+            "feature",
+            "model_group",
+            "variant",
+            "dropped_features",
+            "test_mape",
+            "test_mape_delta_vs_baseline",
+        ]
+    )
+    if not detail_frame.empty:
+        detail_frame = detail_frame.sort_values(
+            ["feature", "test_mape_delta_vs_baseline", "model_group"],
+            ascending=[True, False, True],
+        ).reset_index(drop=True)
+    return summary_frame, detail_frame
+
+
 def _compute_longest_path(graph: dict[int, Any], duration_by_node: dict[int, float]) -> tuple[list[int], float]:
     indegree = {node_idx: len([pred for pred in node.predecessors if pred in graph]) for node_idx, node in graph.items()}
     successors: dict[int, list[int]] = defaultdict(list)
@@ -649,6 +820,11 @@ def run_platform_summary(
         "Figure 4-1 Platform and Dataset Overview",
         ylabel="count",
         color="#4C78A8",
+        audit_lines=[
+            f"single-op rows = {len(single_op_df):,}",
+            f"single-op combos = {single_op_df[['case_id', 'combo']].drop_duplicates().shape[0]:,}",
+            f"e2e full combos = {e2e_summary['combo_counts']['full_combo_count']:,}",
+        ],
     )
 
     summary = {
@@ -761,24 +937,36 @@ def run_single_op_core(
     csv_43, md_43 = write_frame_csv_md(table_4_3, tables_dir / TABLE_FILENAMES["4-3"], tables_dir / "table_4_3_single_op_optype_metrics.md", "Table 4-3 Single-op op-type metrics")
     csv_44, md_44 = write_frame_csv_md(table_4_4, tables_dir / TABLE_FILENAMES["4-4"], tables_dir / "table_4_4_single_op_representative_ops.md", "Table 4-4 Representative operator metrics")
 
+    figure_42 = table_4_2.sort_values("test_mape", ascending=False).reset_index(drop=True)
     plot_grouped_bar(
-        table_4_2[["model_group", "test_mape", "delta_mape_vs_baseline"]].rename(columns={"test_mape": "mape", "delta_mape_vs_baseline": "delta"}),
+        figure_42[["model_group", "test_mape", "delta_mape_vs_baseline"]].rename(columns={"test_mape": "mape", "delta_mape_vs_baseline": "delta"}),
         "model_group",
         ["mape", "delta"],
         figures_dir / FIGURE_FILENAMES["4-2"],
         "Figure 4-2 Single-op Group MAPE and Baseline Delta",
         ylabel="value",
         legend_labels=["test MAPE", "delta vs baseline"],
+        audit_lines=[
+            f"baseline test MAPE = {float(baseline_metrics['metrics']['test']['mape']):.6f}",
+            f"best group = {figure_42.sort_values('test_mape').iloc[0]['model_group']} ({float(figure_42.sort_values('test_mape').iloc[0]['test_mape']):.6f})",
+            f"worst group = {figure_42.iloc[0]['model_group']} ({float(figure_42.iloc[0]['test_mape']):.6f})",
+        ],
     )
 
+    figure_43 = table_4_2.sort_values("test_mae_us", ascending=False).reset_index(drop=True)
     plot_bar(
-        table_4_2,
+        figure_43,
         "model_group",
         "test_mae_us",
         figures_dir / FIGURE_FILENAMES["4-3"],
         "Figure 4-3 Single-op Group MAE",
         ylabel="MAE (us)",
         color="#F58518",
+        audit_lines=[
+            f"mean MAE = {float(figure_43['test_mae_us'].mean()):.3f} us",
+            f"worst MAE = {float(figure_43.iloc[0]['test_mae_us']):.3f} us",
+            f"baseline test MAPE = {float(baseline_metrics['metrics']['test']['mape']):.6f}",
+        ],
     )
 
     plot_bar(
@@ -789,6 +977,11 @@ def run_single_op_core(
         "Figure 4-4 Single-op Op-type MAPE",
         ylabel="MAPE",
         color="#54A24B",
+        audit_lines=[
+            f"worst op type = {table_4_3.iloc[0]['op_type']}",
+            f"top-8 coverage = {len(table_4_3.head(8))}/{len(table_4_3)} op types",
+            f"representative ops = {' / '.join(REPRESENTATIVE_OP_TYPES)}",
+        ],
     )
 
     graph_case, graph_combo = TIMELINE_CASES[0]
@@ -817,6 +1010,10 @@ def run_single_op_core(
         edges_frame,
         figures_dir / FIGURE_FILENAMES["4-5"],
         f"Figure 4-5 Representative Graph ({graph_case} / {graph_combo})",
+        audit_lines=[
+            f"chosen case = {graph_case} / {graph_combo}",
+            f"representative ops = {' / '.join(REPRESENTATIVE_OP_TYPES)}",
+        ],
     )
 
     scatter_rows: list[dict[str, Any]] = []
@@ -841,6 +1038,15 @@ def run_single_op_core(
         ax.set_xlabel("actual (us)")
         ax.set_ylabel("predicted (us)")
         ax.legend(frameon=False, fontsize=8)
+        add_audit_callout(
+            ax,
+            [
+                f"rows = {len(scatter_frame):,}",
+                f"sampled op types = {', '.join(sorted(scatter_frame['op_type'].dropna().unique().tolist()))}",
+                f"mean baseline test MAPE = {float(baseline_metrics['metrics']['test']['mape']):.6f}",
+            ],
+            loc="upper left",
+        )
         save_figure(fig, figures_dir / FIGURE_FILENAMES["4-6"])
 
     history_rows: list[dict[str, Any]] = []
@@ -861,6 +1067,11 @@ def run_single_op_core(
             "Figure 4-7 Single-op Validation Loss Curves",
             group_col="model_group",
             ylabel="validation loss",
+            audit_lines=[
+                f"model groups = {', '.join(MODEL_GROUP_ORDER)}",
+                f"best validation loss = {float(history_frame['val_loss'].min()):.6f}",
+                f"epochs tracked = {int(history_frame['epoch'].max()) + 1}",
+            ],
         )
 
     residual_rows = []
@@ -877,6 +1088,11 @@ def run_single_op_core(
             "Figure 4-8 Single-op Residual Distribution",
             ylabel="MAPE",
             color="#B279A2",
+            audit_lines=[
+                f"worst op = {residual_frame.iloc[0]['op_type']}",
+                f"median MAPE = {float(residual_frame['mape'].median()):.6f}",
+                f"tail shown = top {len(residual_frame.head(12))} op types",
+            ],
         )
 
     section_payload = {
@@ -964,6 +1180,7 @@ def run_single_op_ood(
 
     plot_frame = ood_frame.copy()
     if not plot_frame.empty:
+        plot_frame = plot_frame.sort_values("mape", ascending=False).reset_index(drop=True)
         plot_frame["label"] = plot_frame["slice_name"].map(
             {
                 "unseen_batch_size": "batch holdout",
@@ -978,24 +1195,33 @@ def run_single_op_ood(
             "Figure 4-9 Single-op OOD Slice Error",
             ylabel="MAPE",
             color="#E45756",
+            audit_lines=[
+                f"holdout batch sizes = {_sanitize_list(OOD_BATCH_HOLDS)}",
+                f"thread holdout = {OOD_NUM_THREADS_HOLD}",
+                f"slice rows = {', '.join(f'{row.slice_name}:{int(row.rows)}' for row in ood_frame.itertuples(index=False))}",
+            ],
         )
 
     if not generalization_frame.empty:
-        scheme_summary = (
-            generalization_frame.groupby(["scheme", "split"], as_index=False)["mean_mape"]
-            .mean()
-            .sort_values(["scheme", "split"])
+        test_reference = generalization_frame[generalization_frame["split"] == "test"].copy()
+        test_pivot = test_reference.pivot(index="family", columns="scheme", values="mean_mape").sort_index()
+        family_order = test_pivot.mean(axis=1).sort_values(ascending=False).index.tolist()
+        test_pivot = test_pivot.loc[family_order]
+        plot_grouped_bar(
+            test_pivot.reset_index(),
+            "family",
+            [col for col in ("leave_one_case_out", "leave_one_combo_out") if col in test_pivot.columns],
+            figures_dir / FIGURE_FILENAMES["4-10"],
+            "Figure 4-10 Analytical Generalization Reference",
+            ylabel="mean MAPE",
+            legend_labels=["leave-one-case-out", "leave-one-combo-out"],
+            audit_lines=[
+                f"test rows = {len(test_reference):,}",
+                f"families = {len(test_pivot):,}",
+                f"best family = {test_pivot.mean(axis=1).idxmin()}",
+                f"worst family = {test_pivot.mean(axis=1).idxmax()}",
+            ],
         )
-        plt = _import_pyplot()
-        fig, ax = plt.subplots(figsize=(10, 5))
-        for scheme, sub in scheme_summary.groupby("scheme"):
-            ax.plot(sub["split"], sub["mean_mape"], marker="o", linewidth=1.5, label=scheme)
-        ax.set_title("Figure 4-10 Analytical Generalization Reference")
-        ax.set_xlabel("split")
-        ax.set_ylabel("mean MAPE")
-        ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
-        ax.legend(frameon=False)
-        save_figure(fig, figures_dir / FIGURE_FILENAMES["4-10"])
 
     payload = {
         "tables": {
@@ -1032,57 +1258,77 @@ def run_single_op_ablation(
         _write_summary_bundle(section_dir, "single_op_ablation", payload)
         return SectionResult(name="single_op_ablation", outputs=payload)
 
-    baseline_rows = ablation_frame[ablation_frame["variant"] == "(baseline)"].copy()
-    variant_rows = ablation_frame[ablation_frame["variant"] != "(baseline)"].copy()
-    table_4_7 = ablation_frame.sort_values(["model_group", "test_mape_delta_vs_baseline"]).reset_index(drop=True)
-    csv_47, md_47 = write_frame_csv_md(table_4_7, tables_dir / TABLE_FILENAMES["4-7"], tables_dir / "table_4_7_single_op_ablation_summary.md", "Table 4-7 Single-op Ablation Summary")
+    feature_summary_frame, feature_detail_frame = _build_ablation_feature_focus(ablation_frame)
+    csv_47, md_47 = write_frame_csv_md(
+        feature_summary_frame,
+        tables_dir / TABLE_FILENAMES["4-7"],
+        tables_dir / "table_4_7_single_op_ablation_summary.md",
+        "Table 4-7 Important Feature Ablation Summary",
+    )
+    detail_csv, detail_md = write_frame_csv_md(
+        feature_detail_frame,
+        tables_dir / "table_4_7_single_op_ablation_details.csv",
+        tables_dir / "table_4_7_single_op_ablation_details.md",
+        "Table 4-7b Important Feature Ablation Details",
+    )
 
-    pivot = variant_rows.pivot_table(
-        index="variant",
+    heatmap_frame = feature_detail_frame[feature_detail_frame["test_mape_delta_vs_baseline"] > 0].copy()
+    pivot = heatmap_frame.pivot_table(
+        index="feature",
         columns="model_group",
         values="test_mape_delta_vs_baseline",
-        aggfunc="mean",
+        aggfunc="max",
     ).fillna(0.0)
+    ordered_columns = [group for group in MODEL_GROUP_ORDER if group in pivot.columns]
+    if ordered_columns:
+        pivot = pivot[ordered_columns]
     if not pivot.empty:
         plot_heatmap(
             pivot,
             figures_dir / FIGURE_FILENAMES["4-16"],
-            "Figure 4-16 Ablation Delta MAPE",
+            "Figure 4-16 Important Feature Sensitivity Heatmap",
             xlabel="model group",
-            ylabel="variant",
+            ylabel="feature",
+            audit_lines=[
+                f"important features = {len(feature_summary_frame):,}",
+                f"positive evidence rows = {len(heatmap_frame):,}",
+                f"strongest feature = {feature_summary_frame.iloc[0]['feature'] if not feature_summary_frame.empty else 'n/a'}",
+            ],
         )
 
-    group_best = (
-        variant_rows.sort_values(["model_group", "test_mape_delta_vs_baseline"])
-        .groupby("model_group", as_index=False)
-        .first()
-    )
-    if not group_best.empty:
+    if not feature_summary_frame.empty:
+        plot_grouped_bar(
+            feature_summary_frame.sort_values("best_delta_vs_baseline", ascending=False).reset_index(drop=True),
+            "feature",
+            ["positive_rows", "supporting_group_count"],
+            figures_dir / FIGURE_FILENAMES["4-17"],
+            "Figure 4-17 Important Feature Evidence Coverage",
+            ylabel="count",
+            legend_labels=["positive rows", "supporting groups"],
+            audit_lines=[
+                f"feature rows = {len(feature_summary_frame):,}",
+                f"best feature = {feature_summary_frame.iloc[0]['feature']}",
+                f"most groups = {int(feature_summary_frame['supporting_group_count'].max())}",
+            ],
+        )
+
+    if not feature_summary_frame.empty:
         plot_bar(
-            group_best,
-            "model_group",
-            "test_mape_delta_vs_baseline",
+            feature_summary_frame.sort_values("best_delta_vs_baseline", ascending=False).reset_index(drop=True),
+            "feature",
+            "best_delta_vs_baseline",
             figures_dir / FIGURE_FILENAMES["4-19"],
-            "Figure 4-19 Best Ablation Improvement",
+            "Figure 4-19 Best Important Feature Improvement",
             ylabel="delta MAPE vs baseline",
             color="#54A24B",
-        )
-
-    if not variant_rows.empty:
-        variant_rows = variant_rows.copy()
-        variant_rows["feature_count_drop"] = variant_rows["dropped_feature_count"].astype(int)
-        plot_grouped_bar(
-            variant_rows.head(min(12, len(variant_rows))).assign(label=lambda frame: frame["model_group"] + " / " + frame["variant"]),
-            "label",
-            ["test_mape", "test_mape_delta_vs_baseline"],
-            figures_dir / FIGURE_FILENAMES["4-17"],
-            "Figure 4-17 Ablation Absolute and Delta MAPE",
-            ylabel="MAPE",
-            legend_labels=["test MAPE", "delta vs baseline"],
+            audit_lines=[
+                f"best improvement = {float(feature_summary_frame.iloc[0]['best_delta_vs_baseline']):.6f}",
+                f"focus features = {', '.join(feature_summary_frame['feature'].astype(str).tolist())}",
+            ],
         )
 
     payload = {
-        "tables": {"4-7": str(csv_47)},
+        "tables": {"4-7": str(csv_47), "4-7-details": str(detail_csv)},
         "figures": {
             "4-16": str(figures_dir / FIGURE_FILENAMES["4-16"]),
             "4-17": str(figures_dir / FIGURE_FILENAMES["4-17"]),
@@ -1091,6 +1337,9 @@ def run_single_op_ablation(
         "summary": {
             "rows": int(len(ablation_frame)),
             "model_groups": list(sorted(ablation_frame["model_group"].unique().tolist())),
+            "important_features": feature_summary_frame["feature"].astype(str).tolist(),
+            "important_feature_rows": int(len(feature_summary_frame)),
+            "positive_evidence_rows": int(len(heatmap_frame)),
         },
     }
     _write_summary_bundle(section_dir, "single_op_ablation", payload)
@@ -1163,6 +1412,12 @@ def run_e2e_core(
         figures_dir / FIGURE_FILENAMES["4-11"],
         "Figure 4-11 E2E Predicted vs Actual",
         hue=None,
+        audit_lines=[
+            f"full combos = {len(full_metrics):,}",
+            f"full-graph MAPE = {float(summary['full_graph_metrics']['mape']):.6f}",
+            f"p95 APE = {float(summary['full_graph_metrics']['p95_ape']):.6f}",
+            f"worst combo = {summary['full_graph_metrics']['worst_combo']['case_id']} / {summary['full_graph_metrics']['worst_combo']['combo']}",
+        ],
     )
 
     heatmap = grouped.pivot(index="batch_size", columns="inter_threads", values="mean_mape").sort_index()
@@ -1173,6 +1428,11 @@ def run_e2e_core(
             "Figure 4-12 E2E Mean MAPE by Batch Size and inter_threads",
             xlabel="inter_threads",
             ylabel="batch_size",
+            audit_lines=[
+                f"mean MAPE range = {float(heatmap.min().min()):.6f}..{float(heatmap.max().max()):.6f}",
+                f"batch sizes = {len(heatmap.index):,}",
+                f"inter_threads = {len(heatmap.columns):,}",
+            ],
         )
 
     distribution = grouped.groupby("inter_threads", as_index=False).agg(mean_mape=("mean_mape", "mean"), p95_ape=("p95_ape", "mean"))
@@ -1185,6 +1445,11 @@ def run_e2e_core(
             "Figure 4-13 E2E Error Distribution by inter_threads",
             ylabel="value",
             legend_labels=["mean MAPE", "p95 APE"],
+            audit_lines=[
+                f"inter_threads=1 mean MAPE = {float(distribution.iloc[0]['mean_mape']):.6f}",
+                f"best mean MAPE = {float(distribution['mean_mape'].min()):.6f}",
+                f"rows = {int(len(full_metrics)):,}",
+            ],
         )
 
     payload = {
@@ -1484,6 +1749,16 @@ def run_timeline_cases(
                 ax.set_yticks([])
                 ax.set_title(f"{case_id} / {combo}")
                 ax.grid(True, axis="x", alpha=0.25, linewidth=0.6)
+                case_summary = next(row for row in summary_rows if row["case_id"] == case_id and row["combo"] == combo)
+                add_audit_callout(
+                    ax,
+                    [
+                        f"predicted = {case_summary['predicted_full_graph_us'] / 1_000_000:.3f} s",
+                        f"actual = {case_summary['actual_full_graph_us'] / 1_000_000:.3f} s",
+                        f"APE = {case_summary['ape']:.3f}",
+                    ],
+                    loc="upper left",
+                )
             axes[-1].set_xlabel("time (us)")
             save_figure(fig, figures_dir / FIGURE_FILENAMES["4-14"])
 
@@ -1508,6 +1783,15 @@ def run_timeline_cases(
             ax.set_ylabel("predicted duration (us)")
             ax.tick_params(axis="x", rotation=25)
             ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+            add_audit_callout(
+                ax,
+                [
+                    f"cases = {len(summary_rows)}",
+                    f"worst APE = {max(row['ape'] for row in summary_rows):.3f}",
+                    f"critical path nodes = {critical_plot['step'].max() + 1 if not critical_plot.empty else 0}",
+                ],
+                loc="upper right",
+            )
             save_figure(fig, figures_dir / FIGURE_FILENAMES["4-15"])
 
     payload = {
@@ -1525,10 +1809,34 @@ def run_timeline_cases(
 def build_figures_catalog(output_root: Path | None = None) -> SectionResult:
     layout = ensure_output_layout(output_root)
     rows = []
+    figure_claims = {
+        "4-1": ("platform", "data scale and coverage"),
+        "4-2": ("single-op core", "group-level accuracy and baseline delta"),
+        "4-3": ("single-op core", "group-level MAE ranking"),
+        "4-4": ("single-op core", "operator-type error ranking"),
+        "4-5": ("single-op core", "representative graph structure"),
+        "4-6": ("single-op core", "scatter audit of representative op predictions"),
+        "4-7": ("single-op core", "training stability audit"),
+        "4-8": ("single-op core", "residual tail audit"),
+        "4-9": ("single-op OOD", "OOD slice holdout audit"),
+        "4-10": ("single-op OOD", "generalization reference audit"),
+        "4-11": ("e2e core", "full-graph predicted vs actual audit"),
+        "4-12": ("e2e core", "batch/inter_threads heatmap audit"),
+        "4-13": ("e2e core", "inter_threads distribution audit"),
+        "4-14": ("timeline", "timeline replay audit"),
+        "4-15": ("timeline", "critical path audit"),
+        "4-16": ("ablation", "feature-drop delta heatmap"),
+        "4-17": ("ablation", "feature-drop delta ranking"),
+        "4-18": ("e2e baseline", "simple-sum vs static scheduler audit"),
+        "4-19": ("ablation", "best ablation improvement ranking"),
+    }
     for figure_no, filename in FIGURE_FILENAMES.items():
+        stage, claim = figure_claims.get(figure_no, ("unknown", ""))
         rows.append(
             {
                 "figure_no": figure_no,
+                "stage": stage,
+                "claim": claim,
                 "filename": filename,
                 "path": str(layout["figures"] / filename),
             }
@@ -1599,6 +1907,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         f"- 表 4-5 汇总静态调度器在 `v1_300_iter_quick_nodrop` 上的主指标。",
         f"- 图 4-11 到图 4-13 给出预测-真实散点、batch/inter_threads 分组热力图与误差分布。",
         f"- 图 4-14 与图 4-15 来自典型时间线与关键路径导出。",
+        f"- 图目录现在额外记录 stage/claim 字段，方便把图当作同一条证据链来读。",
         "",
         f"- E2E 结果摘要：full_graph MAPE = {e2e_metrics.get('full_graph_metrics', {}).get('mape', 0.0):.6f}, worst combo = {e2e_metrics.get('full_graph_metrics', {}).get('worst_combo', {}).get('case_id', 'n/a')} / {e2e_metrics.get('full_graph_metrics', {}).get('worst_combo', {}).get('combo', 'n/a')}.",
         f"- 简单求和基线审计：static scheduler 在 {sum_baseline_metrics.get('static_better_count', 0)}/{sum_baseline_metrics.get('rows', 0)} 个 full combo 上优于 simple sum，胜率 {sum_baseline_metrics.get('static_better_rate', 0.0):.1%}，平均 APE 差值 {sum_baseline_metrics.get('mean_ape_gap', 0.0):.6f}。",
@@ -1608,10 +1917,10 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "## 4.4 消融实验与误差分析",
         "",
         f"- 表 4-6 汇总简单求和基线与静态调度器的差异。",
-        f"- 表 4-7 汇总单算子特征消融实验结果。",
-        f"- 图 4-16、图 4-17、图 4-18、图 4-19 分别对应特征消融热图、增量误差、求和基线与最佳消融结果。",
+        f"- 表 4-7 现在聚焦四个高信号特征：`feat_output_elements_per_batch / feat_output_elements_per_lookup / feat_output_input_bytes_ratio / feat_activation_elements_per_batch`。",
+        f"- 图 4-16、图 4-17、图 4-18、图 4-19 分别对应重要特征敏感性、证据覆盖、求和基线与最强特征改善幅度。",
         "",
-        f"- 总体消融样本数：{ablation_summary.get('summary', {}).get('rows', len(ablation_rows))}。",
+        f"- 重要特征条目数：{ablation_summary.get('summary', {}).get('important_feature_rows', len(ablation_rows))}，正向证据行数：{ablation_summary.get('summary', {}).get('positive_evidence_rows', 0)}。",
         "",
         "## 4.5 本章小结",
         "",
