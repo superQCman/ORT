@@ -169,7 +169,7 @@
 
 ## 4.4 消融实验与误差分析
 
-前两节给出了主结果，本节进一步解释这些结果来自哪里。为此，本文采用逐步加组件的方式比较四个核心变体：`Analytical + simple add`、`Analytical + pipeline`、`Analytical + single MLP + simple add` 和 `Analytical + single MLP + pipeline`。这种设计能够直接回答两个问题：整图精度的提升究竟来自更好的节点级预测，还是来自更合理的整图聚合；以及当前误差尾部主要由哪些样本构成。
+前两节给出了单算子建模与整图聚合的主要结果，本节进一步通过消融实验分析这些结果的来源。为识别节点级预测能力与整图聚合机制对最终精度的相对贡献，本文采用逐步引入组件的方式，比较 `Analytical + simple add`、`Analytical + pipeline`、`Analytical + single MLP + simple add` 和 `Analytical + single MLP + pipeline` 四个变体。该实验设计旨在区分整图精度改善主要来源于节点级预测误差的降低，还是来源于静态流水线聚合对执行结构的更准确刻画；同时，也为后续误差尾部样本的来源分析提供参照。
 
 ### 4.4.1 关键组件的作用
 

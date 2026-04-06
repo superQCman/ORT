@@ -2726,7 +2726,7 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         else "表 4-4 和图 4-4 展示了五类算子的误差差异。总体上，视图/元数据类和布局搬移类更容易预测，因为其执行路径较稳定；索引访存类和轻计算-访存混合类误差相对更大，主要原因是它们更容易受到随机访存、线程调度和小张量固定开销的影响。这种类别差异与第三章中对 ORT CPU kernel 机制的分析是一致的，也说明统一 MLP 难以同时覆盖这几类机理差异显著的节点。"
     )
     ablation_intro = (
-        "这一节保留与主实验一致的逐步加组件消融思路，但在新构造的 single-only 版本里去掉 grouped MLP，仅比较四个变体：`Analytical model + Simple add`、`Analytical model + pipeline`、`single MLP + Simple add` 和 `single MLP + pipeline`。这样的设计主要回答三个问题：解析模型本身能做多好、仅将整图聚合从 simple add 换成 pipeline 能带来多少收益，以及统一 single MLP 接入静态流水线后能把整图误差进一步压到什么水平。"
+        "前两节给出了单算子建模与整图聚合的主要结果，本节进一步通过消融实验分析这些结果的来源。为识别节点级预测能力与整图聚合机制对最终精度的相对贡献，本文采用逐步引入组件的方式，比较 `Analytical + simple add`、`Analytical + pipeline`、`Analytical + single MLP + simple add` 和 `Analytical + single MLP + pipeline` 四个变体。该实验设计旨在区分整图精度改善主要来源于节点级预测误差的降低，还是来源于静态流水线聚合对执行结构的更准确刻画；同时，也为后续误差尾部样本的来源分析提供参照。"
         if single_only_mode
         else "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造六个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用 `Analytical model + pipeline`；第三组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第四组使用 `grouped MLP + Simple add`；第五组使用 `single MLP + pipeline`；第六组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答五个问题：解析模型本身能做多好、仅将整图聚合从 simple add 换成 pipeline 能带来多少收益、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。"
     )

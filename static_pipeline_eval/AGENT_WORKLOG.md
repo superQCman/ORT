@@ -1305,3 +1305,30 @@ Validation run:
 
 Open risks:
 - This pass only tightened the wording in Section `4.3.3`; nearby subsections may still need a final tone-unification pass if the whole section is to read fully uniform.
+
+### 2026-04-06 - Tighten the ablation-section lead-in for Section 4.4
+
+Request summary:
+- Rewrite the opening paragraph of Section `4.4` in the Chapter 4 single-only draft so it reads more like academic prose.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced the earlier conversational lead-in of Section `4.4` with a more formal ablation-design description that:
+  - links the section back to the main results
+  - states the identification goal of the ablation
+  - enumerates the four single-only variants
+  - explains that the design separates node-level prediction gains from aggregation-structure gains
+- Updated the shared draft template so future regenerations preserve the revised academic phrasing.
+
+Validation run:
+- Re-read the updated Section `4.4` opening paragraph in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Re-read the corresponding `ablation_intro` template text in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Open risks:
+- Only the lead-in paragraph of Section `4.4` was revised in this pass; the subsection bodies may still benefit from a later full tone-unification pass.
