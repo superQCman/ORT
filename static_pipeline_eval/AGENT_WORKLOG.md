@@ -57,6 +57,24 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Replace timeline span wording with Chinese academic phrasing
+
+Request summary:
+- Replace the English term `span` in the Chapter 4 single-only draft with fully Chinese academic wording.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Replaced “时间线 span” with “对应时间线中整图执行起始时刻与结束时刻之差” in the data/label description.
+
+Validation run:
+- Re-read the updated sentence in Section 4.1.2 to ensure the replacement stays precise and reads naturally in the surrounding paragraph.
+
+Open risks:
+- Similar mixed Chinese-English performance terms may still remain elsewhere in the draft and can be normalized in a later terminology pass if needed.
+
 ### 2026-04-06 - Add textual references for Figures 4-1 and 4-2
 
 Request summary:
