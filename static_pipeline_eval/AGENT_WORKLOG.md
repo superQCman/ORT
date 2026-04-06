@@ -57,6 +57,26 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Fix inline figure paths for markdown preview
+
+Request summary:
+- Fix the embedded figures in the Chapter 4 single-only draft because the images could not be opened in the markdown preview.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Replaced all inline image paths in the Chapter 4 single-only draft from absolute filesystem paths to markdown-relative paths under:
+  - `artifacts/latest/chapter4_cpu_single_only/figures/...`
+- Kept figure order, captions, and surrounding narrative unchanged.
+
+Validation run:
+- Verified that all embedded figure references now use relative paths from the draft location, which is compatible with common IDE markdown preview behavior.
+
+Open risks:
+- If a later export tool requires repository-root-relative or HTML-based image handling, the current relative-path embedding may need a format-specific adjustment.
+
 ### 2026-04-06 - Embed Chapter 4 single-only figures into the draft body
 
 Request summary:
