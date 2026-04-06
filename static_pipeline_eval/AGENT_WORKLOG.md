@@ -57,6 +57,27 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Tighten Chapter 4 single-only draft tone for academic writing
+
+Request summary:
+- Refine the wording of the Chapter 4 single-only draft so it reads less conversational and more academically rigorous.
+- Preserve the existing evidence chain and metrics while removing oral-style transitions and overly informal emphasis.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Replaced conversational transitions such as “换言之”, “也就是说”, “可以看到”, and similar oral-style framing with more formal academic connective phrasing.
+- Tightened several analytical paragraphs so conclusions are stated as evidence-based inferences rather than spoken-style commentary.
+- Preserved all metrics, section structure, and experimental conclusions from the prior single-only draft revision.
+
+Validation run:
+- Re-read the full draft after editing to check for remaining conversational markers and ensure the revised wording stayed consistent with the cited artifact metrics.
+
+Open risks:
+- The draft is now more formal in tone, but final thesis-level polishing may still require alignment with the surrounding chapters’ writing style to ensure full document consistency.
+
 ### 2026-04-06 - Rewrite Chapter 4 single-only draft into thesis-style narrative
 
 Request summary:
