@@ -4,6 +4,10 @@
 
 本章围绕 ORT 上的 DLRM CPU 推理过程展开实验，目标是验证第三章提出的两级建模思路是否能够在真实推理负载上成立：第一步预测单算子时延，第二步利用静态流水线模型将节点级预测聚合为整图时延。与只关注单节点回归不同，本章更关心两个问题：其一，静态特征能否稳定刻画算子级执行代价；其二，在 branch-parallel 执行存在显著并行重叠的前提下，节点级预测能否进一步恢复整图关键路径。
 
+![图 4-1 单算子数据采集与建模流程](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_1_platform_dataset_overview.png)
+
+图 4-1 单算子数据采集与建模流程。
+
 ### 4.1.1 实验平台
 
 实验平台为 Kunpeng-920 服务器。虽然整机提供更大的计算资源，但本文统一采用单 NUMA 执行域，以避免跨 NUMA 干扰带来的额外不确定性。对应执行域包含 24 个物理核心、24 MiB 共享 L3 以及 4 个 DDR4-2933 内存通道。实验过程中固定 `intra-op` 与 `inter-op` 线程配置，并保持 ORT 推理图、线程绑定方式和采样流程一致，从而保证不同样本之间的可比性。
@@ -25,6 +29,10 @@
 
 单算子标签取自 ORT profiling 中的算子级时延。为减弱冷启动扰动，每个样本均丢弃最早的一个 profile batch，再对剩余 batch 的同名节点求均值，得到 `label_operator_actual_dur_us`。整图真值采用与之对应的时间线 span，同样丢弃首个 batch 后求均值。这样处理的目的，是尽可能使单算子标签与整图标签遵循一致的统计口径。
 
+![图 4-2 整图时间线聚合与静态排程流程](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_2_single_op_group_metrics.png)
+
+图 4-2 整图时间线聚合与静态排程流程。
+
 ### 4.1.3 数据划分与评价指标
 
 为避免同一组合配置同时出现在训练集与测试集，本文按 `sample_group=combo` 做 `7:2:1` 划分，实际样本数为 train/val/test = `137,160 / 38,880 / 19,860`。此外，本文额外构造两类外推测试：一类保留 batch size `1856|1920|1984|2016|2048` 作为未见 shape 配置，另一类仅保留 `num_threads=3` 作为未见线程数配置，用于观察模型跨配置泛化能力。
@@ -41,11 +49,19 @@
 
 与解析基线相比，统一 single MLP 在完整测试集上的 `MAPE` 为 0.0759，`R^2` 为 0.9854，表明在共享 30 维特征池的条件下，模型能够较稳定地恢复节点时延的主导趋势。图 4-3 中多数样本分布在 `y=x` 参考线附近，进一步表明该模型可以作为整图聚合的有效输入。由此可见，本节实验的重点并不在于追求接近零误差的单算子预测，而在于验证静态特征是否能够将节点级误差控制在整图建模可接受的范围内。
 
+![图 4-3 单算子预测值与真实值对比](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_3_single_op_group_baseline_compare.png)
+
+图 4-3 单算子预测值与真实值对比。
+
 ### 4.2.2 分类别误差分析
 
 表 4-4 与图 4-4 进一步展示了五类算子的误差差异。其中，`view/meta` 与 `layout move` 两类算子最容易预测，其 `MAPE` 分别为 0.0535 和 0.0645；`Gather` 的 `MAPE` 为 0.0743；`light compute-mem` 与 `compute dominant` 的误差相对更高，分别为 0.0972 和 0.1087。该结果与第三章给出的机理分析一致。
 
 一方面，视图/元数据算子和布局搬移算子的执行路径相对稳定，性能主要由张量形状和数据搬移规模决定，因此更容易被静态特征捕获。另一方面，`Gather` 依赖随机访存，`ReduceSum`、`Relu` 等混合类算子同时受到线程调度与访存行为影响，而 `Gemm/MatMul` 在小维度条件下又存在微核利用率不足的问题，这些因素都会增加误差离散度。因此，类别差异不宜视为实验噪声，而应理解为 ORT CPU kernel 执行机理在误差分布上的具体体现。
+
+![图 4-4 不同算子类别的误差差异](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_4_single_op_optype_metrics.png)
+
+图 4-4 不同算子类别的误差差异。
 
 ### 4.2.3 典型算子现象分析
 
@@ -53,11 +69,35 @@
 
 上述现象表明，模型误差并非完全无结构的黑盒偏差，而是能够被硬件与 kernel 行为解释的残差。这一点比单纯报告总体 `MAPE` 更具分析价值，因为它说明第三章提出的特征设计具有明确物理含义，而非依赖偶然的数据相关性。
 
+![图 4-5 Gather 代表性预测行为](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_5_single_op_representative_graph.png)
+
+图 4-5 Gather 代表性预测行为。
+
+![图 4-6 ReduceSum 误差与归约规模关系](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_6_single_op_prediction_scatter.png)
+
+图 4-6 ReduceSum 误差与归约规模关系。
+
+![图 4-7 Transpose/Concat 误差与数据规模关系](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_7_single_op_training_history.png)
+
+图 4-7 Transpose/Concat 误差与数据规模关系。
+
+![图 4-8 Gemm/MatMul 误差与 MAC 规模关系](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_8_single_op_residual_distribution.png)
+
+图 4-8 Gemm/MatMul 误差与 MAC 规模关系。
+
 ### 4.2.4 跨配置泛化能力
 
 图 4-9 和图 4-10 展示了两类外推测试结果。对于未见 batch size，模型的 `MAPE` 为 0.0689；对于未见线程数，`MAPE` 为 0.0773。两者都与随机测试集上的 0.0759 处于同一数量级，未出现显著退化，表明当前特征集合并未过度依赖某一组固定配置。
 
 相较之下，未见线程数的误差略高于未见 shape。这是因为线程数变化不仅影响理论并行度，还会影响任务切分粒度、同步开销与缓存竞争，因此其外推难度本身更高。尽管如此，当前结果仍表明统一 single MLP 在第四章所关注的配置空间内具有可接受的泛化能力，因而本章无须再引入额外模型分支来支撑主要结论。
+
+![图 4-9 未见 shape 配置上的单算子泛化结果](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_9_single_op_ood_slices.png)
+
+图 4-9 未见 shape 配置上的单算子泛化结果。
+
+![图 4-10 未见线程数配置上的单算子泛化结果](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_10_single_op_ood_generalization.png)
+
+图 4-10 未见线程数配置上的单算子泛化结果。
 
 ## 4.3 整图静态聚合结果
 
@@ -67,11 +107,19 @@
 
 表 4-5 给出了整图预测的总体结果。在 331 个完整图配置上，静态流水线模型的 `MAPE` 为 0.0647，`R^2` 为 0.9931，`P50/P90` 相对误差分别为 0.0509 和 0.1261。该结果表明，节点级误差并未在整图聚合中被放大到不可接受的程度；同时，静态聚合模型不仅能够给出接近真实值的整图 makespan，还能够较稳定地控制误差尾部。图 4-11 中大部分测试点紧贴参考线分布，也进一步支持了这一判断。因此，第三章提出的“先节点、后整图”的两级建模路径，在本组 single-only 实验中得到了实验支持。
 
+![图 4-11 整图预测值与真实值对比](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_11_e2e_predicted_vs_actual.png)
+
+图 4-11 整图预测值与真实值对比。
+
 ### 4.3.2 不同 batch size 下的稳定性
 
 图 4-12 按 batch size 给出了整图误差分布。整体来看，各个 batch size 上的 `MAPE` 大致落在 `0.03-0.10` 区间内，没有出现随 batch 增长而持续恶化的趋势。即便在误差相对较高的 `batch_size=1440` 处，其 `MAPE` 也约为 0.1000，仍处于可接受范围。
 
 这一结果表明，静态流水线模型并非仅在局部规模上有效，而是能够在不同工作集大小下保持较平滑的误差曲线。考虑到 DLRM 中 embedding lookup、分支归约和 top MLP 的张量规模都会随 batch size 改变，这种稳定性是方法成立的重要前提。
+
+![图 4-12 不同 batch size 下的整图误差分布](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_12_e2e_error_heatmap.png)
+
+图 4-12 不同 batch size 下的整图误差分布。
 
 ### 4.3.3 不同并行度下的趋势恢复能力
 
@@ -79,11 +127,23 @@
 
 据此可见，第三章中用于描述 branch 槽位竞争的静态近似是有效的。该近似并不旨在完全替代真实运行时调度，而在于捕获整图性能的主导结构；从本节结果看，这一目标已经得到实现。
 
+![图 4-13 不同并行度下的整图预测误差](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_13_e2e_error_distribution.png)
+
+图 4-13 不同并行度下的整图预测误差。
+
 ### 4.3.4 典型时间线与关键路径分析
 
 图 4-14 与图 4-15 给出了典型配置下的真实时间线、预测时间线及关键路径分解。结果显示，模型不仅能够预测整图 span，还能在较大程度上恢复 bottom、embedding branch 与 tail 之间的先后关系。少数偏差主要集中在 barrier 附近以及同步敏感节点上，表明剩余误差更多来自运行时同步与局部波动，而非整图结构本身的错误刻画。
 
 这类案例分析的价值在于，它能够从结构层面解释整图误差的来源。相较于仅报告散点图或平均误差，关键路径重放更有助于说明模型产生有效预测的原因，并界定当前尚未覆盖的误差来源。
+
+![图 4-14 典型配置的真实与预测时间线对比](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_14_timeline_cases.png)
+
+图 4-14 典型配置的真实与预测时间线对比。
+
+![图 4-15 典型配置的关键路径分解](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_15_critical_path_breakdown.png)
+
+图 4-15 典型配置的关键路径分解。
 
 ## 4.4 消融实验与剩余误差分析
 
@@ -97,11 +157,27 @@
 
 同时，对比 `Analytical + pipeline` 的 0.1389 和 `Analytical + single MLP + pipeline` 的 0.0647 可知，更准确的单算子预测仍然是必要条件。第四章的结论并非“仅依赖 pipeline 即可获得高精度整图预测”，而是“节点级学习器负责降低局部偏差，静态流水线负责将节点级预测组织为符合执行结构的整图估计”，两者缺一不可。
 
+![图 4-16 不同消融变体的误差对比](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_16_ablation_delta_bars.png)
+
+图 4-16 不同消融变体的误差对比。
+
+![图 4-17 不同消融变体的平均误差与大误差比例](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_17_ablation_delta_heatmap.png)
+
+图 4-17 不同消融变体的平均误差与大误差比例。
+
+![图 4-18 不同消融变体在并行度上的误差差异](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_18_sum_baseline_compare.png)
+
+图 4-18 不同消融变体在并行度上的误差差异。
+
 ### 4.4.2 剩余误差的来源
 
 表 4-7 与图 4-19 汇总了当前模型仍然较难处理的几类样本。第一类是大表随机访存 `Gather`，其误差来源于内存访问时延的天然波动；第二类是极小张量的视图/元数据算子，此时框架调度与 bookkeeping 开销占比较高，使得时延对形状特征更加敏感；第三类是小维度 `Gemm/MatMul`，在低利用率条件下其真实执行代价偏离了饱和计算近似；第四类是同步敏感的整图配置，局部偏差会在 tail barrier 处被放大。
 
 这些残差有一个共同点：它们都对应 ORT CPU 执行过程中较难被纯静态信息完全恢复的动态效应。因此，本章实验既证明了所提方法的有效性，也清楚界定了它的边界条件。对于论文写作而言，保留这部分分析是必要的，因为它表明本文并未夸大方法能力，而是明确指出了误差仍然集中的场景。
+
+![图 4-19 代表性误差样本汇总](/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_19_best_ablation_summary.png)
+
+图 4-19 代表性误差样本汇总。
 
 ## 4.5 本章小结
 

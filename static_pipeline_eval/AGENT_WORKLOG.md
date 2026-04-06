@@ -57,6 +57,32 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Embed Chapter 4 single-only figures into the draft body
+
+Request summary:
+- Insert all Chapter 4 single-only figures directly into the markdown draft.
+- Align each figure with the paragraph that discusses it so the text and figures can be read in sequence.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Inserted figure references and inline image embeds for all figures `4-1` through `4-19`.
+- Placed each figure immediately after the paragraph or subsection that introduces it, including:
+  - platform / workflow figures in Section 4.1
+  - single-op figures in Section 4.2
+  - E2E / timeline figures in Section 4.3
+  - ablation / error-analysis figures in Section 4.4
+- Added short caption lines below each embedded image so the figure number remains explicit inside the markdown body.
+
+Validation run:
+- Verified the draft now contains embedded images for all figure numbers `4-1` through `4-19`.
+- Re-read the updated markdown to confirm the inserted figure order matches the surrounding textual references.
+
+Open risks:
+- The markdown file is now substantially longer because all figures are embedded inline; if a later export tool has layout limitations, the chapter may need a split view or appendix-style handling for image-heavy sections.
+
 ### 2026-04-06 - Clarify case/combo terminology in Chapter 4 single-only draft
 
 Request summary:
