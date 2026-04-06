@@ -34,6 +34,13 @@ Analytical 设计文档：
 
 这里采用的是 E2E/competition 里 stage-1 baseline 的输入风格，下面这部分描述的是单一 MLP baseline 的特征合同：
 
+- 当前项目里 `train_mlp.py` 和 `run_pipeline.py` 的默认单模型超参数已经对齐到最近一轮离线实验口径：
+  - `hidden_layers = 48,48,48,48,48`
+  - `max_iter = 200`
+- 训练时真正使用的特征列仍然以数据集目录中的 `feature_columns.json` 为准。
+  - 也就是说，这里列的是通用 single-MLP baseline 合同。
+  - 如果你喂给它的是像 Chapter 4 fair single baseline 那样的定制数据集，它会按那个 manifest 中声明的特征池训练，而不是强行回退到这里这份通用表。
+
 - 类别特征
 
 | 特征 | 含义 |
@@ -310,7 +317,7 @@ python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py \
   --output-dir /tmp/single_op_stage1_model \
   --train-device npu \
   --npu-device-id 0 \
-  --hidden-layers 256,128,64 \
+  --hidden-layers 48,48,48,48,48 \
   --max-iter 200 \
   --early-stopping-patience 20
 ```

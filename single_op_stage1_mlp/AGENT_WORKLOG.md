@@ -2777,3 +2777,40 @@ Validation run:
 
 Open risks:
 - The classed MLP section is intentionally a summary rather than a full contract table; if we want all group-specific numeric feature tables duplicated here too, that would be a larger documentation expansion.
+
+### 2026-04-06 - Align default single-MLP hyperparameters with the latest low-width long-train experiment
+
+Request summary:
+- Update the default single-MLP settings inside `single_op_stage1_mlp` so they match the recently used offline experiment configuration.
+- Refresh the README so its single-MLP feature/training section reflects the new default hyperparameters and clarifies that actual training columns come from the dataset manifest.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/README.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py`
+
+Behavior changes:
+- Changed the default single-MLP hidden layers from `128,64` to `48,48,48,48,48`.
+- Changed the default single-MLP training epochs from `120` to `200`.
+- Applied the same default change in both:
+  - `train_mlp.py`
+  - `run_pipeline.py`
+- Updated the README single-MLP section so it now states:
+  - the current default single-model hyperparameters are `48x5` and `200 epochs`
+  - the effective feature contract is still driven by the dataset directory's `feature_columns.json`
+  - example single-MLP training commands now use the new default-width configuration
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/train_mlp.py /data/qc/dlrm/ORT/single_op_stage1_mlp/run_pipeline.py`
+- Parsed CLI defaults in-process and confirmed:
+  - `train_mlp.py -> hidden_layers=48,48,48,48,48, max_iter=200`
+  - `run_pipeline.py -> hidden_layers=48,48,48,48,48, max_iter=200`
+- Reviewed the updated README lines for:
+  - new default hyperparameter note
+  - `feature_columns.json` manifest note
+  - refreshed single-MLP example command
+
+Open risks:
+- This change only updates the default single-MLP hyperparameters and README wording; it does not change the generic `feature_contract.py` baseline feature list itself.
+- Existing helper scripts such as `model.sh` still contain explicit user-chosen hyperparameters and were left untouched because they are not the parser defaults.

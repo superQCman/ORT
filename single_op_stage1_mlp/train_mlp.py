@@ -38,11 +38,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--hidden-layers",
-        default="128,64",
+        default="48,48,48,48,48",
         help="Comma-separated MLP hidden sizes.",
     )
     parser.add_argument("--batch-size", type=int, default=1024)
-    parser.add_argument("--max-iter", type=int, default=120, help="Maximum training epochs.")
+    parser.add_argument("--max-iter", type=int, default=200, help="Maximum training epochs.")
     parser.add_argument("--alpha", type=float, default=1e-4, help="Weight decay used by AdamW.")
     parser.add_argument("--learning-rate-init", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
