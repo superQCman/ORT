@@ -1018,3 +1018,33 @@ Validation run:
 Open risks:
 - The quantile bins for `Gather` collapse to three effective intervals because `feat_lookup_count` has many repeated values, so the text reports the low-scale bin against the higher-scale bins instead of forcing a four-bin narrative.
 - Updating `chapter4_shared.py` changes the shared plotting behavior; if the grouped Chapter 4 package is regenerated later, Figure `4-5` there will also switch to the unified error-vs-scale style.
+
+### 2026-04-06 - Localize representative-op feature names in prose only
+
+Request summary:
+- Replace raw feature names such as `feat_lookup_count` and `feat_gemm_mac_count` in the Chapter 4 representative-operator discussion with academic Chinese wording.
+- Keep the figures themselves unchanged and only add the English/raw feature names in parentheses inside the prose.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced raw feature identifiers in the single-only draft paragraph with Chinese academic wording plus parenthesized raw names:
+  - 索引查找工作量（`feat_lookup_count`）
+  - 归约工作量（`feat_reduction_work_items`）
+  - 数据搬移字节量（`feat_io_bytes_sum`）
+  - 乘加运算量（`feat_gemm_mac_count`）
+- Updated the shared draft-generation template to use the same wording so future regenerations preserve the text convention.
+- Reverted the temporary axis-label code changes so the figures remain exactly as before.
+
+Validation run:
+- Re-read the updated Section `4.2.3` in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Reviewed the diff in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+  to confirm that only prose/template wording remains changed and figure-generation behavior is unchanged.
+
+Open risks:
+- The grouped Chapter 4 draft will only inherit the same terminology after it is regenerated from the shared template; the currently checked-in grouped draft file was not directly edited in this pass.
