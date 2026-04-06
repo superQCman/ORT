@@ -1048,3 +1048,32 @@ Validation run:
 
 Open risks:
 - The grouped Chapter 4 draft will only inherit the same terminology after it is regenerated from the shared template; the currently checked-in grouped draft file was not directly edited in this pass.
+
+### 2026-04-06 - Replace degenerate Transpose/Concat interval with non-degenerate comparison
+
+Request summary:
+- Adjust the `Transpose/Concat` quantitative sentence so it no longer compares against the degenerate `32-32` byte interval.
+- Keep the figures unchanged and only improve the prose.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced the previous `Transpose/Concat` wording that used the lowest quartile `32-32` byte bin.
+- The prose now compares the highest I/O quartile against the lower non-degenerate effective interval:
+  - `4.80×10^1-5.90×10^5`
+  - `MAPE: 0.0666 -> 0.0878`
+  - `P90 APE: 0.1342 -> 0.1827`
+- Kept the underlying data, figure, and quantile computation unchanged; only the textual comparison window was adjusted for readability.
+
+Validation run:
+- Re-read the updated `Transpose/Concat` sentence in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Reviewed the shared draft template in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+  to confirm the same prose rule is applied to future regenerations.
+
+Open risks:
+- The text now prioritizes readability over exhaustively reporting the lowest degenerate bin; if a reviewer asks about the omitted `32`-byte group explicitly, that detail may still need to be mentioned in a footnote or response.
