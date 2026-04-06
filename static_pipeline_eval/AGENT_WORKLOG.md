@@ -57,6 +57,27 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Add textual references for Figures 4-1 and 4-2
+
+Request summary:
+- Fix the Chapter 4 single-only draft so Figures 4-1 and 4-2 are explicitly referenced in the surrounding text instead of only being embedded inline.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Added an explicit sentence in Section 4.1 linking:
+  - 图 4-1 to the single-op data collection and modeling workflow
+  - 图 4-2 to the static aggregation workflow from node-level predictions to full-graph timeline recovery
+- Added a second explicit reference in the data/label paragraph so the two figures are grounded in the corresponding methodology text.
+
+Validation run:
+- Re-read the opening paragraphs of Section 4.1 to verify Figures 4-1 and 4-2 are now referenced by number in the narrative before and around their inline placement.
+
+Open risks:
+- The remaining figures already have nearby textual references, but if the chapter is later reorganized, those references should be rechecked after any section movement.
+
 ### 2026-04-06 - Insert referenced tables into Chapter 4 single-only draft
 
 Request summary:
