@@ -57,6 +57,32 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Rebalance Chapter 4 single-only narrative toward results and strengths
+
+Request summary:
+- Reduce overly defensive detail in the Chapter 4 single-only draft, especially in Section 4.2.1.
+- Shift the chapter toward result-focused analysis that highlights the method’s strengths rather than inviting reviewer attention to secondary accounting details.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Rewrote the Section 4.2.1 discussion so it now foregrounds the analytical-vs-single-MLP accuracy gap instead of dwelling on coverage-rate explanation.
+- Simplified several other sections to emphasize:
+  - category-level structure in the errors
+  - generalization strength
+  - timeline/critical-path recovery quality
+  - the dominant benefit of pipeline aggregation
+- Renamed Section 4.4 from “消融实验与剩余误差分析” to “消融实验与误差分析” to reduce defensive framing.
+- Shortened caveat-heavy wording around residual errors and reframed it as concentrated dynamic-effect cases rather than methodological vulnerability.
+
+Validation run:
+- Re-read the updated chapter sections around 4.2.1, 4.2.4, 4.3.4, 4.4, and 4.5 to confirm the revised tone remains consistent with the reported metrics and is more results-driven.
+
+Open risks:
+- The draft is now intentionally less detailed about some measurement-scope caveats; if a later reviewer explicitly asks about those accounting details, they may still need to be documented in a footnote, appendix, or response letter rather than the main narrative.
+
 ### 2026-04-06 - Replace timeline span wording with Chinese academic phrasing
 
 Request summary:
