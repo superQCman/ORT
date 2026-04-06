@@ -39,6 +39,7 @@ from .chapter4_config import (
     FAIR_SINGLE_MLP_SEED,
     CHAPTER4_DRAFT_PATH,
     CHAPTER4_OUTPUT_ROOT,
+    CHAPTER4_SINGLE_ONLY_DRAFT_PATH,
     E2E_ARTIFACT_ROOT,
     FIGURE_FILENAMES,
     MODEL_GROUP_ORDER,
@@ -56,6 +57,11 @@ from .chapter4_config import (
 class SectionResult:
     name: str
     outputs: dict[str, str]
+
+
+PREDICTION_SOURCE_GROUPED = "grouped"
+PREDICTION_SOURCE_SINGLE_FAIR = "single_fair"
+PREDICTION_SOURCE_CHOICES = (PREDICTION_SOURCE_GROUPED, PREDICTION_SOURCE_SINGLE_FAIR)
 
 
 def ensure_output_layout(output_root: Path | None = None) -> dict[str, Path]:
@@ -681,6 +687,123 @@ def ensure_fair_single_mlp_artifact(
     return payload
 
 
+def _normalize_prediction_source(prediction_source: str) -> str:
+    normalized = str(prediction_source or PREDICTION_SOURCE_GROUPED).strip().lower()
+    if normalized not in PREDICTION_SOURCE_CHOICES:
+        raise ValueError(f"Unsupported prediction_source={prediction_source!r}; expected one of {PREDICTION_SOURCE_CHOICES}")
+    return normalized
+
+
+def _prediction_source_model_name(prediction_source: str) -> str:
+    normalized = _normalize_prediction_source(prediction_source)
+    if normalized == PREDICTION_SOURCE_SINGLE_FAIR:
+        return "Single MLP"
+    return "Grouped analytical-MLP"
+
+
+def _load_model_prediction_frame(
+    output_root: Path | None,
+    *,
+    single_op_root: Path,
+    prediction_source: str,
+    test_dataset: pd.DataFrame | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_prediction_source(prediction_source)
+    if test_dataset is None:
+        dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
+        test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+
+    if normalized == PREDICTION_SOURCE_SINGLE_FAIR:
+        fair_baseline = ensure_fair_single_mlp_artifact(output_root, single_op_artifact_root=single_op_root)
+        prediction_df = fair_baseline["predictions_test"].copy()
+        metadata_columns = [
+            "row_uid",
+            "op_type",
+            "model_group",
+            "num_threads",
+            "batch_size",
+            "num_indices_per_lookup",
+            "inter_threads",
+        ]
+        metadata = test_dataset[metadata_columns].drop_duplicates("row_uid")
+        prediction_df = prediction_df.merge(metadata, on="row_uid", how="left", validate="one_to_one")
+        if "split" not in prediction_df.columns:
+            prediction_df["split"] = "test"
+        return {
+            "prediction_source": normalized,
+            "prediction_df": prediction_df,
+            "model_name": _prediction_source_model_name(normalized),
+            "model_root": str(fair_baseline["model_dir"]),
+            "feature_count": int(fair_baseline["feature_count"]),
+        }
+
+    prediction_df = load_prediction_frame(single_op_root, split="test")
+    return {
+        "prediction_source": normalized,
+        "prediction_df": prediction_df,
+        "model_name": _prediction_source_model_name(normalized),
+        "model_root": str(single_op_root / "models" / "combined"),
+        "feature_count": None,
+    }
+
+
+def _build_pipeline_combo_predictions(prediction_df: pd.DataFrame) -> pd.DataFrame:
+    combo_specs = build_combo_specs(prediction_df, ort_root=Path(DEFAULT_ORT_ROOT))
+    combo_map = {(spec.case_id, spec.combo): spec for spec in combo_specs}
+    pipeline_rows: list[dict[str, Any]] = []
+    for (case_id, combo), combo_rows in prediction_df.groupby(["case_id", "combo"]):
+        combo_spec = combo_map[(case_id, combo)]
+        graph = build_op_graph(load_op_shapes_frame(combo_spec.artifact_paths.shape_csv))
+        schedule_result = schedule_combo(combo_spec, graph, combo_rows.copy())
+        pipeline_rows.append(
+            {
+                "case_id": case_id,
+                "combo": combo,
+                "batch_size": int(combo_spec.batch_size),
+                "num_indices_per_lookup": int(combo_spec.num_indices_per_lookup),
+                "inter_threads": int(combo_spec.inter_threads),
+                "predicted_e2e_us": float(schedule_result.predicted_full_graph_us),
+            }
+        )
+    return pd.DataFrame(pipeline_rows)
+
+
+def _load_e2e_full_metrics(
+    output_root: Path | None,
+    *,
+    single_op_root: Path,
+    e2e_root: Path,
+    prediction_source: str,
+) -> pd.DataFrame:
+    normalized = _normalize_prediction_source(prediction_source)
+    if normalized == PREDICTION_SOURCE_GROUPED:
+        return pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)
+
+    dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
+    test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    prediction_bundle = _load_model_prediction_frame(
+        output_root,
+        single_op_root=single_op_root,
+        prediction_source=normalized,
+        test_dataset=test_dataset,
+    )
+    pipeline_combo = _build_pipeline_combo_predictions(prediction_bundle["prediction_df"])
+    actual_frame = pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)[
+        ["case_id", "combo", "actual_e2e_us", "batch_size", "inter_threads"]
+    ].copy()
+    full_metrics = actual_frame.merge(
+        pipeline_combo[["case_id", "combo", "predicted_e2e_us"]],
+        on=["case_id", "combo"],
+        how="left",
+        validate="one_to_one",
+    )
+    full_metrics["abs_error_us"] = (full_metrics["predicted_e2e_us"] - full_metrics["actual_e2e_us"]).abs()
+    full_metrics["ape"] = (
+        full_metrics["abs_error_us"] / full_metrics["actual_e2e_us"].replace(0.0, pd.NA)
+    ).fillna(0.0)
+    return full_metrics
+
+
 def _metric_summary(metric_rows: list[dict[str, Any]], predicted_key: str, actual_key: str) -> dict[str, Any]:
     if not metric_rows:
         return {
@@ -1258,6 +1381,7 @@ def run_single_op_core(
     single_op_artifact_root: Path | None = None,
     baseline_model_root: Path | None = None,
     e2e_artifact_root: Path | None = None,
+    prediction_source: str = PREDICTION_SOURCE_GROUPED,
 ) -> SectionResult:
     layout = ensure_output_layout(output_root)
     tables_dir = layout["tables"]
@@ -1266,6 +1390,7 @@ def run_single_op_core(
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
+    normalized_prediction_source = _normalize_prediction_source(prediction_source)
 
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     if baseline_model_root is not None:
@@ -1281,11 +1406,15 @@ def run_single_op_core(
         baseline_root = Path(fair_baseline["model_dir"])
         baseline_predictions = fair_baseline["predictions_test"]
         baseline_feature_count = int(fair_baseline["feature_count"])
-    combined_predictions = pd.read_csv(
-        single_op_root / "models" / "combined" / "combined_predictions_test.csv",
-        low_memory=False,
-    )
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    prediction_bundle = _load_model_prediction_frame(
+        output_root,
+        single_op_root=single_op_root,
+        prediction_source=normalized_prediction_source,
+        test_dataset=test_dataset,
+    )
+    selected_predictions = prediction_bundle["prediction_df"]
+    active_model_name = prediction_bundle["model_name"]
     analytical_selection = _select_best_active_analytical_features(single_op_root, split="test")
     analytical_frame = _build_best_active_analytical_frame(
         test_dataset,
@@ -1295,9 +1424,9 @@ def run_single_op_core(
         analytical_frame["label_operator_actual_dur_us"],
         analytical_frame["analytical_pred_us"],
     )
-    grouped_metrics = _compute_regression_metrics(
-        combined_predictions["target_us"],
-        combined_predictions["pred_us"],
+    active_metrics = _compute_regression_metrics(
+        selected_predictions["target_us"],
+        selected_predictions["pred_us"],
     )
     baseline_metrics = _compute_regression_metrics(
         baseline_predictions["target_us"],
@@ -1339,25 +1468,39 @@ def run_single_op_core(
         ]
     ]
 
-    table_4_3 = pd.DataFrame(
-        [
-            {
-                "model": "Analytical only (best active proxy / covered groups)",
-                **analytical_metrics,
-            },
-            {
-                "model": f"Single MLP (same split / {baseline_feature_count} features)",
-                **baseline_metrics,
-            },
-            {
-                "model": f"Grouped analytical-MLP (same split / routed subset from {baseline_feature_count} features)",
-                **grouped_metrics,
-            },
-        ]
-    )
+    if normalized_prediction_source == PREDICTION_SOURCE_SINGLE_FAIR:
+        table_4_3 = pd.DataFrame(
+            [
+                {
+                    "model": "Analytical only (best active proxy / covered groups)",
+                    **analytical_metrics,
+                },
+                {
+                    "model": f"Single MLP (same split / {baseline_feature_count} features)",
+                    **active_metrics,
+                },
+            ]
+        )
+    else:
+        table_4_3 = pd.DataFrame(
+            [
+                {
+                    "model": "Analytical only (best active proxy / covered groups)",
+                    **analytical_metrics,
+                },
+                {
+                    "model": f"Single MLP (same split / {baseline_feature_count} features)",
+                    **baseline_metrics,
+                },
+                {
+                    "model": f"Grouped analytical-MLP (same split / routed subset from {baseline_feature_count} features)",
+                    **active_metrics,
+                },
+            ]
+        )
 
     category_rows: list[dict[str, Any]] = []
-    for model_group, sub in combined_predictions.groupby("model_group"):
+    for model_group, sub in selected_predictions.groupby("model_group"):
         metrics = _compute_regression_metrics(sub["target_us"], sub["pred_us"])
         category_rows.append(
             {
@@ -1391,7 +1534,7 @@ def run_single_op_core(
         "Table 4-4 Category-wise single-op accuracy",
     )
 
-    scatter_frame = combined_predictions.copy()
+    scatter_frame = selected_predictions.copy()
     scatter_frame["actual_us"] = scatter_frame["target_us"].astype(float)
     scatter_frame["predicted_us"] = scatter_frame["pred_us"].astype(float)
     plot_scatter(
@@ -1402,8 +1545,9 @@ def run_single_op_core(
         "Figure 4-3 Single-op predicted vs. actual latency",
         audit_lines=[
             f"rows = {len(scatter_frame):,}",
-            f"MAPE = {grouped_metrics['mape']:.4f}",
-            f"R2 = {grouped_metrics['r2']:.4f}",
+            f"model = {active_model_name}",
+            f"MAPE = {active_metrics['mape']:.4f}",
+            f"R2 = {active_metrics['r2']:.4f}",
         ],
     )
 
@@ -1425,7 +1569,7 @@ def run_single_op_core(
     if not gather_frame.empty:
         gather_frame["actual_us"] = gather_frame["label_operator_actual_dur_us"].astype(float)
         gather_frame["predicted_us"] = gather_frame["ana_calib_total_us"].astype(float)
-        gather_pred = combined_predictions[combined_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
+        gather_pred = selected_predictions[selected_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
         gather_frame = gather_frame.merge(gather_pred, on="row_uid", how="left")
         gather_frame["predicted_us"] = gather_frame["pred_us"].fillna(gather_frame["predicted_us"])
         plot_scatter(
@@ -1443,7 +1587,7 @@ def run_single_op_core(
 
     reduce_frame = test_dataset[test_dataset["op_type"] == "ReduceSum"].copy()
     if not reduce_frame.empty:
-        reduce_pred = combined_predictions[combined_predictions["op_type"] == "ReduceSum"][["row_uid", "pred_us"]]
+        reduce_pred = selected_predictions[selected_predictions["op_type"] == "ReduceSum"][["row_uid", "pred_us"]]
         reduce_frame = reduce_frame.merge(reduce_pred, on="row_uid", how="left")
         reduce_frame["ape"] = (
             (reduce_frame["pred_us"].astype(float) - reduce_frame["label_operator_actual_dur_us"].astype(float)).abs()
@@ -1465,7 +1609,7 @@ def run_single_op_core(
 
     layout_frame = test_dataset[test_dataset["op_type"].isin(["Transpose", "Concat"])].copy()
     if not layout_frame.empty:
-        layout_pred = combined_predictions[combined_predictions["op_type"].isin(["Transpose", "Concat"])][["row_uid", "pred_us"]]
+        layout_pred = selected_predictions[selected_predictions["op_type"].isin(["Transpose", "Concat"])][["row_uid", "pred_us"]]
         layout_frame = layout_frame.merge(layout_pred, on="row_uid", how="left")
         layout_frame["ape"] = (
             (layout_frame["pred_us"].astype(float) - layout_frame["label_operator_actual_dur_us"].astype(float)).abs()
@@ -1487,7 +1631,7 @@ def run_single_op_core(
 
     gemm_frame = test_dataset[test_dataset["op_type"].isin(["Gemm", "MatMul"])].copy()
     if not gemm_frame.empty:
-        gemm_pred = combined_predictions[combined_predictions["op_type"].isin(["Gemm", "MatMul"])][["row_uid", "pred_us"]]
+        gemm_pred = selected_predictions[selected_predictions["op_type"].isin(["Gemm", "MatMul"])][["row_uid", "pred_us"]]
         gemm_frame = gemm_frame.merge(gemm_pred, on="row_uid", how="left")
         gemm_frame["ape"] = (
             (gemm_frame["pred_us"].astype(float) - gemm_frame["label_operator_actual_dur_us"].astype(float)).abs()
@@ -1532,8 +1676,13 @@ def run_single_op_core(
             "baseline_test_r2": float(baseline_metrics["r2"]),
             "baseline_feature_count": baseline_feature_count,
             "baseline_model_root": str(baseline_root),
-            "grouped_test_mape": float(grouped_metrics["mape"]),
-            "grouped_test_r2": float(grouped_metrics["r2"]),
+            "grouped_test_mape": float(active_metrics["mape"]) if normalized_prediction_source == PREDICTION_SOURCE_GROUPED else None,
+            "grouped_test_r2": float(active_metrics["r2"]) if normalized_prediction_source == PREDICTION_SOURCE_GROUPED else None,
+            "active_prediction_source": normalized_prediction_source,
+            "active_model_name": active_model_name,
+            "active_test_mape": float(active_metrics["mape"]),
+            "active_test_r2": float(active_metrics["r2"]),
+            "active_model_root": prediction_bundle["model_root"],
             "representative_op_types": list(REPRESENTATIVE_OP_TYPES),
             "e2e_reference_root": str(e2e_root),
         },
@@ -1547,6 +1696,7 @@ def run_single_op_ood(
     *,
     single_op_artifact_root: Path | None = None,
     ood_artifact_root: Path | None = None,
+    prediction_source: str = PREDICTION_SOURCE_GROUPED,
 ) -> SectionResult:
     layout = ensure_output_layout(output_root)
     tables_dir = layout["tables"]
@@ -1556,14 +1706,23 @@ def run_single_op_ood(
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
     ood_root = _resolve_root(ood_artifact_root, OOD_ARTIFACT_ROOT)
 
-    prediction_df = load_prediction_frame(single_op_root, split="test")
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
-    joined = prediction_df.merge(
-        dataset_df[["row_uid", "num_threads"]],
-        on="row_uid",
-        how="left",
-        validate="one_to_one",
+    test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    prediction_bundle = _load_model_prediction_frame(
+        output_root,
+        single_op_root=single_op_root,
+        prediction_source=prediction_source,
+        test_dataset=test_dataset,
     )
+    prediction_df = prediction_bundle["prediction_df"]
+    joined = prediction_df.copy()
+    if "num_threads" not in joined.columns:
+        joined = joined.merge(
+            dataset_df[["row_uid", "num_threads"]],
+            on="row_uid",
+            how="left",
+            validate="one_to_one",
+        )
     slices = []
     batch_slice = _slice_predictions(joined, batch_size=list(OOD_BATCH_HOLDS))
     thread_slice = _slice_predictions(joined, num_threads=OOD_NUM_THREADS_HOLD)
@@ -1655,6 +1814,8 @@ def run_single_op_ood(
         "summary": {
             "ood_slices": slices,
             "generalization_reference_rows": int(len(generalization_frame)),
+            "prediction_source": _normalize_prediction_source(prediction_source),
+            "model_name": prediction_bundle["model_name"],
         },
     }
     _write_summary_bundle(section_dir, "single_op_ood", payload)
@@ -1667,6 +1828,7 @@ def run_single_op_ablation(
     ablation_artifact_root: Path | None = None,
     single_op_artifact_root: Path | None = None,
     e2e_artifact_root: Path | None = None,
+    prediction_source: str = PREDICTION_SOURCE_GROUPED,
 ) -> SectionResult:
     layout = ensure_output_layout(output_root)
     tables_dir = layout["tables"]
@@ -1675,6 +1837,7 @@ def run_single_op_ablation(
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
+    normalized_prediction_source = _normalize_prediction_source(prediction_source)
     fair_baseline = ensure_fair_single_mlp_artifact(output_root, single_op_artifact_root=single_op_root)
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
@@ -1694,7 +1857,13 @@ def run_single_op_ablation(
     analytical_predictions["pred_us"] = test_dataset["ana_calib_total_us"].astype(float)
     fair_predictions = fair_baseline["predictions_test"].copy()
     fair_predictions_enriched = fair_predictions.merge(test_meta, on="row_uid", how="left")
-    combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
+    active_prediction_bundle = _load_model_prediction_frame(
+        output_root,
+        single_op_root=single_op_root,
+        prediction_source=normalized_prediction_source,
+        test_dataset=test_dataset,
+    )
+    active_predictions = active_prediction_bundle["prediction_df"].copy()
     analytical_selection = _select_best_active_analytical_features(single_op_root, split="test")
     analytical_frame = _build_best_active_analytical_frame(
         test_dataset,
@@ -1720,21 +1889,9 @@ def run_single_op_ablation(
             }
         )
     analytical_pipeline_combo = pd.DataFrame(analytical_pipeline_rows)
-    fair_combo_specs = build_combo_specs(fair_predictions_enriched, ort_root=Path(DEFAULT_ORT_ROOT))
-    fair_combo_map = {(spec.case_id, spec.combo): spec for spec in fair_combo_specs}
-    fair_pipeline_rows: list[dict[str, Any]] = []
-    for (case_id, combo), combo_rows in fair_predictions.groupby(["case_id", "combo"]):
-        combo_spec = fair_combo_map[(case_id, combo)]
-        graph = build_op_graph(load_op_shapes_frame(combo_spec.artifact_paths.shape_csv))
-        schedule_result = schedule_combo(combo_spec, graph, combo_rows.copy())
-        fair_pipeline_rows.append(
-            {
-                "case_id": case_id,
-                "combo": combo,
-                "single_mlp_pipeline_us": float(schedule_result.predicted_full_graph_us),
-            }
-        )
-    fair_pipeline_combo = pd.DataFrame(fair_pipeline_rows)
+    fair_pipeline_combo = _build_pipeline_combo_predictions(fair_predictions_enriched).rename(
+        columns={"predicted_e2e_us": "single_mlp_pipeline_us"}
+    )
 
     analytical_combo = (
         test_dataset.groupby(["case_id", "combo"], as_index=False)
@@ -1744,28 +1901,45 @@ def run_single_op_ablation(
         fair_predictions.groupby(["case_id", "combo"], as_index=False)
         .agg(single_mlp_simple_add_us=("pred_us", "sum"))
     )
-    grouped_combo = (
-        combined_predictions.groupby(["case_id", "combo"], as_index=False)
-        .agg(grouped_mlp_simple_add_us=("pred_us", "sum"))
-    )
+    grouped_combo = None
+    active_pipeline_combo = None
+    if normalized_prediction_source == PREDICTION_SOURCE_GROUPED:
+        grouped_combo = (
+            active_predictions.groupby(["case_id", "combo"], as_index=False)
+            .agg(grouped_mlp_simple_add_us=("pred_us", "sum"))
+        )
+        active_pipeline_combo = pd.DataFrame(
+            {
+                "case_id": e2e_full["case_id"],
+                "combo": e2e_full["combo"],
+                "pipeline_us": e2e_full["predicted_e2e_us"].astype(float),
+            }
+        )
     e2e_joined = (
         e2e_full.merge(analytical_combo, on=["case_id", "combo"], how="left")
         .merge(analytical_pipeline_combo, on=["case_id", "combo"], how="left")
         .merge(fair_single_combo, on=["case_id", "combo"], how="left")
-        .merge(grouped_combo, on=["case_id", "combo"], how="left")
-        .merge(fair_pipeline_combo, on=["case_id", "combo"], how="left")
+        .merge(
+            fair_pipeline_combo[["case_id", "combo", "single_mlp_pipeline_us"]],
+            on=["case_id", "combo"],
+            how="left",
+        )
     )
-    e2e_joined["pipeline_us"] = e2e_joined["predicted_e2e_us"].astype(float)
+    if grouped_combo is not None:
+        e2e_joined = e2e_joined.merge(grouped_combo, on=["case_id", "combo"], how="left")
+    if active_pipeline_combo is not None:
+        e2e_joined = e2e_joined.merge(active_pipeline_combo, on=["case_id", "combo"], how="left")
     e2e_joined["actual_us"] = e2e_joined["actual_e2e_us"].astype(float)
 
     variants = [
         ("Analytical + simple add", "analytical_simple_add_us"),
         ("Analytical + pipeline", "analytical_pipeline_us"),
         ("Analytical + single MLP + simple add", "single_mlp_simple_add_us"),
-        ("Analytical + grouped MLP + simple add", "grouped_mlp_simple_add_us"),
         ("Analytical + single MLP + pipeline", "single_mlp_pipeline_us"),
-        ("Analytical + grouped MLP + pipeline", "pipeline_us"),
     ]
+    if normalized_prediction_source == PREDICTION_SOURCE_GROUPED:
+        variants.insert(3, ("Analytical + grouped MLP + simple add", "grouped_mlp_simple_add_us"))
+        variants.append(("Analytical + grouped MLP + pipeline", "pipeline_us"))
     table_rows: list[dict[str, Any]] = []
     cdf_map: dict[str, list[float]] = {}
     gt10_rows: list[dict[str, Any]] = []
@@ -1778,10 +1952,15 @@ def run_single_op_ablation(
                 fair_predictions["target_us"],
                 fair_predictions["pred_us"],
             )
+        elif column in {"grouped_mlp_simple_add_us", "pipeline_us"}:
+            single_metrics = _compute_regression_metrics(
+                active_predictions["target_us"],
+                active_predictions["pred_us"],
+            )
         else:
             single_metrics = _compute_regression_metrics(
-                combined_predictions["target_us"],
-                combined_predictions["pred_us"],
+                fair_predictions["target_us"],
+                fair_predictions["pred_us"],
             )
         e2e_metrics = _compute_regression_metrics(e2e_joined["actual_us"], e2e_joined[column])
         ape = ((e2e_joined[column] - e2e_joined["actual_us"]).abs() / e2e_joined["actual_us"].replace(0.0, pd.NA)).fillna(0.0)
@@ -1832,6 +2011,14 @@ def run_single_op_ablation(
         ],
     )
     gt10_frame = pd.DataFrame(gt10_rows)
+    gt10_audit_lines = [
+        f"single pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + single MLP + pipeline'].iloc[0]['mean_ape']):.4f}",
+        f"analytical-only mean APE = {float(gt10_frame.iloc[0]['mean_ape']):.4f}",
+    ]
+    if normalized_prediction_source == PREDICTION_SOURCE_GROUPED:
+        gt10_audit_lines.append(
+            f"grouped pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + grouped MLP + pipeline'].iloc[0]['mean_ape']):.4f}"
+        )
     plot_grouped_bar(
         gt10_frame,
         "variant",
@@ -1840,11 +2027,7 @@ def run_single_op_ablation(
         "Figure 4-17 Mean error and >10% error rate",
         ylabel="ratio",
         legend_labels=["mean APE", ">10% rate"],
-        audit_lines=[
-            f"grouped pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + grouped MLP + pipeline'].iloc[0]['mean_ape']):.4f}",
-            f"single pipeline mean APE = {float(gt10_frame[gt10_frame['variant'] == 'Analytical + single MLP + pipeline'].iloc[0]['mean_ape']):.4f}",
-            f"analytical-only mean APE = {float(gt10_frame.iloc[0]['mean_ape']):.4f}",
-        ],
+        audit_lines=gt10_audit_lines,
     )
     inter_frame = pd.DataFrame(inter_rows).sort_values(["inter_threads", "variant"]).reset_index(drop=True)
     plot_line(
@@ -1857,7 +2040,7 @@ def run_single_op_ablation(
         ylabel="MAPE",
         audit_lines=[
             f"inter_threads = {_sanitize_list(sorted(inter_frame['inter_threads'].unique().tolist()))}",
-            "Grouped pipeline should outperform single pipeline at every branch-parallel setting.",
+            "Single-only experiment keeps every variant on the fair single MLP path." if normalized_prediction_source == PREDICTION_SOURCE_SINGLE_FAIR else "Grouped pipeline should outperform single pipeline at every branch-parallel setting.",
         ],
     )
 
@@ -1871,6 +2054,8 @@ def run_single_op_ablation(
         "summary": {
             "variant_rows": table_rows,
             "rows": int(len(e2e_joined)),
+            "prediction_source": normalized_prediction_source,
+            "model_name": active_prediction_bundle["model_name"],
         },
     }
     _write_summary_bundle(section_dir, "single_op_ablation", payload)
@@ -1881,6 +2066,8 @@ def run_e2e_core(
     output_root: Path | None = None,
     *,
     e2e_artifact_root: Path | None = None,
+    single_op_artifact_root: Path | None = None,
+    prediction_source: str = PREDICTION_SOURCE_GROUPED,
 ) -> SectionResult:
     layout = ensure_output_layout(output_root)
     tables_dir = layout["tables"]
@@ -1888,7 +2075,14 @@ def run_e2e_core(
     section_dir = layout["e2e"]
 
     e2e_root = _resolve_root(e2e_artifact_root, E2E_ARTIFACT_ROOT)
-    full_metrics = pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)
+    single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
+    normalized_prediction_source = _normalize_prediction_source(prediction_source)
+    full_metrics = _load_e2e_full_metrics(
+        output_root,
+        single_op_root=single_op_root,
+        e2e_root=e2e_root,
+        prediction_source=normalized_prediction_source,
+    )
     summary_metrics = _compute_regression_metrics(full_metrics["actual_e2e_us"], full_metrics["predicted_e2e_us"])
     full_metrics["batch_bucket"] = pd.cut(
         full_metrics["batch_size"],
@@ -1990,6 +2184,8 @@ def run_e2e_core(
             "overall": summary_metrics,
             "inter_threads_curve": inter_curve.to_dict(orient="records"),
             "batch_curve": batch_curve.to_dict(orient="records"),
+            "prediction_source": normalized_prediction_source,
+            "model_name": _prediction_source_model_name(normalized_prediction_source),
         },
     }
     _write_summary_bundle(section_dir, "e2e_core", payload)
@@ -2000,6 +2196,7 @@ def run_e2e_sum_baseline(
     output_root: Path | None = None,
     *,
     single_op_artifact_root: Path | None = None,
+    prediction_source: str = PREDICTION_SOURCE_GROUPED,
 ) -> SectionResult:
     layout = ensure_output_layout(output_root)
     tables_dir = layout["tables"]
@@ -2007,19 +2204,29 @@ def run_e2e_sum_baseline(
     section_dir = layout["e2e"]
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
+    normalized_prediction_source = _normalize_prediction_source(prediction_source)
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
     test_meta = test_dataset[["row_uid", "batch_size", "num_indices_per_lookup", "inter_threads"]].copy()
-    combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
+    selected_prediction_bundle = _load_model_prediction_frame(
+        output_root,
+        single_op_root=single_op_root,
+        prediction_source=normalized_prediction_source,
+        test_dataset=test_dataset,
+    )
+    selected_predictions = selected_prediction_bundle["prediction_df"].copy()
     fair_baseline = ensure_fair_single_mlp_artifact(output_root, single_op_artifact_root=single_op_root)
     fair_predictions = fair_baseline["predictions_test"].copy()
     fair_predictions_enriched = fair_predictions.merge(test_meta, on="row_uid", how="left")
-    e2e_frame = pd.read_csv(E2E_ARTIFACT_ROOT / "full_combo_metrics.csv", low_memory=False)
-    fair_combo_specs = build_combo_specs(fair_predictions_enriched, ort_root=Path(DEFAULT_ORT_ROOT))
-    fair_combo_map = {(spec.case_id, spec.combo): spec for spec in fair_combo_specs}
+    e2e_frame = _load_e2e_full_metrics(
+        output_root,
+        single_op_root=single_op_root,
+        e2e_root=E2E_ARTIFACT_ROOT,
+        prediction_source=normalized_prediction_source,
+    )
 
     gather_frame = test_dataset[test_dataset["op_type"] == "Gather"].copy()
-    gather_pred = combined_predictions[combined_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
+    gather_pred = selected_predictions[selected_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
     gather_frame = gather_frame.merge(gather_pred, on="row_uid", how="left")
     gather_frame["ape"] = (
         (gather_frame["pred_us"].astype(float) - gather_frame["label_operator_actual_dur_us"].astype(float)).abs()
@@ -2028,7 +2235,7 @@ def run_e2e_sum_baseline(
     gather_case = gather_frame.sort_values("ape", ascending=False).iloc[0]
 
     meta_frame = test_dataset[test_dataset["op_type"].isin(["Reshape", "Shape", "Unsqueeze", "Flatten"])].copy()
-    meta_pred = combined_predictions[combined_predictions["op_type"].isin(["Reshape", "Shape", "Unsqueeze", "Flatten"])][["row_uid", "pred_us"]]
+    meta_pred = selected_predictions[selected_predictions["op_type"].isin(["Reshape", "Shape", "Unsqueeze", "Flatten"])][["row_uid", "pred_us"]]
     meta_frame = meta_frame.merge(meta_pred, on="row_uid", how="left")
     meta_frame["ape"] = (
         (meta_frame["pred_us"].astype(float) - meta_frame["label_operator_actual_dur_us"].astype(float)).abs()
@@ -2037,7 +2244,7 @@ def run_e2e_sum_baseline(
     meta_case = meta_frame.sort_values(["label_operator_actual_dur_us", "ape"], ascending=[True, False]).iloc[0]
 
     gemm_frame = test_dataset[test_dataset["op_type"].isin(["Gemm", "MatMul"])].copy()
-    gemm_pred = combined_predictions[combined_predictions["op_type"].isin(["Gemm", "MatMul"])][["row_uid", "pred_us"]]
+    gemm_pred = selected_predictions[selected_predictions["op_type"].isin(["Gemm", "MatMul"])][["row_uid", "pred_us"]]
     gemm_frame = gemm_frame.merge(gemm_pred, on="row_uid", how="left")
     gemm_frame["ape"] = (
         (gemm_frame["pred_us"].astype(float) - gemm_frame["label_operator_actual_dur_us"].astype(float)).abs()
@@ -2046,19 +2253,9 @@ def run_e2e_sum_baseline(
     gemm_case = gemm_frame.sort_values(["feat_gemm_mac_count", "ape"], ascending=[True, False]).iloc[0]
 
     e2e_case = e2e_frame.sort_values("ape", ascending=False).iloc[0]
-    fair_pipeline_rows: list[dict[str, Any]] = []
-    for (case_id, combo), combo_rows in fair_predictions.groupby(["case_id", "combo"]):
-        combo_spec = fair_combo_map[(case_id, combo)]
-        graph = build_op_graph(load_op_shapes_frame(combo_spec.artifact_paths.shape_csv))
-        schedule_result = schedule_combo(combo_spec, graph, combo_rows.copy())
-        fair_pipeline_rows.append(
-            {
-                "case_id": case_id,
-                "combo": combo,
-                "single_mlp_pipeline_us": float(schedule_result.predicted_full_graph_us),
-            }
-        )
-    fair_pipeline_combo = pd.DataFrame(fair_pipeline_rows)
+    fair_pipeline_combo = _build_pipeline_combo_predictions(fair_predictions_enriched).rename(
+        columns={"predicted_e2e_us": "single_mlp_pipeline_us"}
+    )
     table_4_7 = pd.DataFrame(
         [
             {
@@ -2118,6 +2315,8 @@ def run_e2e_sum_baseline(
         "summary": {
             "error_rows": table_4_7.to_dict(orient="records"),
             "single_mlp_pipeline_rows": fair_pipeline_combo.to_dict(orient="records"),
+            "prediction_source": normalized_prediction_source,
+            "model_name": selected_prediction_bundle["model_name"],
         },
     }
     _write_summary_bundle(section_dir, "e2e_sum_baseline", payload)
@@ -2128,6 +2327,7 @@ def run_timeline_cases(
     output_root: Path | None = None,
     *,
     single_op_artifact_root: Path | None = None,
+    prediction_source: str = PREDICTION_SOURCE_GROUPED,
 ) -> SectionResult:
     layout = ensure_output_layout(output_root)
     tables_dir = layout["tables"]
@@ -2137,7 +2337,15 @@ def run_timeline_cases(
     timeline_dir.mkdir(parents=True, exist_ok=True)
 
     single_op_root = _resolve_root(single_op_artifact_root, SINGLE_OP_ARTIFACT_ROOT)
-    prediction_df = load_prediction_frame(single_op_root, split="test")
+    dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
+    test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    prediction_bundle = _load_model_prediction_frame(
+        output_root,
+        single_op_root=single_op_root,
+        prediction_source=prediction_source,
+        test_dataset=test_dataset,
+    )
+    prediction_df = prediction_bundle["prediction_df"]
     combo_specs = build_combo_specs(prediction_df, ort_root=Path(DEFAULT_ORT_ROOT))
     combo_map = {(spec.case_id, spec.combo): spec for spec in combo_specs}
 
@@ -2315,6 +2523,8 @@ def run_timeline_cases(
             "4-15": str(figures_dir / FIGURE_FILENAMES["4-15"]),
         },
         "summary": summary_rows,
+        "prediction_source": _normalize_prediction_source(prediction_source),
+        "model_name": prediction_bundle["model_name"],
     }
     _write_summary_bundle(section_dir, "timeline_cases", payload)
     return SectionResult(name="timelines", outputs=payload)
@@ -2362,7 +2572,7 @@ def build_figures_catalog(output_root: Path | None = None) -> SectionResult:
     return SectionResult(name="figures", outputs=payload)
 
 
-def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
+def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | None = None) -> SectionResult:
     layout = ensure_output_layout(output_root)
     single_op_summary = read_json(layout["single_op"] / "single_op_core_summary.json") if (layout["single_op"] / "single_op_core_summary.json").exists() else {}
     ood_summary = read_json(layout["single_op"] / "single_op_ood_summary.json") if (layout["single_op"] / "single_op_ood_summary.json").exists() else {}
@@ -2388,6 +2598,11 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
     ood_rows = {row["slice_name"]: row for row in ood_metrics.get("ood_slices", [])}
     e2e_overall = e2e_metrics.get("overall", {})
     ablation_rows = ablation_metrics.get("variant_rows", [])
+    active_prediction_source = str(single_op_metrics.get("active_prediction_source", PREDICTION_SOURCE_GROUPED))
+    active_model_name = str(single_op_metrics.get("active_model_name", _prediction_source_model_name(active_prediction_source)))
+    single_only_mode = active_prediction_source == PREDICTION_SOURCE_SINGLE_FAIR and not any(
+        "grouped MLP" in str(row.get("variant", "")) for row in ablation_rows
+    )
     error_rows = error_metrics.get("error_rows", [])
     pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + grouped MLP + pipeline"), None)
     single_pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + single MLP + pipeline"), None)
@@ -2404,6 +2619,37 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         if str(group).strip()
     ]
     analytical_excluded_groups_text = "/".join(analytical_excluded_groups)
+    selected_draft_path = Path(draft_path or (CHAPTER4_SINGLE_ONLY_DRAFT_PATH if single_only_mode else CHAPTER4_DRAFT_PATH))
+    single_op_intro = (
+        "本节首先给出 fair single MLP 在测试集上的总体精度，再按五类算子统计误差，并对 Gather、ReduceSum、Transpose/Concat 以及 Gemm/MatMul 的代表性行为做可视化分析。整体作图风格参考 Concorde 中“真实值-预测值关系、误差分布、典型 case 解释”的组织方式，但在本组实验里不再引入 grouped MLP 对照。"
+        if single_only_mode
+        else "本节首先给出最终分组模型在测试集上的总体精度，再按五类算子统计误差，并对 Gather、ReduceSum、Transpose/Concat 以及 Gemm/MatMul 的代表性行为做可视化分析。整体作图风格参考 Concorde 中“真实值-预测值关系、误差分布、典型 case 解释”的组织方式，但结合 DLRM 场景保留了更强的算子语义解释。"
+    )
+    section_421_text = (
+        f"表 4-3 给出了两种单算子模型口径的总体结果：纯解析模型，以及同数据同特征池重跑的 fair single MLP。当前 single MLP 使用与 grouped 特征池并集一致的 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征，在测试集上的 `MAPE` 为 {single_op_metrics.get('active_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('active_test_r2', 0.0):.4f}。纯解析模型按 analysis 套件一致的口径，在每个算子组上选取最佳 active analytical proxy 后，在 {analytical_covered_rows:,} 条可覆盖测试样本上得到 `MAPE = {single_op_metrics.get('analytical_test_mape', 0.0):.4f}`。此前若把 `ana_calib_total_us` 直接施加到全部测试样本，会把缺少 active analytical feature 的 `{analytical_excluded_groups_text}` 组也纳入比例误差，从而显著夸大 pure analytical 的总体误差；当前这部分覆盖率约为 {analytical_coverage_rate * 100.0:.1f}%。图 4-3 的散点结果显示，统一 single MLP 的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。"
+        if single_only_mode
+        else f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、同数据同特征池重跑的 single MLP，以及本文采用的分组 analytical-MLP。后两者都使用相同的 `case-combo` 划分，并共享总计 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征池，只是分组模型按算子机理做静态路由并使用对应子集。在本次选定的 `64` 宽度、`15` 轮训练设置下，分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；公平 single MLP 的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}，因此分组模型的相对误差约降低了 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；纯解析模型按 analysis 套件一致的口径，在每个算子组上选取最佳 active analytical proxy 后，在 {analytical_covered_rows:,} 条可覆盖测试样本上得到 `MAPE = {single_op_metrics.get('analytical_test_mape', 0.0):.4f}`。此前若把 `ana_calib_total_us` 直接施加到全部测试样本，会把缺少 active analytical feature 的 `{analytical_excluded_groups_text}` 组也纳入比例误差，从而显著夸大 pure analytical 的总体误差；当前这部分覆盖率约为 {analytical_coverage_rate * 100.0:.1f}%。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。"
+    )
+    section_422_text = (
+        "表 4-4 和图 4-4 展示了五类算子的误差差异。总体上，视图/元数据类和布局搬移类更容易预测，因为其执行路径较稳定；索引访存类和轻计算-访存混合类误差相对更大，主要原因是它们更容易受到随机访存、线程调度和小张量固定开销的影响。这种类别差异与第三章中对 ORT CPU kernel 机制的分析是一致的，也说明即使统一 single MLP 使用同一特征池，不同算子机理仍然会在误差分布上留下明显结构。"
+        if single_only_mode
+        else "表 4-4 和图 4-4 展示了五类算子的误差差异。总体上，视图/元数据类和布局搬移类更容易预测，因为其执行路径较稳定；索引访存类和轻计算-访存混合类误差相对更大，主要原因是它们更容易受到随机访存、线程调度和小张量固定开销的影响。这种类别差异与第三章中对 ORT CPU kernel 机制的分析是一致的，也说明统一 MLP 难以同时覆盖这几类机理差异显著的节点。"
+    )
+    ablation_intro = (
+        "这一节保留与主实验一致的逐步加组件消融思路，但在新构造的 single-only 版本里去掉 grouped MLP，仅比较四个变体：`Analytical model + Simple add`、`Analytical model + pipeline`、`single MLP + Simple add` 和 `single MLP + pipeline`。这样的设计主要回答三个问题：解析模型本身能做多好、仅将整图聚合从 simple add 换成 pipeline 能带来多少收益，以及统一 single MLP 接入静态流水线后能把整图误差进一步压到什么水平。"
+        if single_only_mode
+        else "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造六个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用 `Analytical model + pipeline`；第三组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第四组使用 `grouped MLP + Simple add`；第五组使用 `single MLP + pipeline`；第六组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答五个问题：解析模型本身能做多好、仅将整图聚合从 simple add 换成 pipeline 能带来多少收益、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。"
+    )
+    section_441_text = (
+        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了四个变体的差异。对纯解析模型而言，仅把整图聚合从 simple add 改为 pipeline 后，整图 `MAPE` 由 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f} 下降到 {analytical_pipeline_row.get('e2e_mape', 0.0) if analytical_pipeline_row else 0.0:.4f}，说明静态调度本身就能纠正简单求和对并行重叠的系统性高估。进一步引入统一 single MLP 后，在本组 single-only 实验里，`single MLP + simple add` 的整图 `MAPE` 为 {single_simple_add_row.get('e2e_mape', 0.0) if single_simple_add_row else 0.0:.4f}，而 `single MLP + pipeline` 下降到 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}。这说明在不引入 grouped MLP 的前提下，静态流水线聚合仍然是整图精度提升的关键来源。"
+        if single_only_mode
+        else f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了六个变体的差异。对纯解析模型而言，仅把整图聚合从 simple add 改为 pipeline 后，整图 `MAPE` 由 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f} 下降到 {analytical_pipeline_row.get('e2e_mape', 0.0) if analytical_pipeline_row else 0.0:.4f}，说明静态调度本身就能纠正简单求和对并行重叠的系统性高估；但由于节点级 analytical 误差仍然较大，其整体精度依旧明显落后于学习器增强版本。加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但若整图仍然简单求和，其整图误差仍然偏大；在本次选定的 `64` 宽度、`15` 轮训练设置下，single MLP 的 pipeline 版本整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 MLP 的 pipeline 版本为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低了 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。"
+    )
+    summary_text = (
+        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了 single-only 版本实验。结果表明，统一 single MLP 在随机切分单算子测试上的 `MAPE` 为 {single_op_metrics.get('active_test_mape', 0.0):.4f}`，显著优于纯解析模型；进一步把 same-split single MLP 接入同一静态流水线后，其整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}`，相较 `single MLP + simple add` 的 {single_simple_add_row.get('e2e_mape', 0.0) if single_simple_add_row else 0.0:.4f}` 进一步下降。新构造的 single-only 实验说明：即使完全去掉 grouped MLP，解析代理、统一 single MLP 与静态流水线聚合这条两级建模链路依然成立，并且整图层面的主要收益仍来自 pipeline 对并行重叠和同步边界的显式建模。"
+        if single_only_mode
+        else f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，在本次选定的 `64x15` single MLP 设定下，分组 analytical-MLP 在随机切分单算子测试上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，相比 single MLP 的 {single_op_metrics.get('baseline_test_mape', 0.0):.4f} 低约 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；进一步把 single MLP 也接入同一静态流水线后，其整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 pipeline 的整图 `MAPE` 为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低约 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%；同时，分组模型仍显著优于纯解析模型。进一步的公平对比消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。"
+    )
 
     lines = [
         "# 第四章 CPU 实验与结果分析",
@@ -2430,15 +2676,15 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.2 算子级性能建模实验",
         "",
-        "本节首先给出最终分组模型在测试集上的总体精度，再按五类算子统计误差，并对 Gather、ReduceSum、Transpose/Concat 以及 Gemm/MatMul 的代表性行为做可视化分析。整体作图风格参考 Concorde 中“真实值-预测值关系、误差分布、典型 case 解释”的组织方式，但结合 DLRM 场景保留了更强的算子语义解释。",
+        single_op_intro,
         "",
         "### 4.2.1 单算子总体预测精度",
         "",
-        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、同数据同特征池重跑的 single MLP，以及本文采用的分组 analytical-MLP。后两者都使用相同的 `case-combo` 划分，并共享总计 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征池，只是分组模型按算子机理做静态路由并使用对应子集。在本次选定的 `64` 宽度、`15` 轮训练设置下，分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；公平 single MLP 的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}，因此分组模型的相对误差约降低了 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；纯解析模型按 analysis 套件一致的口径，在每个算子组上选取最佳 active analytical proxy 后，在 {analytical_covered_rows:,} 条可覆盖测试样本上得到 `MAPE = {single_op_metrics.get('analytical_test_mape', 0.0):.4f}`。此前若把 `ana_calib_total_us` 直接施加到全部测试样本，会把缺少 active analytical feature 的 `{analytical_excluded_groups_text}` 组也纳入比例误差，从而显著夸大 pure analytical 的总体误差；当前这部分覆盖率约为 {analytical_coverage_rate * 100.0:.1f}%。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
+        section_421_text,
         "",
         "### 4.2.2 分类别预测精度",
         "",
-        "表 4-4 和图 4-4 展示了五类算子的误差差异。总体上，视图/元数据类和布局搬移类更容易预测，因为其执行路径较稳定；索引访存类和轻计算-访存混合类误差相对更大，主要原因是它们更容易受到随机访存、线程调度和小张量固定开销的影响。这种类别差异与第三章中对 ORT CPU kernel 机制的分析是一致的，也说明统一 MLP 难以同时覆盖这几类机理差异显著的节点。",
+        section_422_text,
         "",
         "### 4.2.3 典型算子预测结果分析",
         "",
@@ -2470,11 +2716,11 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.4 消融实验与误差分析",
         "",
-        "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造六个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用 `Analytical model + pipeline`；第三组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第四组使用 `grouped MLP + Simple add`；第五组使用 `single MLP + pipeline`；第六组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答五个问题：解析模型本身能做多好、仅将整图聚合从 simple add 换成 pipeline 能带来多少收益、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。",
+        ablation_intro,
         "",
         "### 4.4.1 公平对比消融结果",
         "",
-        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了六个变体的差异。对纯解析模型而言，仅把整图聚合从 simple add 改为 pipeline 后，整图 `MAPE` 由 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f} 下降到 {analytical_pipeline_row.get('e2e_mape', 0.0) if analytical_pipeline_row else 0.0:.4f}，说明静态调度本身就能纠正简单求和对并行重叠的系统性高估；但由于节点级 analytical 误差仍然较大，其整体精度依旧明显落后于学习器增强版本。加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但若整图仍然简单求和，其整图误差仍然偏大；在本次选定的 `64` 宽度、`15` 轮训练设置下，single MLP 的 pipeline 版本整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 MLP 的 pipeline 版本为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低了 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
+        section_441_text,
         "",
         "### 4.4.2 误差来源分析",
         "",
@@ -2482,15 +2728,15 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.5 本章小结",
         "",
-        f"本章首先在 {platform_metrics.get('single_op_rows', 0):,} 条单算子样本和 {platform_metrics.get('full_e2e_combos', 0):,} 个完整图配置上完成了统一实验。结果表明，在本次选定的 `64x15` single MLP 设定下，分组 analytical-MLP 在随机切分单算子测试上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，相比 single MLP 的 {single_op_metrics.get('baseline_test_mape', 0.0):.4f} 低约 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；进一步把 single MLP 也接入同一静态流水线后，其整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 pipeline 的整图 `MAPE` 为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低约 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%；同时，分组模型仍显著优于纯解析模型。进一步的公平对比消融证明：仅靠解析模型或节点时延简单求和都无法得到可接受的整图精度，而将解析代理、单算子学习器和静态流水线聚合组合起来之后，可以同时压低平均误差和尾部误差。至此，第三章提出的解析代理特征、分组单算子模型与静态整图聚合三项核心设计，都得到了实验结果的直接验证。",
+        summary_text,
         "",
-        f"本章共生成 {len(figures_catalog.get('rows', []))} 张图，全部由 `chapter4_experiments/run_all_chapter4_experiments.py` 自动复现，并写入 `{CHAPTER4_DRAFT_PATH}`。",
+        f"本章共生成 {len(figures_catalog.get('rows', []))} 张图，全部由对应 Chapter 4 runner 自动复现，并写入 `{selected_draft_path}`。",
         "",
     ]
     draft = "\n".join(lines).rstrip() + "\n"
-    CHAPTER4_DRAFT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    CHAPTER4_DRAFT_PATH.write_text(draft, encoding="utf-8")
-    return SectionResult(name="draft", outputs={"draft_path": str(CHAPTER4_DRAFT_PATH)})
+    selected_draft_path.parent.mkdir(parents=True, exist_ok=True)
+    selected_draft_path.write_text(draft, encoding="utf-8")
+    return SectionResult(name="draft", outputs={"draft_path": str(selected_draft_path)})
 
 
 def build_run_manifest(

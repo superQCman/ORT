@@ -612,3 +612,56 @@ Validation run:
 
 Open risks:
 - The legends add a little extra height above each figure; if these plots are later embedded into a tighter paper layout, the figure canvas or title spacing may need a small follow-up adjustment.
+
+### 2026-04-06 - Add a parallel Chapter 4 single-only experiment suite
+
+Request summary:
+- Reconstruct a second Chapter 4 experiment package that removes grouped MLP from the experiment flow and uses the fair single MLP everywhere instead.
+- Keep the original grouped-MLP Chapter 4 outputs untouched.
+- Provide a dedicated script that can run the single-only Chapter 4 suite, while keeping the existing single-MLP baseline trainer available for standalone runs.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_config.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_single_only_experiments.py`
+
+Behavior changes:
+- Added a new parallel output target:
+  - `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only`
+  - `ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Extended the Chapter 4 shared runners so single-op core, OOD, ablation, E2E core, representative error cases, timeline cases, and draft generation can switch prediction source between:
+  - grouped analytical-MLP
+  - fair single MLP
+- Kept the existing grouped-MLP Chapter 4 runner unchanged by default; all old scripts still point at the original `chapter4_cpu` outputs.
+- Added `run_all_chapter4_single_only_experiments.py` to reproduce a full single-only Chapter 4 package without overwriting grouped outputs.
+- In single-only mode:
+  - `Table 4-3` reports analytical vs fair single MLP only
+  - `Table 4-6` reports four variants only:
+    - `Analytical + simple add`
+    - `Analytical + pipeline`
+    - `Analytical + single MLP + simple add`
+    - `Analytical + single MLP + pipeline`
+  - the draft text automatically removes grouped-MLP-specific discussion and writes to the single-only draft path
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_single_only_experiments.py`
+- Verified new outputs were generated under:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Result snapshot:
+- Single-only single-op test:
+  - `Single MLP MAPE = 0.1190`
+  - `R^2 = 0.9706`
+- Single-only E2E pipeline:
+  - `MAPE = 0.0967`
+  - `P90 APE = 0.1788`
+- Single-only ablation keeps the analytical/simple-add and analytical/pipeline baselines, but the learning-based rows now all route through fair single MLP only.
+
+Open risks:
+- The new single-only draft rewrites the main grouped-vs-single comparison sections, but the figure filenames stay aligned with the original Chapter 4 numbering for ease of reuse; readers should distinguish them by output root, not by filename alone.
+- The standalone fair single-MLP trainer is still `run_single_op_fair_baseline.py`; the new runner orchestrates the whole Chapter 4 suite but does not replace that lower-level training entry point.

@@ -9,6 +9,12 @@ CHAPTER4_OUTPUT_ROOT = (
     DEFAULT_ORT_ROOT / "static_pipeline_eval" / "artifacts" / "latest" / "chapter4_cpu"
 )
 CHAPTER4_DRAFT_PATH = DEFAULT_ORT_ROOT / "static_pipeline_eval" / "chapter4_cpu_experiments_draft.md"
+CHAPTER4_SINGLE_ONLY_OUTPUT_ROOT = (
+    DEFAULT_ORT_ROOT / "static_pipeline_eval" / "artifacts" / "latest" / "chapter4_cpu_single_only"
+)
+CHAPTER4_SINGLE_ONLY_DRAFT_PATH = (
+    DEFAULT_ORT_ROOT / "static_pipeline_eval" / "chapter4_cpu_single_only_experiments_draft.md"
+)
 
 SINGLE_OP_ARTIFACT_ROOT = (
     DEFAULT_ORT_ROOT

@@ -10,6 +10,7 @@ refresh the CPU experiment chapter under `ORT/static_pipeline_eval`.
 chapter4_experiments/
 ├── chapter4_config.py
 ├── run_all_chapter4_experiments.py
+├── run_all_chapter4_single_only_experiments.py
 ├── run_single_op_fair_baseline.py
 ├── run_single_op_core_eval.py
 ├── run_single_op_ood_eval.py
@@ -25,6 +26,8 @@ chapter4_experiments/
 
 - Output root: `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu`
 - Draft: `ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+- Single-only output root: `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only`
+- Single-only draft: `ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
 - Single-op source: `ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_300_iter_quick_nodrop`
 - E2E source: `ORT/static_pipeline_eval/artifacts/latest/v1_300_iter_quick_nodrop`
 - OOD source: `ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization`
@@ -58,11 +61,17 @@ shared categorical features as its input contract. The current Chapter 4
 default uses a deliberately lighter `64`-wide, `15`-epoch single MLP so the
 grouped model can be contrasted against a weaker but still plausible baseline.
 
+If you want a parallel Chapter 4 package that removes every grouped-MLP result
+and recomputes the whole section with the fair single MLP only, use
+`run_all_chapter4_single_only_experiments.py`. It writes to its own output root
+and draft path, so the original grouped-MLP artifacts remain untouched.
+
 ## Usage
 
 ```bash
 cd /data/qc/dlrm/ORT/static_pipeline_eval
 python3 chapter4_experiments/run_all_chapter4_experiments.py
+python3 chapter4_experiments/run_all_chapter4_single_only_experiments.py
 python3 chapter4_experiments/run_single_op_fair_baseline.py --force-retrain
 python3 chapter4_experiments/run_all_chapter4_experiments.py --only single_op
 python3 chapter4_experiments/run_all_chapter4_experiments.py --only e2e --skip-timelines
