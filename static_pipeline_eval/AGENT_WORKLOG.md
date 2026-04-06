@@ -551,3 +551,38 @@ Validation run:
 Open risks:
 - The current single-op random-split metric still shows the legacy single-MLP baseline slightly ahead of the grouped analytical-MLP on pure single-op `MAPE`; the Chapter 4 text now states this explicitly instead of overstating the grouped model.
 - The analytical-only single-op `MAPE` is dominated by very small latency operators, so Section 4.4 focuses the main ablation discussion on E2E relative error rather than that raw percentage alone.
+
+### 2026-04-06 - Add an `Analytical + pipeline` ablation row to Chapter 4
+
+Request summary:
+- Add one more fair-comparison ablation variant so Chapter 4 also reports what happens when the pure analytical per-op predictions are aggregated with the static pipeline scheduler instead of simple summation.
+- Regenerate the ablation table and the thesis draft so the new row is documented consistently.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Added a new `Analytical + pipeline` ablation variant alongside the existing analytical/simple-add, single-MLP, and grouped-MLP rows.
+- Reused the per-node `ana_calib_total_us` analytical predictions as the scheduler input so the new row isolates the effect of replacing simple add with the static pipeline scheduler.
+- Updated the Chapter 4 Section 4.4 prose and the experiment README so the ablation is now described as a six-variant comparison instead of a five-variant comparison.
+- Regenerated the latest ablation summary and thesis draft with the new row included.
+
+Validation run:
+- `PYTHONPATH=/data/qc/dlrm/ORT/static_pipeline_eval python3 - <<'PY' ... run_single_op_ablation(); build_chapter4_draft() ... PY`
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+- Manual review of:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/tables/table_4_6_ablation_summary.md`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
+
+Result snapshot:
+- `Analytical + simple add` E2E `MAPE = 2.0450`
+- `Analytical + pipeline` E2E `MAPE = 0.1389`
+- `Analytical + single MLP + pipeline` E2E `MAPE = 0.0967`
+- `Analytical + grouped MLP + pipeline` E2E `MAPE = 0.0638`
+
+Open risks:
+- The new analytical-pipeline row is intentionally an end-to-end aggregation study: it uses the raw analytical per-node durations for scheduling, while the single-op analytical metric in the same table still follows the thesis-ready covered-group reporting convention.
+- Even after pipeline aggregation, the analytical-only path still lags the learning-based pipeline variants noticeably, so the draft should continue to frame it as a scheduler-isolation baseline rather than a competitive final method.

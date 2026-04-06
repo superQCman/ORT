@@ -40,14 +40,16 @@ The current Chapter 4 workflow keeps the Concorde-style main composition chain
 and adds a fair single-MLP comparator:
 
 1. `Analytical + simple add`
-2. `Analytical + fair single MLP + simple add`
-3. `Analytical + grouped MLP + simple add`
-4. `Analytical + fair single MLP + pipeline`
-5. `Analytical + grouped MLP + pipeline`
+2. `Analytical + pipeline`
+3. `Analytical + fair single MLP + simple add`
+4. `Analytical + grouped MLP + simple add`
+5. `Analytical + fair single MLP + pipeline`
+6. `Analytical + grouped MLP + pipeline`
 
 This keeps the paper-style ablation in Section 4.4 reproducible from one
 command while also making the single-vs-grouped MLP comparison apples-to-apples
-under the same static scheduler.
+under the same static scheduler, while isolating the gain from replacing
+analytical simple summation with the static pipeline alone.
 
 For fair single-op comparisons, `run_single_op_fair_baseline.py` rebuilds a
 single-MLP baseline on the exact same `classed_dataset_full.csv` split used by

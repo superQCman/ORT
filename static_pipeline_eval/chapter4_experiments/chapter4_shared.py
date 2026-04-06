@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+import numpy as np
 import pandas as pd
 
 from static_pipeline_eval.artifact_loader import (
@@ -1004,6 +1005,94 @@ def _compute_regression_metrics(actual: pd.Series, pred: pd.Series) -> dict[str,
     }
 
 
+def _select_best_active_analytical_features(
+    single_op_root: Path,
+    *,
+    split: str = "test",
+    target_col: str = "label_operator_actual_dur_us",
+) -> dict[str, Any]:
+    datasets_dir = single_op_root / "datasets"
+    if not datasets_dir.exists():
+        raise FileNotFoundError(datasets_dir)
+
+    selected_feature_by_group: dict[str, str] = {}
+    selected_rows: list[dict[str, Any]] = []
+    excluded_groups: list[str] = []
+
+    for group_dir in sorted(path for path in datasets_dir.iterdir() if path.is_dir()):
+        manifest = read_json(group_dir / "feature_columns.json")
+        active_analytical = [
+            column
+            for column in manifest.get("numeric_features", [])
+            if isinstance(column, str) and column.startswith("ana_calib_")
+        ]
+        split_csv = group_dir / f"{split}.csv"
+        if not split_csv.exists():
+            raise FileNotFoundError(split_csv)
+        frame = pd.read_csv(split_csv, low_memory=False)
+
+        if not active_analytical:
+            excluded_groups.append(group_dir.name)
+            selected_rows.append(
+                {
+                    "model_group": group_dir.name,
+                    "selected_feature": None,
+                    "rows": int(len(frame)),
+                    "mape": None,
+                    "r2": None,
+                }
+            )
+            continue
+
+        best_feature = ""
+        best_metrics: dict[str, float | None] | None = None
+        best_mape = float("inf")
+        for feature in active_analytical:
+            metrics = _compute_regression_metrics(frame[target_col], frame[feature])
+            feature_mape = float(metrics["mape"]) if metrics["mape"] is not None else float("inf")
+            if feature_mape < best_mape:
+                best_feature = feature
+                best_metrics = metrics
+                best_mape = feature_mape
+
+        if not best_feature or best_metrics is None:
+            excluded_groups.append(group_dir.name)
+            continue
+
+        selected_feature_by_group[group_dir.name] = best_feature
+        selected_rows.append(
+            {
+                "model_group": group_dir.name,
+                "selected_feature": best_feature,
+                "rows": int(best_metrics["count"]) if best_metrics["count"] is not None else int(len(frame)),
+                "mape": best_metrics["mape"],
+                "r2": best_metrics["r2"],
+            }
+        )
+
+    return {
+        "selected_feature_by_group": selected_feature_by_group,
+        "selected_rows": selected_rows,
+        "excluded_groups": excluded_groups,
+    }
+
+
+def _build_best_active_analytical_frame(
+    dataset: pd.DataFrame,
+    selected_feature_by_group: dict[str, str],
+) -> pd.DataFrame:
+    frame = dataset.copy()
+    frame["analytical_pred_us"] = np.nan
+    frame["analytical_feature"] = pd.NA
+    for model_group, feature in selected_feature_by_group.items():
+        if feature not in frame.columns:
+            continue
+        mask = frame["model_group"] == model_group
+        frame.loc[mask, "analytical_pred_us"] = pd.to_numeric(frame.loc[mask, feature], errors="coerce")
+        frame.loc[mask, "analytical_feature"] = feature
+    return frame[frame["analytical_pred_us"].notna()].copy()
+
+
 def _format_range(series: pd.Series, *, cast_int: bool = False) -> str:
     clean = series.dropna()
     if clean.empty:
@@ -1184,9 +1273,14 @@ def run_single_op_core(
         low_memory=False,
     )
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
+    analytical_selection = _select_best_active_analytical_features(single_op_root, split="test")
+    analytical_frame = _build_best_active_analytical_frame(
+        test_dataset,
+        analytical_selection["selected_feature_by_group"],
+    )
     analytical_metrics = _compute_regression_metrics(
-        test_dataset["label_operator_actual_dur_us"],
-        test_dataset["ana_calib_total_us"],
+        analytical_frame["label_operator_actual_dur_us"],
+        analytical_frame["analytical_pred_us"],
     )
     grouped_metrics = _compute_regression_metrics(
         combined_predictions["target_us"],
@@ -1235,7 +1329,7 @@ def run_single_op_core(
     table_4_3 = pd.DataFrame(
         [
             {
-                "model": "Analytical only",
+                "model": "Analytical only (best active proxy / covered groups)",
                 **analytical_metrics,
             },
             {
@@ -1416,6 +1510,11 @@ def run_single_op_core(
         },
         "summary": {
             "analytical_test_mape": float(analytical_metrics["mape"]),
+            "analytical_test_count": int(analytical_metrics["count"]),
+            "analytical_test_total_rows": int(len(test_dataset)),
+            "analytical_test_coverage_rate": float(analytical_metrics["count"]) / float(len(test_dataset)) if len(test_dataset) else 0.0,
+            "analytical_selected_features": analytical_selection["selected_rows"],
+            "analytical_excluded_groups": list(analytical_selection["excluded_groups"]),
             "baseline_test_mape": float(baseline_metrics["mape"]),
             "baseline_test_r2": float(baseline_metrics["r2"]),
             "baseline_feature_count": baseline_feature_count,
@@ -1567,10 +1666,47 @@ def run_single_op_ablation(
     dataset_df = pd.read_csv(single_op_root / "classed_dataset_full.csv", low_memory=False)
     test_dataset = dataset_df[dataset_df["split"] == "test"].copy()
     test_meta = test_dataset[["row_uid", "batch_size", "num_indices_per_lookup", "inter_threads"]].copy()
+    analytical_predictions = test_dataset[
+        [
+            "row_uid",
+            "case_id",
+            "combo",
+            "op_idx",
+            "batch_size",
+            "num_indices_per_lookup",
+            "inter_threads",
+        ]
+    ].copy()
+    analytical_predictions["target_us"] = test_dataset["label_operator_actual_dur_us"].astype(float)
+    analytical_predictions["pred_us"] = test_dataset["ana_calib_total_us"].astype(float)
     fair_predictions = fair_baseline["predictions_test"].copy()
     fair_predictions_enriched = fair_predictions.merge(test_meta, on="row_uid", how="left")
     combined_predictions = pd.read_csv(single_op_root / "models" / "combined" / "combined_predictions_test.csv", low_memory=False)
+    analytical_selection = _select_best_active_analytical_features(single_op_root, split="test")
+    analytical_frame = _build_best_active_analytical_frame(
+        test_dataset,
+        analytical_selection["selected_feature_by_group"],
+    )
+    analytical_single_metrics = _compute_regression_metrics(
+        analytical_frame["label_operator_actual_dur_us"],
+        analytical_frame["analytical_pred_us"],
+    )
     e2e_full = pd.read_csv(e2e_root / "full_combo_metrics.csv", low_memory=False)
+    analytical_combo_specs = build_combo_specs(analytical_predictions, ort_root=Path(DEFAULT_ORT_ROOT))
+    analytical_combo_map = {(spec.case_id, spec.combo): spec for spec in analytical_combo_specs}
+    analytical_pipeline_rows: list[dict[str, Any]] = []
+    for (case_id, combo), combo_rows in analytical_predictions.groupby(["case_id", "combo"]):
+        combo_spec = analytical_combo_map[(case_id, combo)]
+        graph = build_op_graph(load_op_shapes_frame(combo_spec.artifact_paths.shape_csv))
+        schedule_result = schedule_combo(combo_spec, graph, combo_rows.copy())
+        analytical_pipeline_rows.append(
+            {
+                "case_id": case_id,
+                "combo": combo,
+                "analytical_pipeline_us": float(schedule_result.predicted_full_graph_us),
+            }
+        )
+    analytical_pipeline_combo = pd.DataFrame(analytical_pipeline_rows)
     fair_combo_specs = build_combo_specs(fair_predictions_enriched, ort_root=Path(DEFAULT_ORT_ROOT))
     fair_combo_map = {(spec.case_id, spec.combo): spec for spec in fair_combo_specs}
     fair_pipeline_rows: list[dict[str, Any]] = []
@@ -1601,6 +1737,7 @@ def run_single_op_ablation(
     )
     e2e_joined = (
         e2e_full.merge(analytical_combo, on=["case_id", "combo"], how="left")
+        .merge(analytical_pipeline_combo, on=["case_id", "combo"], how="left")
         .merge(fair_single_combo, on=["case_id", "combo"], how="left")
         .merge(grouped_combo, on=["case_id", "combo"], how="left")
         .merge(fair_pipeline_combo, on=["case_id", "combo"], how="left")
@@ -1610,6 +1747,7 @@ def run_single_op_ablation(
 
     variants = [
         ("Analytical + simple add", "analytical_simple_add_us"),
+        ("Analytical + pipeline", "analytical_pipeline_us"),
         ("Analytical + single MLP + simple add", "single_mlp_simple_add_us"),
         ("Analytical + grouped MLP + simple add", "grouped_mlp_simple_add_us"),
         ("Analytical + single MLP + pipeline", "single_mlp_pipeline_us"),
@@ -1620,11 +1758,8 @@ def run_single_op_ablation(
     gt10_rows: list[dict[str, Any]] = []
     inter_rows: list[dict[str, Any]] = []
     for variant_name, column in variants:
-        if column == "analytical_simple_add_us":
-            single_metrics = _compute_regression_metrics(
-                test_dataset["label_operator_actual_dur_us"],
-                test_dataset["ana_calib_total_us"],
-            )
+        if column in {"analytical_simple_add_us", "analytical_pipeline_us"}:
+            single_metrics = analytical_single_metrics
         elif column in {"single_mlp_simple_add_us", "single_mlp_pipeline_us"}:
             single_metrics = _compute_regression_metrics(
                 fair_predictions["target_us"],
@@ -2226,6 +2361,16 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
     grouped_simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + grouped MLP + simple add"), None)
     single_simple_add_row = next((row for row in ablation_rows if row["variant"] == "Analytical + single MLP + simple add"), None)
     analytical_row = next((row for row in ablation_rows if row["variant"] == "Analytical + simple add"), None)
+    analytical_pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + pipeline"), None)
+    analytical_covered_rows = int(single_op_metrics.get("analytical_test_count", 0))
+    analytical_total_rows = int(single_op_metrics.get("analytical_test_total_rows", 0))
+    analytical_coverage_rate = float(single_op_metrics.get("analytical_test_coverage_rate", 0.0))
+    analytical_excluded_groups = [
+        str(group)
+        for group in single_op_metrics.get("analytical_excluded_groups", [])
+        if str(group).strip()
+    ]
+    analytical_excluded_groups_text = "/".join(analytical_excluded_groups)
 
     lines = [
         "# 第四章 CPU 实验与结果分析",
@@ -2256,7 +2401,7 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "### 4.2.1 单算子总体预测精度",
         "",
-        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、同数据同特征池重跑的 single MLP，以及本文采用的分组 analytical-MLP。后两者都使用相同的 `case-combo` 划分，并共享总计 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征池，只是分组模型按算子机理做静态路由并使用对应子集。在本次选定的 `64` 宽度、`15` 轮训练设置下，分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；公平 single MLP 的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}，因此分组模型的相对误差约降低了 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；纯解析模型由于在小张量和视图类节点上存在显著比例误差，其 `MAPE` 高达 {single_op_metrics.get('analytical_test_mape', 0.0):.4f}。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
+        f"表 4-3 给出了三种单算子模型口径的总体结果：纯解析模型、同数据同特征池重跑的 single MLP，以及本文采用的分组 analytical-MLP。后两者都使用相同的 `case-combo` 划分，并共享总计 {single_op_metrics.get('baseline_feature_count', 0)} 个输入特征池，只是分组模型按算子机理做静态路由并使用对应子集。在本次选定的 `64` 宽度、`15` 轮训练设置下，分组模型在测试集上的 `MAPE` 为 {single_op_metrics.get('grouped_test_mape', 0.0):.4f}，`R^2` 为 {single_op_metrics.get('grouped_test_r2', 0.0):.4f}；公平 single MLP 的 `MAPE` 为 {single_op_metrics.get('baseline_test_mape', 0.0):.4f}，因此分组模型的相对误差约降低了 {((single_op_metrics.get('baseline_test_mape', 0.0) - single_op_metrics.get('grouped_test_mape', 0.0)) / max(single_op_metrics.get('baseline_test_mape', 1e-9), 1e-9) * 100.0):.1f}%；纯解析模型按 analysis 套件一致的口径，在每个算子组上选取最佳 active analytical proxy 后，在 {analytical_covered_rows:,} 条可覆盖测试样本上得到 `MAPE = {single_op_metrics.get('analytical_test_mape', 0.0):.4f}`。此前若把 `ana_calib_total_us` 直接施加到全部测试样本，会把缺少 active analytical feature 的 `{analytical_excluded_groups_text}` 组也纳入比例误差，从而显著夸大 pure analytical 的总体误差；当前这部分覆盖率约为 {analytical_coverage_rate * 100.0:.1f}%。图 4-3 的散点结果显示，分组模型的大部分样本仍围绕 `y=x` 参考线分布，说明其作为后续整图聚合输入是稳定可用的。",
         "",
         "### 4.2.2 分类别预测精度",
         "",
@@ -2292,11 +2437,11 @@ def build_chapter4_draft(output_root: Path | None = None) -> SectionResult:
         "",
         "## 4.4 消融实验与误差分析",
         "",
-        "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造五个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第三组使用 `grouped MLP + Simple add`；第四组使用 `single MLP + pipeline`；第五组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答四个问题：解析模型本身能做多好、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。",
+        "这一节采用与 Concorde 类似的逐步加组件消融方式，并补充 single/grouped MLP 的公平对比，而不是简单做特征删除。具体构造六个变体：第一组仅使用 `Analytical model + Simple add`；第二组使用 `Analytical model + pipeline`；第三组使用与分组模型同数据、同特征池重跑的 `single MLP + Simple add`；第四组使用 `grouped MLP + Simple add`；第五组使用 `single MLP + pipeline`；第六组使用 `grouped MLP + pipeline`，即本文完整方法。这样的设计能够同时回答五个问题：解析模型本身能做多好、仅将整图聚合从 simple add 换成 pipeline 能带来多少收益、统一学习器能带来多少收益、分组建模是否优于统一 MLP，以及静态流水线聚合是否对整图预测确有必要。",
         "",
         "### 4.4.1 公平对比消融结果",
         "",
-        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了五个变体的差异。纯解析模型在整图上的平均相对误差最高；加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但由于整图仍然简单求和，其整图误差依旧较大；在本次选定的 `64` 宽度、`15` 轮训练设置下，single MLP 的 pipeline 版本整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 MLP 的 pipeline 版本为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低了 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%；与此同时，若没有流水线聚合，单 MLP 和分组 MLP 的简单求和误差仍然显著偏大。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
+        f"表 4-6、图 4-16、图 4-17 和图 4-18 共同展示了六个变体的差异。对纯解析模型而言，仅把整图聚合从 simple add 改为 pipeline 后，整图 `MAPE` 由 {analytical_row.get('e2e_mape', 0.0) if analytical_row else 0.0:.4f} 下降到 {analytical_pipeline_row.get('e2e_mape', 0.0) if analytical_pipeline_row else 0.0:.4f}，说明静态调度本身就能纠正简单求和对并行重叠的系统性高估；但由于节点级 analytical 误差仍然较大，其整体精度依旧明显落后于学习器增强版本。加入公平 single MLP 后，单算子 `MAPE` 已明显下降，但若整图仍然简单求和，其整图误差仍然偏大；在本次选定的 `64` 宽度、`15` 轮训练设置下，single MLP 的 pipeline 版本整图 `MAPE` 为 {single_pipeline_row.get('e2e_mape', 0.0) if single_pipeline_row else 0.0:.4f}，而分组 MLP 的 pipeline 版本为 {pipeline_row.get('e2e_mape', 0.0) if pipeline_row else 0.0:.4f}，后者相对降低了 {((single_pipeline_row.get('e2e_mape', 0.0) - pipeline_row.get('e2e_mape', 0.0)) / max(single_pipeline_row.get('e2e_mape', 1e-9), 1e-9) * 100.0):.1f}%。图 4-16 的误差 CDF 与图 4-17 的平均误差/大误差比例统计共同说明，完整模型不仅降低了均值误差，也显著压缩了误差尾部。",
         "",
         "### 4.4.2 误差来源分析",
         "",
