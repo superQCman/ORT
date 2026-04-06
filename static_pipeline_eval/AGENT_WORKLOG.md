@@ -1220,3 +1220,30 @@ Validation run:
 
 Open risks:
 - This pass only tightened the single-only Chapter 4 wording at the targeted paragraph; adjacent paragraphs may still have a comparatively looser narrative tone.
+
+### 2026-04-06 - Clarify the meaning of overall/small/medium/large in Table 4-5
+
+Request summary:
+- Explain in the Chapter 4 single-only正文 what `overall`、`small`、`medium` and `large` mean in Table `4-5`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Added an explicit explanation in Section `4.3.1` that:
+  - `overall` is the statistic over all complete-graph configurations
+  - `small` / `medium` / `large` are batch-size buckets
+  - the three buckets correspond to `batch_size ≤ 1280`、`1280 < batch_size ≤ 1792` and `batch_size > 1792`
+- Updated the shared draft template so future regenerations preserve the same clarification.
+
+Validation run:
+- Re-read the updated paragraph in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Re-read the corresponding template text in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- Cross-checked the bucket definitions against the code that builds Table `4-5`.
+
+Open risks:
+- The table header itself still uses `配置区间`; if needed, a later pass could rename it to `batch size 区间` or `批规模区间` for even clearer presentation.
