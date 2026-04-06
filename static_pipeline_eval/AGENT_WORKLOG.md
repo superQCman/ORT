@@ -1278,3 +1278,30 @@ Validation run:
 
 Open risks:
 - Per-bucket `R^2` values were intentionally left unreported in the table to avoid overstating the interpretability of `R^2` under narrow batch-size bins.
+
+### 2026-04-06 - Tighten the academic wording in Section 4.3.3
+
+Request summary:
+- Rewrite the `4.3.3` discussion on parallelism trends in the Chapter 4 single-only draft to make the wording more academic and less conversational.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced the earlier oral-style discussion in Section `4.3.3` with a more formal structure:
+  - state parallelism variation as a key validation factor
+  - report the `inter_threads`-wise `MAPE` results
+  - summarize the recovered diminishing-return trend
+  - interpret the implication for the branch-slot competition approximation in more academic prose
+- Updated the shared draft template so future regenerations preserve the revised tone.
+
+Validation run:
+- Re-read Section `4.3.3` in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Re-read the corresponding template text in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Open risks:
+- This pass only tightened the wording in Section `4.3.3`; nearby subsections may still need a final tone-unification pass if the whole section is to read fully uniform.
