@@ -1247,3 +1247,34 @@ Validation run:
 
 Open risks:
 - The table header itself still uses `配置区间`; if needed, a later pass could rename it to `batch size 区间` or `批规模区间` for even clearer presentation.
+
+### 2026-04-06 - Add the missing R2 column treatment for Table 4-5
+
+Request summary:
+- Address the missing `R^2` information in Table `4-5` of the Chapter 4 single-only draft.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/tables/table_4_5_e2e_accuracy.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/tables/table_4_5_e2e_static_summary.csv`
+
+Behavior changes:
+- Added an explicit `R^2` column to the Table `4-5` markdown in the single-only draft.
+- Filled the `overall` row with the already reported overall `R^2 = 0.993129`.
+- Marked the batch-bucket rows as not reported in the draft table and added a sentence in Section `4.3.1` explaining that:
+  - `R^2` is reported only for the overall sample set
+  - the bucketed rows mainly serve to compare relative-error statistics after within-bin variance shrinks
+- Updated the shared template and table-generation code so future regenerations keep the same table structure.
+
+Validation run:
+- Re-read the updated Section `4.3.1` and Table `4-5` in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Re-read the corresponding generation logic in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- Verified that the overall `R^2` value matches:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/e2e/e2e_core_summary.json`
+
+Open risks:
+- Per-bucket `R^2` values were intentionally left unreported in the table to avoid overstating the interpretability of `R^2` under narrow batch-size bins.

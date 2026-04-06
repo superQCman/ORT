@@ -2146,6 +2146,7 @@ def run_e2e_core(
             p90_ape=("ape", lambda values: float(pd.Series(values).quantile(0.90))),
         )
     )
+    table_5["r2"] = pd.NA
     overall_row = pd.DataFrame(
         [
             {
@@ -2154,12 +2155,16 @@ def run_e2e_core(
                 "mean_actual_us": float(full_metrics["actual_e2e_us"].mean()),
                 "mae_us": summary_metrics["mae_us"],
                 "mape": summary_metrics["mape"],
+                "r2": summary_metrics["r2"],
                 "p50_ape": summary_metrics["p50_ape"],
                 "p90_ape": summary_metrics["p90_ape"],
             }
         ]
     )
     table_5 = pd.concat([overall_row, table_5], ignore_index=True)
+    table_5 = table_5[
+        ["batch_bucket", "sample_count", "mean_actual_us", "mae_us", "mape", "r2", "p50_ape", "p90_ape"]
+    ]
     csv_5, md_5 = write_frame_csv_md(
         table_5,
         tables_dir / TABLE_FILENAMES["4-5"],
@@ -2781,7 +2786,7 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         "",
         "### 4.3.1 整图预测总体精度",
         "",
-        f"整图总体精度是评估两级建模方案有效性的关键指标。表 4-5 汇总了整图预测结果。其中，`overall` 表示全部完整图配置上的总体统计结果，`small`、`medium` 和 `large` 则分别表示按 `batch size` 划分的小、中、大三档区间，对应 `batch_size ≤ 1280`、`1280 < batch_size ≤ 1792` 和 `batch_size > 1792` 的配置集合。静态流水线模型在完整图样本上的 `MAPE` 为 {e2e_overall.get('mape', 0.0):.4f}，`P50` 和 `P90` 相对误差分别为 {e2e_overall.get('p50_ape', 0.0):.4f} 和 {e2e_overall.get('p90_ape', 0.0):.4f}。这表明节点级预测误差在整图聚合后未出现显著累积，模型能够较稳定地恢复整图 `makespan`，并将尾部误差控制在相对稳定的范围内。图 4-11 中预测值与真实值整体沿参考线分布，与表 4-5 的统计结果相一致。",
+        f"整图总体精度是评估两级建模方案有效性的关键指标。表 4-5 汇总了整图预测结果。其中，`overall` 表示全部完整图配置上的总体统计结果，`small`、`medium` 和 `large` 则分别表示按 `batch size` 划分的小、中、大三档区间，对应 `batch_size ≤ 1280`、`1280 < batch_size ≤ 1792` 和 `batch_size > 1792` 的配置集合。考虑到 `R^2` 更适合用于刻画整体样本上的拟合程度，而分桶后的区间内方差显著收缩，表中仅在 `overall` 行报告 `R^2`，其余分组主要比较相对误差统计。静态流水线模型在完整图样本上的 `MAPE` 为 {e2e_overall.get('mape', 0.0):.4f}，`P50` 和 `P90` 相对误差分别为 {e2e_overall.get('p50_ape', 0.0):.4f} 和 {e2e_overall.get('p90_ape', 0.0):.4f}。这表明节点级预测误差在整图聚合后未出现显著累积，模型能够较稳定地恢复整图 `makespan`，并将尾部误差控制在相对稳定的范围内。图 4-11 中预测值与真实值整体沿参考线分布，与表 4-5 的统计结果相一致。",
         "",
         "### 4.3.2 不同 batch size 下的整图精度",
         "",
