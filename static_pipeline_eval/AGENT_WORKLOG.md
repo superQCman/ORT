@@ -1193,3 +1193,30 @@ Validation run:
 
 Open risks:
 - The shared script still retains OOD figure-generation and manifest metadata used elsewhere in the pipeline; this pass only removes the corresponding prose from the Chapter 4 draft narrative.
+
+### 2026-04-06 - Tighten formal academic wording for the e2e overall-accuracy paragraph
+
+Request summary:
+- Rewrite the `4.3.1` overall e2e-accuracy paragraph in the Chapter 4 single-only draft to make the tone less conversational and more academic.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced the earlier oral-style phrasing in Section `4.3.1` with a tighter structure:
+  - state the role of overall e2e accuracy as a key evaluation indicator
+  - report the quantitative metrics
+  - summarize the implication for error accumulation and makespan recovery
+  - close with a method-level conclusion in more formal prose
+- Updated the shared draft template so future regenerations preserve the same tone in the corresponding paragraph.
+
+Validation run:
+- Re-read Section `4.3.1` in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Re-read the corresponding template text in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Open risks:
+- This pass only tightened the single-only Chapter 4 wording at the targeted paragraph; adjacent paragraphs may still have a comparatively looser narrative tone.
