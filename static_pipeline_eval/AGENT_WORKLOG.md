@@ -57,6 +57,33 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Clarify case/combo terminology in Chapter 4 single-only draft
+
+Request summary:
+- Replace the opaque `case` / `case_id-combo` wording in the Chapter 4 single-only draft with reviewer-friendly Chinese descriptions.
+- Add a small parameter-range table so the dataset structure is explained in-text instead of relying on code-oriented names.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Replaced the original “9 个 case 与 3,265 个 case_id-combo 配置” sentence with Chinese descriptions centered on:
+  - 9 类实验场景
+  - 3,265 个 `combo` 输入规模配置
+- Added “表 4-1 单算子数据集中的主要配置参数范围” to define:
+  - 实验场景
+  - `combo` 配置
+  - batch size
+  - 每次 lookup 的索引数
+  - `intra-op` / `inter-op` 线程数
+
+Validation run:
+- Re-read the updated Section 4.1.2 to ensure the new terminology and the inserted table connect naturally with the surrounding paragraph and later references.
+
+Open risks:
+- The draft now explains `combo` explicitly, but if later sections keep using raw internal identifiers such as `case_id` or `combo_spec`, those terms should be normalized as well for full thesis-level consistency.
+
 ### 2026-04-06 - Tighten Chapter 4 single-only draft tone for academic writing
 
 Request summary:
