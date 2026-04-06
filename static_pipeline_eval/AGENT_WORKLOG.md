@@ -586,3 +586,29 @@ Result snapshot:
 Open risks:
 - The new analytical-pipeline row is intentionally an end-to-end aggregation study: it uses the raw analytical per-node durations for scheduling, while the single-op analytical metric in the same table still follows the thesis-ready covered-group reporting convention.
 - Even after pipeline aggregation, the analytical-only path still lags the learning-based pipeline variants noticeably, so the draft should continue to frame it as a scheduler-isolation baseline rather than a competitive final method.
+
+### 2026-04-06 - Add explicit legends to the timeline-case figures
+
+Request summary:
+- Make the color semantics in `fig_4_14_timeline_cases.png` and `fig_4_15_critical_path_breakdown.png` explicit inside the figures.
+- Ensure the legend labels match the actual partition colors used by the timeline-case plots.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Added shared legend handles for timeline/critical-path partition colors.
+- Updated `fig_4_14` so the timeline Gantt chart now labels `Bottom`, `Embedding branch`, `Tail`, and `Barrier` directly in the figure.
+- Corrected `fig_4_14` to render `barrier` tasks with their own purple color instead of falling through to the tail color.
+- Updated `fig_4_15` so the stacked critical-path breakdown now labels `Bottom`, `Embedding branch`, and `Tail` directly in the figure.
+
+Validation run:
+- `PYTHONPATH=/data/qc/dlrm/ORT/static_pipeline_eval python3 - <<'PY' ... run_timeline_cases() ... PY`
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+- Verified the regenerated figure files exist:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/figures/fig_4_14_timeline_cases.png`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/figures/fig_4_15_critical_path_breakdown.png`
+
+Open risks:
+- The legends add a little extra height above each figure; if these plots are later embedded into a tighter paper layout, the figure canvas or title spacing may need a small follow-up adjustment.

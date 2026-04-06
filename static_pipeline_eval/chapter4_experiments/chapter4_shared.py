@@ -491,6 +491,19 @@ def plot_simple_graph(
     return save_figure(fig, path)
 
 
+def _partition_legend_handles(include_barrier: bool = False):
+    from matplotlib.patches import Patch
+
+    labels_and_colors = [
+        ("bottom", "#4C78A8", "Bottom"),
+        ("embedding", "#F58518", "Embedding branch"),
+        ("tail", "#54A24B", "Tail"),
+    ]
+    if include_barrier:
+        labels_and_colors.append(("barrier", "#B279A2", "Barrier"))
+    return [Patch(facecolor=color, edgecolor="none", label=label) for _, color, label in labels_and_colors]
+
+
 def _table_path(layout: dict[str, Path], figure_no: str) -> Path:
     return layout["tables"] / TABLE_FILENAMES[figure_no]
 
@@ -2223,9 +2236,15 @@ def run_timeline_cases(
             fig, axes = plt.subplots(len(TIMELINE_CASES), 1, figsize=(13, 3.5 * len(TIMELINE_CASES)), sharex=False)
             if len(TIMELINE_CASES) == 1:
                 axes = [axes]
+            timeline_colors = {
+                "bottom": "#4C78A8",
+                "embedding": "#F58518",
+                "tail": "#54A24B",
+                "barrier": "#B279A2",
+            }
             for ax, (case_id, combo), gantt_frame in zip(axes, TIMELINE_CASES, gantt_frames):
                 for row in gantt_frame.itertuples(index=False):
-                    color = "#4C78A8" if row.partition == "bottom" else "#F58518" if row.partition == "embedding" else "#54A24B"
+                    color = timeline_colors.get(row.partition, "#7F7F7F")
                     ax.broken_barh([(float(row.start_us), float(row.duration_us))], (0, 1), facecolors=color, alpha=0.7)
                 ax.set_yticks([])
                 ax.set_title(f"{case_id} / {combo}")
@@ -2240,6 +2259,13 @@ def run_timeline_cases(
                     ],
                     loc="upper left",
                 )
+            axes[0].legend(
+                handles=_partition_legend_handles(include_barrier=True),
+                frameon=False,
+                ncols=4,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.18),
+            )
             axes[-1].set_xlabel("time (us)")
             save_figure(fig, figures_dir / FIGURE_FILENAMES["4-14"])
 
@@ -2264,6 +2290,13 @@ def run_timeline_cases(
             ax.set_ylabel("predicted duration (us)")
             ax.tick_params(axis="x", rotation=25)
             ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
+            ax.legend(
+                handles=_partition_legend_handles(include_barrier=False),
+                frameon=False,
+                ncols=3,
+                loc="upper center",
+                bbox_to_anchor=(0.5, 1.10),
+            )
             add_audit_callout(
                 ax,
                 [
