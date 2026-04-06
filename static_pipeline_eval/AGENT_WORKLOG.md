@@ -57,6 +57,33 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Remove titles from Chapter 4 single-only figures
+
+Request summary:
+- Remove the internal titles from all Chapter 4 single-only figures.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Removed figure-internal titles from the common plotting helpers used by Chapter 4 figures.
+- Removed the title/subtitle text from the two flow-diagram figures.
+- Removed subplot titles from the timeline case figure.
+- Removed the chart title from the critical-path breakdown figure.
+- Regenerated the full `chapter4_cpu_single_only` artifact set so all figure images now reflect the no-title style.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/*.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_single_only_experiments.py`
+- Visually checked regenerated figures including:
+  - `fig_4_1_platform_dataset_overview.png`
+  - `fig_4_14_timeline_cases.png`
+  - `fig_4_15_critical_path_breakdown.png`
+
+Open risks:
+- This change applies to the shared Chapter 4 plotting code, so if the grouped Chapter 4 figures are regenerated later, they will also follow the no-title style.
+
 ### 2026-04-06 - Rebalance Chapter 4 single-only narrative toward results and strengths
 
 Request summary:

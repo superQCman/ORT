@@ -151,7 +151,6 @@ def _import_pyplot():
 
 
 def _style_axes(ax, title: str, xlabel: str = "", ylabel: str = "") -> None:
-    ax.set_title(title)
     if xlabel:
         ax.set_xlabel(xlabel)
     if ylabel:
@@ -400,9 +399,6 @@ def plot_flow(
                 xycoords=ax.transAxes,
                 arrowprops=dict(arrowstyle="->", lw=1.4, color="#666666"),
             )
-    ax.set_title(title, pad=12)
-    if subtitle:
-        ax.text(0.5, 0.13, subtitle, ha="center", va="center", fontsize=9, color="#555555", transform=ax.transAxes)
     return save_figure(fig, path)
 
 
@@ -488,7 +484,6 @@ def plot_simple_graph(
         ax.scatter([x], [y], s=500, color=color, edgecolor="#222222", linewidth=0.7, zorder=3)
         ax.text(x, y, str(node.label), ha="center", va="center", fontsize=8, color="white", zorder=4)
 
-    ax.set_title(title)
     ax.set_xlabel("topological depth")
     ax.set_ylabel("node layer")
     ax.set_yticks([])
@@ -2455,7 +2450,6 @@ def run_timeline_cases(
                     color = timeline_colors.get(row.partition, "#7F7F7F")
                     ax.broken_barh([(float(row.start_us), float(row.duration_us))], (0, 1), facecolors=color, alpha=0.7)
                 ax.set_yticks([])
-                ax.set_title(f"{case_id} / {combo}")
                 ax.grid(True, axis="x", alpha=0.25, linewidth=0.6)
                 case_summary = next(row for row in summary_rows if row["case_id"] == case_id and row["combo"] == combo)
                 add_audit_callout(
@@ -2494,7 +2488,6 @@ def run_timeline_cases(
                 for row in sub.itertuples(index=False):
                     ax.bar(case_label, row.predicted_duration_us, bottom=left, color=colors.get(row.partition, "#7F7F7F"))
                     left += row.predicted_duration_us
-            ax.set_title("Figure 4-15 Critical Path Breakdown")
             ax.set_ylabel("predicted duration (us)")
             ax.tick_params(axis="x", rotation=25)
             ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
