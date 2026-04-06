@@ -982,3 +982,39 @@ Validation run:
 
 Open risks:
 - The `ReduceSum` trend is directionally clear at the quartile level but not perfectly monotonic in every finer-grained sub-bin, so the wording intentionally uses “整体呈下降趋势” rather than claiming a strict monotonic law.
+
+### 2026-04-06 - Quantify all representative-op trends and unify Gather figure style
+
+Request summary:
+- Add quantitative descriptions for the representative-operator discussion instead of only keeping `ReduceSum` quantified.
+- Change the `Gather` figure to use the same “error vs scale” style as the other representative-op figures.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Changed Figure `4-5` generation from:
+  - predicted-vs-actual scatter for `Gather`
+  to:
+  - `Gather` `APE` vs `feat_lookup_count`, with thread-coloring preserved
+- Updated the figure catalog claim for `4-5` from generic prediction behavior to `Gather error vs lookup scale`.
+- Rewrote the Section `4.2.3` paragraph so all four representative operator classes now include quantitative trend statements:
+  - `Gather`: larger lookup-scale bins show higher `MAPE/P90 APE` than the lowest-scale bin
+  - `ReduceSum`: higher reduction-work bins show lower `MAPE/P50/P90`
+  - `Transpose/Concat`: larger I/O bins show higher `MAPE/P90`
+  - `Gemm/MatMul`: larger MAC bins show lower `MAPE/P90`
+- Added a reusable quantile-trend helper in the Chapter 4 shared script so future draft regeneration can keep the quantitative wording aligned with the actual data.
+
+Validation run:
+- Recomputed representative-op quantile statistics from the single-op test split and fair single-MLP predictions.
+- Re-ran the single-op core artifact generation for:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only`
+- Rebuilt the figures catalog for the same single-only output root.
+- Re-read the updated representative-operator paragraph in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Open risks:
+- The quantile bins for `Gather` collapse to three effective intervals because `feat_lookup_count` has many repeated values, so the text reports the low-scale bin against the higher-scale bins instead of forcing a four-bin narrative.
+- Updating `chapter4_shared.py` changes the shared plotting behavior; if the grouped Chapter 4 package is regenerated later, Figure `4-5` there will also switch to the unified error-vs-scale style.

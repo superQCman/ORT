@@ -1136,6 +1136,55 @@ def _compute_regression_metrics(actual: pd.Series, pred: pd.Series) -> dict[str,
     }
 
 
+def _format_sci_compact(value: float) -> str:
+    if value == 0:
+        return "0"
+    exponent = int(math.floor(math.log10(abs(value))))
+    mantissa = value / (10 ** exponent)
+    return f"{mantissa:.2f}×10^{exponent}"
+
+
+def _error_trend_summary(frame: pd.DataFrame, work_col: str, *, quantiles: int = 4) -> dict[str, Any]:
+    trend = frame[[work_col, "ape"]].copy()
+    trend[work_col] = pd.to_numeric(trend[work_col], errors="coerce")
+    trend["ape"] = pd.to_numeric(trend["ape"], errors="coerce")
+    trend = trend.dropna(subset=[work_col, "ape"])
+    if trend.empty:
+        return {"bin_count": 0, "bins": [], "spearman": None}
+    trend["bin"] = pd.qcut(trend[work_col], q=quantiles, duplicates="drop")
+    grouped = (
+        trend.groupby("bin", observed=False)
+        .agg(
+            rows=("ape", "size"),
+            work_min=(work_col, "min"),
+            work_max=(work_col, "max"),
+            mape=("ape", "mean"),
+            p50=("ape", "median"),
+            p90=("ape", lambda s: s.quantile(0.9)),
+        )
+        .reset_index(drop=True)
+    )
+    bins: list[dict[str, Any]] = []
+    for row in grouped.to_dict(orient="records"):
+        bins.append(
+            {
+                "rows": int(row["rows"]),
+                "work_min": float(row["work_min"]),
+                "work_max": float(row["work_max"]),
+                "work_min_fmt": _format_sci_compact(float(row["work_min"])),
+                "work_max_fmt": _format_sci_compact(float(row["work_max"])),
+                "mape": float(row["mape"]),
+                "p50": float(row["p50"]),
+                "p90": float(row["p90"]),
+            }
+        )
+    return {
+        "bin_count": len(bins),
+        "bins": bins,
+        "spearman": float(trend[work_col].corr(trend["ape"], method="spearman")),
+    }
+
+
 def _select_best_active_analytical_features(
     single_op_root: Path,
     *,
@@ -1562,21 +1611,23 @@ def run_single_op_core(
 
     gather_frame = test_dataset[test_dataset["op_type"] == "Gather"].copy()
     if not gather_frame.empty:
-        gather_frame["actual_us"] = gather_frame["label_operator_actual_dur_us"].astype(float)
-        gather_frame["predicted_us"] = gather_frame["ana_calib_total_us"].astype(float)
         gather_pred = selected_predictions[selected_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
         gather_frame = gather_frame.merge(gather_pred, on="row_uid", how="left")
-        gather_frame["predicted_us"] = gather_frame["pred_us"].fillna(gather_frame["predicted_us"])
+        gather_frame["ape"] = (
+            (gather_frame["pred_us"].astype(float) - gather_frame["label_operator_actual_dur_us"].astype(float)).abs()
+            / gather_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+        ).fillna(0.0)
         plot_scatter(
             gather_frame.sample(n=min(1500, len(gather_frame)), random_state=42),
-            "actual_us",
-            "predicted_us",
+            "feat_lookup_count",
+            "ape",
             figures_dir / FIGURE_FILENAMES["4-5"],
-            "Figure 4-5 Gather prediction scatter",
+            "Figure 4-5 Gather error vs. lookup count",
             hue="num_threads",
+            reference_line=False,
             audit_lines=[
                 f"rows = {len(gather_frame):,}",
-                f"threads = {_sanitize_list(sorted(gather_frame['num_threads'].astype(int).unique().tolist()))}",
+                f"p90 APE = {float(gather_frame['ape'].quantile(0.9)):.4f}",
             ],
         )
 
@@ -2531,7 +2582,7 @@ def build_figures_catalog(output_root: Path | None = None) -> SectionResult:
         "4-2": ("platform", "full-graph timeline aggregation workflow"),
         "4-3": ("single-op core", "overall predicted-vs-actual scatter"),
         "4-4": ("single-op core", "category-level MAPE comparison"),
-        "4-5": ("single-op core", "Gather prediction behavior"),
+        "4-5": ("single-op core", "Gather error vs lookup scale"),
         "4-6": ("single-op core", "ReduceSum error vs reduction scale"),
         "4-7": ("single-op core", "Transpose/Concat error vs data size"),
         "4-8": ("single-op core", "Gemm/MatMul error vs MAC count"),
@@ -2596,6 +2647,48 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
     single_only_mode = active_prediction_source == PREDICTION_SOURCE_SINGLE_FAIR and not any(
         "grouped MLP" in str(row.get("variant", "")) for row in ablation_rows
     )
+    rep_usecols = [
+        "row_uid",
+        "split",
+        "op_type",
+        "num_threads",
+        "feat_lookup_count",
+        "feat_reduction_work_items",
+        "feat_io_bytes_sum",
+        "feat_gemm_mac_count",
+        "label_operator_actual_dur_us",
+    ]
+    rep_dataset = pd.read_csv(SINGLE_OP_ARTIFACT_ROOT / "classed_dataset_full.csv", usecols=rep_usecols, low_memory=False)
+    rep_test_dataset = rep_dataset[rep_dataset["split"] == "test"].copy()
+    rep_prediction_bundle = _load_model_prediction_frame(
+        output_root,
+        single_op_root=SINGLE_OP_ARTIFACT_ROOT,
+        prediction_source=active_prediction_source,
+        test_dataset=rep_test_dataset,
+    )
+    rep_predictions = rep_prediction_bundle["prediction_df"][["row_uid", "pred_us"]]
+
+    def _rep_frame(op_mask: pd.Series) -> pd.DataFrame:
+        frame = rep_test_dataset[op_mask].copy().merge(rep_predictions, on="row_uid", how="left")
+        frame["ape"] = (
+            (frame["pred_us"].astype(float) - frame["label_operator_actual_dur_us"].astype(float)).abs()
+            / frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
+        ).fillna(0.0)
+        return frame
+
+    gather_trend = _error_trend_summary(_rep_frame(rep_test_dataset["op_type"] == "Gather"), "feat_lookup_count")
+    reduce_trend = _error_trend_summary(_rep_frame(rep_test_dataset["op_type"] == "ReduceSum"), "feat_reduction_work_items")
+    layout_trend = _error_trend_summary(_rep_frame(rep_test_dataset["op_type"].isin(["Transpose", "Concat"])), "feat_io_bytes_sum")
+    gemm_trend = _error_trend_summary(_rep_frame(rep_test_dataset["op_type"].isin(["Gemm", "MatMul"])), "feat_gemm_mac_count")
+
+    gather_low = gather_trend["bins"][0] if gather_trend["bins"] else None
+    gather_high = gather_trend["bins"][-1] if gather_trend["bins"] else None
+    reduce_low = reduce_trend["bins"][0] if reduce_trend["bins"] else None
+    reduce_high = reduce_trend["bins"][-1] if reduce_trend["bins"] else None
+    layout_low = layout_trend["bins"][0] if layout_trend["bins"] else None
+    layout_high = layout_trend["bins"][-1] if layout_trend["bins"] else None
+    gemm_low = gemm_trend["bins"][0] if gemm_trend["bins"] else None
+    gemm_high = gemm_trend["bins"][-1] if gemm_trend["bins"] else None
     error_rows = error_metrics.get("error_rows", [])
     pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + grouped MLP + pipeline"), None)
     single_pipeline_row = next((row for row in ablation_rows if row["variant"] == "Analytical + single MLP + pipeline"), None)
@@ -2681,7 +2774,7 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         "",
         "### 4.2.3 典型算子预测结果分析",
         "",
-        "图 4-5 至图 4-8 分别给出了 Gather、ReduceSum、Transpose/Concat 以及 Gemm/MatMul 的代表性结果。Gather 的误差主要受到随机表访存影响，线程数变化会显著改变尾部误差；ReduceSum 的误差随归约工作量增长而逐步收敛，说明解析代理对归约规模具有较好刻画能力；Transpose 与 Concat 的误差主要受数据搬移规模影响；Gemm/MatMul 在 MAC 数较小时误差增大，反映出小维度下微核利用率不足的问题。整体来看，这些现象与第三章关于 cache fit、数据搬移和 kernel 饱和度的解释是相互印证的。",
+        f"图 4-5 至图 4-8 分别展示了四类代表性算子的相对误差与其主导规模特征之间的关系。图 4-5 给出了 `Gather` 的相对误差与 lookup 规模之间的关系。按 `feat_lookup_count` 的分位区间统计，低规模区间 `{gather_low['work_min_fmt']}-{gather_low['work_max_fmt']}` 上的 `MAPE/P90 APE` 分别为 `{gather_low['mape']:.4f}/{gather_low['p90']:.4f}`，而高规模区间 `{gather_high['work_min_fmt']}-{gather_high['work_max_fmt']}` 上对应上升到 `{gather_high['mape']:.4f}/{gather_high['p90']:.4f}`，说明随着 lookup 规模增大，随机访存波动更容易放大尾部误差。图 4-6 给出了 `ReduceSum` 的相对误差与归约规模之间的关系。按 `feat_reduction_work_items` 的四分位区间统计，`MAPE` 由低工作量区间 `{reduce_low['work_min_fmt']}-{reduce_low['work_max_fmt']}` 上的 `{reduce_low['mape']:.4f}` 下降到高工作量区间 `{reduce_high['work_min_fmt']}-{reduce_high['work_max_fmt']}` 上的 `{reduce_high['mape']:.4f}`，`P50/P90 APE` 也分别由 `{reduce_low['p50']:.4f}/{reduce_low['p90']:.4f}` 下降到 `{reduce_high['p50']:.4f}/{reduce_high['p90']:.4f}`，说明当归约工作量足够大时，解析代理对主导成本的刻画更稳定。图 4-7 给出了 `Transpose` 与 `Concat` 的相对误差随数据搬移规模变化的情况，`MAPE` 由最低 I/O 区间 `{layout_low['work_min_fmt']}-{layout_low['work_max_fmt']}` 上的 `{layout_low['mape']:.4f}` 增加到最高区间 `{layout_high['work_min_fmt']}-{layout_high['work_max_fmt']}` 上的 `{layout_high['mape']:.4f}`，`P90 APE` 也由 `{layout_low['p90']:.4f}` 增加到 `{layout_high['p90']:.4f}`，说明这两类算子的预测偏差主要随数据搬移量扩大而上升。图 4-8 给出了 `Gemm/MatMul` 的相对误差与 MAC 规模之间的关系，`MAPE` 由低 MAC 区间 `{gemm_low['work_min_fmt']}-{gemm_low['work_max_fmt']}` 上的 `{gemm_low['mape']:.4f}` 下降到高 MAC 区间 `{gemm_high['work_min_fmt']}-{gemm_high['work_max_fmt']}` 上的 `{gemm_high['mape']:.4f}`，`P90 APE` 也由 `{gemm_low['p90']:.4f}` 下降到 `{gemm_high['p90']:.4f}`，反映出小维度下微核利用率不足会更明显地放大误差。整体来看，这些现象与第三章关于随机访存、数据搬移和 kernel 饱和度的分析是相互印证的。",
         "",
         "### 4.2.4 跨规模泛化实验",
         "",
