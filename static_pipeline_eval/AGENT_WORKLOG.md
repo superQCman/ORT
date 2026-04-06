@@ -1077,3 +1077,33 @@ Validation run:
 
 Open risks:
 - The text now prioritizes readability over exhaustively reporting the lowest degenerate bin; if a reviewer asks about the omitted `32`-byte group explicitly, that detail may still need to be mentioned in a footnote or response.
+
+### 2026-04-06 - Realign Figure 4-9 and Figure 4-10 captions with actual OOD plots
+
+Request summary:
+- Fix the mismatch between the Chapter 4 single-only draft wording and the actual contents of Figures `4-9` and `4-10`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Updated the Section `4.2.4` prose so it now matches the actual plots:
+  - Figure `4-9` is described as a direct comparison between batch-holdout and thread-holdout single-op MAPE
+  - Figure `4-10` is described as an operator-family-level generalization reference under `leave-one-case-out` and `leave-one-combo-out`
+- Replaced the mismatched single-only markdown captions:
+  - old `4-9`: unseen shape only
+  - old `4-10`: unseen thread only
+  with captions aligned to the true plot semantics
+- Updated the shared draft template and figure-catalog claim strings to preserve the corrected interpretation in future regenerations.
+
+Validation run:
+- Re-checked the actual local figures:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_9_single_op_ood_slices.png`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_10_single_op_ood_generalization.png`
+- Regenerated the single-only figures catalog from the shared metadata.
+- Re-read the updated Section `4.2.4` and the figure caption lines in the single-only draft.
+
+Open risks:
+- The grouped Chapter 4 draft may still contain older wording until it is regenerated or edited separately; this pass only corrected the single-only draft and shared template.
