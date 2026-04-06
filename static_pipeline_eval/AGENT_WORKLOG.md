@@ -57,6 +57,32 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Insert referenced tables into Chapter 4 single-only draft
+
+Request summary:
+- Add the tables that were referenced in the Chapter 4 single-only draft but not actually embedded in the markdown body.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Inserted inline markdown tables for all referenced tables `4-2` through `4-7`.
+- Kept the existing manually written `表 4-1` and added the missing tables:
+  - `表 4-2` 数据集组成
+  - `表 4-3` 单算子总体预测精度
+  - `表 4-4` 类别级单算子精度
+  - `表 4-5` 整图预测精度
+  - `表 4-6` 消融实验结果
+  - `表 4-7` 代表性误差样本
+- Localized the column names into more thesis-friendly Chinese labels while preserving the underlying metrics from the generated artifact tables.
+
+Validation run:
+- Verified that the draft body now contains explicit table blocks for every table number mentioned in the text from `表 4-1` through `表 4-7`.
+
+Open risks:
+- The inserted tables are now duplicated relative to the generated `tables/*.md` artifacts, so if those source artifact tables are regenerated with new numbers later, the draft should be re-synced manually.
+
 ### 2026-04-06 - Fix inline figure paths for markdown preview
 
 Request summary:
