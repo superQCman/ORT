@@ -915,3 +915,36 @@ Result snapshot:
 Open risks:
 - The new single-only draft rewrites the main grouped-vs-single comparison sections, but the figure filenames stay aligned with the original Chapter 4 numbering for ease of reuse; readers should distinguish them by output root, not by filename alone.
 - The standalone fair single-MLP trainer is still `run_single_op_fair_baseline.py`; the new runner orchestrates the whole Chapter 4 suite but does not replace that lower-level training entry point.
+
+### 2026-04-06 - Align Chapter 4 single-only narrative with Concorde-style experimental logic
+
+Request summary:
+- Read the experimental section of `ops_profile/concorde/concorde.pdf`.
+- Keep the overall structure of `chapter4_cpu_single_only_experiments_draft.md` unchanged.
+- Revise the argument flow and wording so the single-only Chapter 4 draft follows a more Concorde-like result-first, question-driven narrative.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Preserved the existing chapter / section / subsection structure and all current figure-table numbering.
+- Rewrote the chapter introduction so it now states the experimental questions up front instead of leading with broad background.
+- Reframed Sections `4.2` and `4.3` around a clearer evidence chain:
+  - first establish random-test accuracy
+  - then explain structural error patterns
+  - then test OOD/generalization or aggregation stability
+  - finally use case studies to interpret why the model works
+- Reworked Section `4.4` into a more explicit deep-dive narrative:
+  - component-by-component contribution first
+  - error-tail composition second
+- Tightened phrasing throughout so conclusions appear earlier in each subsection and explanatory text follows the reported result, closer to the Concorde experimental writing style.
+
+Validation run:
+- Re-read `ops_profile/concorde/concorde.pdf` experimental sections via `pdftotext`, focusing on `5.1` and `5.2`.
+- Re-read the full updated draft:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Reviewed the git diff for the draft to confirm that only narrative flow and wording changed, while the chapter structure remained intact.
+
+Open risks:
+- The draft is now more strongly optimized for result-first experimental storytelling; if a later advisor prefers a more conventional thesis style with heavier setup before each result, another wording pass may still be needed.
