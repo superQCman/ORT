@@ -1133,3 +1133,30 @@ Validation run:
 
 Open risks:
 - The grouped Chapter 4 draft file itself was not directly edited in this pass; it will inherit the same wording only after regeneration from the shared template.
+
+### 2026-04-06 - Localize leave-one-case/combo wording and reference Figure 4-10 earlier
+
+Request summary:
+- Replace `leave-one-case-out` and `leave-one-combo-out` in the Chapter 4 single-only draft with Chinese wording plus parenthesized English.
+- Mention the Figure `4-10` operator-family-level extrapolation reference earlier in Section `4.1.3`.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced raw English split names in the single-only draft with:
+  - 留一场景外推（`leave-one-case-out`）
+  - 留一组合外推（`leave-one-combo-out`）
+- Added one sentence in Section `4.1.3` clarifying that, beyond configuration-level holdout tests, the chapter also reports operator-family-level extrapolation references under those two stricter split schemes, corresponding to Figure `4-10`.
+- Updated the shared draft template so future regenerations preserve the same terminology and forward reference.
+
+Validation run:
+- Re-read the updated Section `4.1.3` and Section `4.2.4` in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Reviewed the shared-template diff in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Open risks:
+- The grouped Chapter 4 draft file was not directly edited in this pass; the same wording will appear there only after regeneration or a parallel manual edit.
