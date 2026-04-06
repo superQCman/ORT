@@ -1107,3 +1107,29 @@ Validation run:
 
 Open risks:
 - The grouped Chapter 4 draft may still contain older wording until it is regenerated or edited separately; this pass only corrected the single-only draft and shared template.
+
+### 2026-04-06 - Rephrase OOD split description with holdout-style academic wording
+
+Request summary:
+- Improve the sentence describing the two OOD tests in the Chapter 4 single-only draft so it reads more like academic writing and aligns with the later holdout discussion.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Replaced the earlier informal OOD sentence with a more explicit holdout-style description:
+  - input-shape holdout: batch-size set held out from training
+  - thread-count holdout: `num_threads=3` held out from training
+- Clarified that these are configuration-level held-out samples used to test generalization to unseen input-shape and thread configurations.
+- Updated the shared draft template so future draft regeneration preserves the revised wording.
+
+Validation run:
+- Re-read the updated paragraph in Section `4.1.3` of:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Reviewed the shared template diff in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Open risks:
+- The grouped Chapter 4 draft file itself was not directly edited in this pass; it will inherit the same wording only after regeneration from the shared template.

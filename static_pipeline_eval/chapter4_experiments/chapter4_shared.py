@@ -2758,7 +2758,7 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         "",
         "### 4.1.4 数据集划分与评价指标",
         "",
-        f"单算子数据按 `sample_group=combo` 做 `7:2:1` 划分，实际样本数为 train/val/test = `{split_counts.get('train', 0):,} / {split_counts.get('val', 0):,} / {split_counts.get('test', 0):,}`。这种切分方式保证同一 `case_id-combo` 下的节点不会同时出现在训练集与测试集，避免 shape 级信息泄漏。除随机划分外，本文还构造了未见 shape 与未见线程数两种外推测试：前者将 batch size `{_sanitize_list(OOD_BATCH_HOLDS)}` 作为保留配置，后者仅用 `num_threads={OOD_NUM_THREADS_HOLD}` 做测试。单算子评价指标采用 `MAE`、`MAPE`、`RMSE` 和 `R^2`；整图评价指标采用 `MAE`、`MAPE`、`P50/P90` 相对误差，并按 batch size 和 branch parallelism 分组统计。",
+        f"单算子数据按 `sample_group=combo` 做 `7:2:1` 划分，实际样本数为 train/val/test = `{split_counts.get('train', 0):,} / {split_counts.get('val', 0):,} / {split_counts.get('test', 0):,}`。这种切分方式保证同一 `case_id-combo` 下的节点不会同时出现在训练集与测试集，避免 shape 级信息泄漏。除随机划分外，本文进一步构造两类保留式外推测试：其一，在输入形状配置维度上，将 batch size `{_sanitize_list(OOD_BATCH_HOLDS)}` 对应的样本整体作为保留配置，不参与训练，用于评估模型对未见输入形状配置的泛化能力；其二，在线程配置维度上，仅保留 `num_threads={OOD_NUM_THREADS_HOLD}` 对应的样本作为线程数保留配置，用于评估模型对未见线程配置的泛化能力。单算子评价指标采用 `MAE`、`MAPE`、`RMSE` 和 `R^2`；整图评价指标采用 `MAE`、`MAPE`、`P50/P90` 相对误差，并按 batch size 和 branch parallelism 分组统计。",
         "",
         "## 4.2 算子级性能建模实验",
         "",
