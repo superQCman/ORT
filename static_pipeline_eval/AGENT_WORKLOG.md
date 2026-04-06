@@ -1160,3 +1160,36 @@ Validation run:
 
 Open risks:
 - The grouped Chapter 4 draft file was not directly edited in this pass; the same wording will appear there only after regeneration or a parallel manual edit.
+
+### 2026-04-06 - Remove cross-configuration generalization subsection from single-only Chapter 4 draft
+
+Request summary:
+- Delete the entire `4.2.4` cross-configuration generalization subsection from the Chapter 4 single-only draft.
+- Remove the earlier forward references to that content from the front-matter data-splitting discussion.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Reframed the chapter-level introduction from three questions to two questions, removing the claim about unseen-configuration stability.
+- Removed the cross-configuration generalization discussion from the single-only draft:
+  - deleted the `4.2.4` subsection body
+  - removed the associated Figure `4-9` and Figure `4-10` in-text captions and references from the markdown narrative
+- Simplified the data-splitting paragraph so it now keeps only the random `7:2:1` combo split and the evaluation metrics, without holdout or leave-one extrapolation wording.
+- Updated the shared draft template so future regenerations do not reintroduce the deleted cross-configuration section into the single-only Chapter 4 narrative.
+
+Validation run:
+- Re-read the updated top-level chapter introduction and Section `4.1.3` in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Verified by search that the single-only draft no longer contains:
+  - `4.2.4`
+  - Figure `4-9` / Figure `4-10` narrative references
+  - unseen-configuration / holdout / leave-one extrapolation wording
+- Re-read the shared template block in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+  to confirm the holdout paragraph and `4.2.4` draft section were removed from the generated prose.
+
+Open risks:
+- The shared script still retains OOD figure-generation and manifest metadata used elsewhere in the pipeline; this pass only removes the corresponding prose from the Chapter 4 draft narrative.

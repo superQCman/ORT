@@ -2639,7 +2639,6 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
     batch_range = f"{int(dataset_df['batch_size'].min())}-{int(dataset_df['batch_size'].max())}"
     nip_range = f"{int(dataset_df['num_indices_per_lookup'].min())}-{int(dataset_df['num_indices_per_lookup'].max())}"
     op_types = sorted(dataset_df["op_type"].dropna().unique().tolist())
-    ood_rows = {row["slice_name"]: row for row in ood_metrics.get("ood_slices", [])}
     e2e_overall = e2e_metrics.get("overall", {})
     ablation_rows = ablation_metrics.get("variant_rows", [])
     active_prediction_source = str(single_op_metrics.get("active_prediction_source", PREDICTION_SOURCE_GROUPED))
@@ -2758,7 +2757,7 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         "",
         "### 4.1.4 数据集划分与评价指标",
         "",
-        f"单算子数据按 `sample_group=combo` 做 `7:2:1` 划分，实际样本数为 train/val/test = `{split_counts.get('train', 0):,} / {split_counts.get('val', 0):,} / {split_counts.get('test', 0):,}`。这种切分方式保证同一 `case_id-combo` 下的节点不会同时出现在训练集与测试集，避免 shape 级信息泄漏。除随机划分外，本文进一步构造两类保留式外推测试：其一，在输入形状配置维度上，将 batch size `{_sanitize_list(OOD_BATCH_HOLDS)}` 对应的样本整体作为保留配置，不参与训练，用于评估模型对未见输入形状配置的泛化能力；其二，在线程配置维度上，仅保留 `num_threads={OOD_NUM_THREADS_HOLD}` 对应的样本作为线程数保留配置，用于评估模型对未见线程配置的泛化能力。除这两类配置级保留测试外，本文还在算子族层面引入留一场景外推（`leave-one-case-out`）与留一组合外推（`leave-one-combo-out`）两种参考划分，用于观察不同算子族在更严格外推条件下的误差差异；对应结果见图 4-10。单算子评价指标采用 `MAE`、`MAPE`、`RMSE` 和 `R^2`；整图评价指标采用 `MAE`、`MAPE`、`P50/P90` 相对误差，并按 batch size 和 branch parallelism 分组统计。",
+        f"单算子数据按 `sample_group=combo` 做 `7:2:1` 划分，实际样本数为 train/val/test = `{split_counts.get('train', 0):,} / {split_counts.get('val', 0):,} / {split_counts.get('test', 0):,}`。这种切分方式保证同一 `case_id-combo` 下的节点不会同时出现在训练集与测试集，避免 shape 级信息泄漏。单算子评价指标采用 `MAE`、`MAPE`、`RMSE` 和 `R^2`；整图评价指标采用 `MAE`、`MAPE`、`P50/P90` 相对误差，并按 batch size 和 branch parallelism 分组统计。",
         "",
         "## 4.2 算子级性能建模实验",
         "",
@@ -2775,10 +2774,6 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         "### 4.2.3 典型算子预测结果分析",
         "",
         f"图 4-5 至图 4-8 分别展示了四类代表性算子的相对误差与其主导规模特征之间的关系。图 4-5 给出了 `Gather` 的相对误差与索引查找工作量（`feat_lookup_count`）之间的关系。按索引查找工作量（`feat_lookup_count`）的分位区间统计，低规模区间 `{gather_low['work_min_fmt']}-{gather_low['work_max_fmt']}` 上的 `MAPE/P90 APE` 分别为 `{gather_low['mape']:.4f}/{gather_low['p90']:.4f}`，而高规模区间 `{gather_high['work_min_fmt']}-{gather_high['work_max_fmt']}` 上对应上升到 `{gather_high['mape']:.4f}/{gather_high['p90']:.4f}`，说明随着索引查找工作量（`feat_lookup_count`）增大，随机访存波动更容易放大尾部误差。图 4-6 给出了 `ReduceSum` 的相对误差与归约工作量（`feat_reduction_work_items`）之间的关系。按归约工作量（`feat_reduction_work_items`）的四分位区间统计，`MAPE` 由低工作量区间 `{reduce_low['work_min_fmt']}-{reduce_low['work_max_fmt']}` 上的 `{reduce_low['mape']:.4f}` 下降到高工作量区间 `{reduce_high['work_min_fmt']}-{reduce_high['work_max_fmt']}` 上的 `{reduce_high['mape']:.4f}`，`P50/P90 APE` 也分别由 `{reduce_low['p50']:.4f}/{reduce_low['p90']:.4f}` 下降到 `{reduce_high['p50']:.4f}/{reduce_high['p90']:.4f}`，说明当归约工作量（`feat_reduction_work_items`）足够大时，解析代理对主导成本的刻画更稳定。图 4-7 给出了 `Transpose` 与 `Concat` 的相对误差随数据搬移字节量（`feat_io_bytes_sum`）变化的情况。按数据搬移字节量（`feat_io_bytes_sum`）的四分位区间统计，若取上下界不重合的有效区间进行比较，`MAPE` 由中低规模区间 `4.80×10^1-5.90×10^5` 上的 `0.0666` 增加到最高区间 `{layout_high['work_min_fmt']}-{layout_high['work_max_fmt']}` 上的 `{layout_high['mape']:.4f}`，`P90 APE` 也由 `0.1342` 增加到 `{layout_high['p90']:.4f}`，说明这两类算子的预测偏差主要随数据搬移量（`feat_io_bytes_sum`）扩大而上升。图 4-8 给出了 `Gemm/MatMul` 的相对误差与乘加运算量（`feat_gemm_mac_count`）之间的关系，`MAPE` 由低乘加运算量区间 `{gemm_low['work_min_fmt']}-{gemm_low['work_max_fmt']}` 上的 `{gemm_low['mape']:.4f}` 下降到高区间 `{gemm_high['work_min_fmt']}-{gemm_high['work_max_fmt']}` 上的 `{gemm_high['mape']:.4f}`，`P90 APE` 也由 `{gemm_low['p90']:.4f}` 下降到 `{gemm_high['p90']:.4f}`，反映出小维度下微核利用率不足会更明显地放大误差。整体来看，这些现象与第三章关于随机访存、数据搬移和 kernel 饱和度的分析是相互印证的。",
-        "",
-        "### 4.2.4 跨规模泛化实验",
-        "",
-        f"图 4-9 直接对比了未见输入形状配置与未见线程数配置两类 holdout 切分下的单算子 `MAPE`，对应结果分别为 {ood_rows.get('unseen_batch_size', {}).get('mape', 0.0):.4f} 和 {ood_rows.get('unseen_num_threads', {}).get('mape', 0.0):.4f}。两者都与随机测试集上的误差处于同一数量级，说明当前特征集合并未明显依赖某一组固定配置。图 4-10 则进一步给出了基于留一场景外推（`leave-one-case-out`）与留一组合外推（`leave-one-combo-out`）两种划分方式的算子族级外推参考结果，用于从更细粒度的算子族层面观察不同外推方案下的误差差异。",
         "",
         "## 4.3 整图性能聚合实验",
         "",
