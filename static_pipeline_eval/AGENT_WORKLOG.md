@@ -948,3 +948,37 @@ Validation run:
 
 Open risks:
 - The draft is now more strongly optimized for result-first experimental storytelling; if a later advisor prefers a more conventional thesis style with heavier setup before each result, another wording pass may still be needed.
+
+### 2026-04-06 - Clarify representative-operator figure narrative and quantify ReduceSum trend
+
+Request summary:
+- Rewrite the representative-operator paragraph in the Chapter 4 single-only draft so it explains Figures `4-5` to `4-8` one by one.
+- Add quantitative evidence for the `ReduceSum` error-vs-scale trend because the visual trend alone was not sufficiently obvious.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Rewrote the Section `4.2.3` paragraph so each figure is now introduced in order with:
+  - what the figure plots
+  - what conclusion is drawn from it
+- Adjusted the `Gather` explanation to match the current figure content:
+  - predicted-vs-actual scatter with thread-coloring
+  - emphasis on larger tail scatter rather than scale-axis narration
+- Replaced the purely qualitative `ReduceSum` sentence with a quantitative statement based on four workload quartiles of `feat_reduction_work_items`.
+- Added explicit quartile-level metrics for `ReduceSum`:
+  - `MAPE` from `0.0998` down to `0.0696`
+  - `P50 APE` from `0.0778` down to `0.0499`
+  - `P90 APE` from `0.2125` down to `0.1636`
+
+Validation run:
+- Re-read the updated Section `4.2.3` in:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Computed `ReduceSum` test-set quartile statistics directly from:
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_300_iter_quick_nodrop/classed_dataset_full.csv`
+  - `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_300_iter_quick_nodrop/models/combined/combined_predictions_test.csv`
+- Verified that the new wording matches the actual current figure semantics for `Gather`, `ReduceSum`, `Transpose/Concat`, and `Gemm/MatMul`.
+
+Open risks:
+- The `ReduceSum` trend is directionally clear at the quartile level but not perfectly monotonic in every finer-grained sub-bin, so the wording intentionally uses “整体呈下降趋势” rather than claiming a strict monotonic law.
