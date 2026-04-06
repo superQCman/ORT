@@ -57,6 +57,44 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-06 - Rewrite Chapter 4 single-only draft into thesis-style narrative
+
+Request summary:
+- Rewrite the Chapter 4 single-only draft based on the current `chapter4_cpu_single_only` artifacts.
+- De-emphasize engineering and implementation details.
+- Analyze whether the single-only experiment is persuasive enough to keep, and remove weak or unnecessary narrative branches so the chapter reads defensibly to reviewers.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+
+Behavior changes:
+- Rewrote the Chapter 4 single-only draft into a paper-style chapter centered on the actual evidence chain:
+  - single-op accuracy
+  - cross-configuration generalization
+  - full-graph static-pipeline aggregation
+  - four-way ablation and residual-error analysis
+- Removed script paths, artifact paths, auto-generation notes, figure-count bookkeeping, and other engineering-heavy narration from the draft body.
+- Kept the single-only experiment because the current evidence is strong enough:
+  - single-op `MAPE = 0.0759`
+  - unseen-batch / unseen-thread `MAPE = 0.0689 / 0.0773`
+  - full-graph `MAPE = 0.0647`, `P90 APE = 0.1261`
+- Tightened the ablation framing so `simple add` is explicitly presented as a negative control rather than a practical full-graph predictor.
+- Avoided overclaiming by explicitly attributing remaining errors to dynamic memory-latency variance, tiny-tensor framework overhead, low-utilization small Gemm/MatMul, and synchronization-sensitive full-graph cases.
+
+Validation run:
+- Manually cross-checked all cited metrics in the rewritten draft against:
+  - `single_op_core_summary.json`
+  - `ood_slice_summary.md`
+  - `e2e_core_summary.json`
+  - `single_op_ablation_summary.json`
+  - `table_4_7_error_cases.md`
+- Reviewed the full edited markdown to ensure the chapter no longer relies on grouped-MLP comparisons or engineering-path narration.
+
+Open risks:
+- The draft is now intentionally scoped to the single-only evidence chain, so if later versions reintroduce grouped-model comparisons, the chapter structure should be reconsidered instead of mixed back in piecemeal.
+- Figure numbering and table numbering remain tied to the generated artifact set; if any figure generation logic changes later, the narrative should be rechecked for consistency.
+
 ### 2026-04-06 - Add single-MLP pipeline baseline so grouped pipeline can be compared fairly
 
 Request summary:
