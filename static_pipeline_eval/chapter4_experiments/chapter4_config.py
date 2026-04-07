@@ -46,12 +46,16 @@ ABLATION_ARTIFACT_ROOT = (
     / "classed_op_mlp_test_2_analytical_5_200_iter"
 )
 BASELINE_MODEL_ROOT = DEFAULT_ORT_ROOT / "single_op_stage1_mlp" / "artifacts" / "latest" / "model_all_no_trace"
-FAIR_SINGLE_MLP_HIDDEN_LAYERS = (64,)
-FAIR_SINGLE_MLP_MAX_ITER = 15
+FAIR_SINGLE_MLP_HIDDEN_LAYERS = (128,128,128,128,128,128)
+FAIR_SINGLE_MLP_MAX_ITER = 200
 FAIR_SINGLE_MLP_BATCH_SIZE = 1024
 FAIR_SINGLE_MLP_ALPHA = 1e-4
 FAIR_SINGLE_MLP_LEARNING_RATE_INIT = 1e-3
 FAIR_SINGLE_MLP_SEED = 42
+
+# Global font-size control for Chapter 4 figures.
+# Increase or decrease this single scale factor to adjust figure text uniformly.
+CHAPTER4_FIGURE_FONT_SCALE = 1.0
 
 OOD_BATCH_HOLDS = (1856, 1920, 1984, 2016, 2048)
 OOD_NUM_THREADS_HOLD = 3
@@ -111,6 +115,8 @@ FIGURE_FILENAMES = {
     "4-18": "fig_4_18_sum_baseline_compare.png",
     "4-19": "fig_4_19_best_ablation_summary.png",
 }
+
+REPRESENTATIVE_PANEL_FILENAME = "fig_4_5_single_op_representative_panel.png"
 
 
 def output_subdir(root: Path, name: str) -> Path:

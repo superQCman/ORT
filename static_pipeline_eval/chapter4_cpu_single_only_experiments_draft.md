@@ -92,25 +92,13 @@
 
 ### 4.2.3 典型算子现象分析
 
-为进一步解释上节的类别级结论，图 4-5 至图 4-8 分别展示了四类代表性算子的相对误差与其主导规模特征之间的关系。图 4-5 给出了 `Gather` 的相对误差与索引查找工作量（`feat_lookup_count`）之间的关系。按索引查找工作量（`feat_lookup_count`）的分位区间统计，低规模区间 `1.00×10^0-1.72×10^6` 上的 `MAPE/P90 APE` 分别为 `0.0601/0.1293`，而较高规模区间 `1.82×10^6-2.37×10^6` 和 `2.42×10^6-4.10×10^6` 上分别达到 `0.0774/0.1649` 和 `0.0740/0.1492`，说明随着索引查找工作量（`feat_lookup_count`）增大，随机访存波动更容易放大尾部误差。图 4-6 给出了 `ReduceSum` 的相对误差与归约工作量（`feat_reduction_work_items`）之间的关系。按归约工作量（`feat_reduction_work_items`）的四分位区间统计，其 `MAPE` 由最低工作量区间 `2.62×10^8-6.15×10^8` 上的 `0.0998` 下降到最高工作量区间 `9.98×10^8-1.64×10^9` 上的 `0.0696`，`P50 APE` 由 `0.0778` 下降到 `0.0499`，`P90 APE` 也由 `0.2125` 下降到 `0.1636`。这说明当归约工作量（`feat_reduction_work_items`）足够大时，固定开销和运行时噪声的占比下降，解析代理对归约主导成本的刻画更为有效。图 4-7 给出了 `Transpose` 与 `Concat` 的相对误差随数据搬移字节量（`feat_io_bytes_sum`）变化的情况。按数据搬移字节量（`feat_io_bytes_sum`）的四分位区间统计，若取上下界不重合的有效区间进行比较，其 `MAPE` 由中低规模区间 `4.80×10^1-5.90×10^5` 上的 `0.0666` 上升到最高区间 `1.52×10^7-5.90×10^7` 上的 `0.0878`，`P90 APE` 也由 `0.1342` 上升到 `0.1827`，说明这两类算子的预测偏差主要随数据搬移量（`feat_io_bytes_sum`）扩大而上升。图 4-8 给出了 `Gemm/MatMul` 的相对误差与乘加运算量（`feat_gemm_mac_count`）之间的关系。按乘加运算量（`feat_gemm_mac_count`）的四分位区间统计，其 `MAPE` 由低区间 `8.45×10^5-4.67×10^7` 上的 `0.1431` 下降到高区间 `1.17×10^9-2.62×10^9` 上的 `0.0880`，`P90 APE` 也由 `0.2966` 下降到 `0.1678`，反映出小维度下微核利用率不足会更明显地放大误差。
+为进一步解释上节的类别级结论，图 4-5(a) 至图 4-5(d) 分别展示了四类代表性算子的相对误差与其主导规模特征之间的关系。图 4-5(a) 给出了 `Gather` 的相对误差与索引查找工作量（`feat_lookup_count`）之间的关系。按索引查找工作量（`feat_lookup_count`）的分位区间统计，低规模区间 `1.00×10^0-1.72×10^6` 上的 `MAPE/P90 APE` 分别为 `0.0601/0.1293`，而较高规模区间 `1.82×10^6-2.37×10^6` 和 `2.42×10^6-4.10×10^6` 上分别达到 `0.0774/0.1649` 和 `0.0740/0.1492`，说明随着索引查找工作量（`feat_lookup_count`）增大，随机访存波动更容易放大尾部误差。图 4-5(b) 给出了 `ReduceSum` 的相对误差与归约工作量（`feat_reduction_work_items`）之间的关系。按归约工作量（`feat_reduction_work_items`）的四分位区间统计，其 `MAPE` 由最低工作量区间 `2.62×10^8-6.15×10^8` 上的 `0.0998` 下降到最高工作量区间 `9.98×10^8-1.64×10^9` 上的 `0.0696`，`P50 APE` 由 `0.0778` 下降到 `0.0499`，`P90 APE` 也由 `0.2125` 下降到 `0.1636`。这说明当归约工作量（`feat_reduction_work_items`）足够大时，固定开销和运行时噪声的占比下降，解析代理对归约主导成本的刻画更为有效。图 4-5(c) 给出了 `Transpose` 与 `Concat` 的相对误差随数据搬移字节量（`feat_io_bytes_sum`）变化的情况。按数据搬移字节量（`feat_io_bytes_sum`）的四分位区间统计，若取上下界不重合的有效区间进行比较，其 `MAPE` 由中低规模区间 `4.80×10^1-5.90×10^5` 上的 `0.0666` 上升到最高区间 `1.52×10^7-5.90×10^7` 上的 `0.0878`，`P90 APE` 也由 `0.1342` 上升到 `0.1827`，说明这两类算子的预测偏差主要随数据搬移量（`feat_io_bytes_sum`）扩大而上升。图 4-5(d) 给出了 `Gemm/MatMul` 的相对误差与乘加运算量（`feat_gemm_mac_count`）之间的关系。按乘加运算量（`feat_gemm_mac_count`）的四分位区间统计，其 `MAPE` 由低区间 `8.45×10^5-4.67×10^7` 上的 `0.1431` 下降到高区间 `1.17×10^9-2.62×10^9` 上的 `0.0880`，`P90 APE` 也由 `0.2966` 下降到 `0.1678`，反映出小维度下微核利用率不足会更明显地放大误差。
 
 这些现象表明，模型误差并非完全无结构的黑盒偏差，而是能够被硬件与 kernel 行为解释的残差。这比单纯报告总体 `MAPE` 更有分析价值，因为它说明第三章提出的特征设计确实捕获了决定节点时延的主导因素，而剩余误差更多来自随机访存、小张量固定开销或低利用率计算等动态效应。
 
-![图 4-5 Gather 误差与 lookup 规模关系](artifacts/latest/chapter4_cpu_single_only/figures/fig_4_5_single_op_representative_graph.png)
+![图 4-5 代表性算子误差与主导规模特征关系](artifacts/latest/chapter4_cpu_single_only/figures/fig_4_5_single_op_representative_panel.png)
 
-图 4-5 Gather 误差与 lookup 规模关系。
-
-![图 4-6 ReduceSum 误差与归约规模关系](artifacts/latest/chapter4_cpu_single_only/figures/fig_4_6_single_op_prediction_scatter.png)
-
-图 4-6 ReduceSum 误差与归约规模关系。
-
-![图 4-7 Transpose/Concat 误差与数据搬移规模关系](artifacts/latest/chapter4_cpu_single_only/figures/fig_4_7_single_op_training_history.png)
-
-图 4-7 Transpose/Concat 误差与数据搬移规模关系。
-
-![图 4-8 Gemm/MatMul 误差与 MAC 规模关系](artifacts/latest/chapter4_cpu_single_only/figures/fig_4_8_single_op_residual_distribution.png)
-
-图 4-8 Gemm/MatMul 误差与 MAC 规模关系。
+图 4-5 代表性算子误差与主导规模特征关系：（a）Gather；（b）ReduceSum；（c）Transpose/Concat；（d）Gemm/MatMul。
 
 ## 4.3 整图静态聚合结果
 

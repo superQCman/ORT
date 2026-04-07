@@ -37,6 +37,7 @@ from .chapter4_config import (
     FAIR_SINGLE_MLP_LEARNING_RATE_INIT,
     FAIR_SINGLE_MLP_MAX_ITER,
     FAIR_SINGLE_MLP_SEED,
+    CHAPTER4_FIGURE_FONT_SCALE,
     CHAPTER4_DRAFT_PATH,
     CHAPTER4_OUTPUT_ROOT,
     CHAPTER4_SINGLE_ONLY_DRAFT_PATH,
@@ -46,6 +47,7 @@ from .chapter4_config import (
     OOD_ARTIFACT_ROOT,
     OOD_BATCH_HOLDS,
     OOD_NUM_THREADS_HOLD,
+    REPRESENTATIVE_PANEL_FILENAME,
     REPRESENTATIVE_OP_TYPES,
     SINGLE_OP_ARTIFACT_ROOT,
     TABLE_FILENAMES,
@@ -145,9 +147,24 @@ def _import_pyplot():
     import matplotlib
 
     matplotlib.use("Agg")
+    matplotlib.rcParams.update(
+        {
+            "font.size": 10.5 * CHAPTER4_FIGURE_FONT_SCALE,
+            "axes.labelsize": 10.5 * CHAPTER4_FIGURE_FONT_SCALE,
+            "axes.titlesize": 11.0 * CHAPTER4_FIGURE_FONT_SCALE,
+            "xtick.labelsize": 9.5 * CHAPTER4_FIGURE_FONT_SCALE,
+            "ytick.labelsize": 9.5 * CHAPTER4_FIGURE_FONT_SCALE,
+            "legend.fontsize": 9.0 * CHAPTER4_FIGURE_FONT_SCALE,
+            "figure.titlesize": 11.5 * CHAPTER4_FIGURE_FONT_SCALE,
+        }
+    )
     import matplotlib.pyplot as plt
 
     return plt
+
+
+def _scaled_font(size: float) -> float:
+    return float(size) * CHAPTER4_FIGURE_FONT_SCALE
 
 
 def _style_axes(ax, title: str, xlabel: str = "", ylabel: str = "") -> None:
@@ -185,9 +202,61 @@ def add_audit_callout(ax, lines: Sequence[str] | None, *, loc: str = "upper righ
         transform=ax.transAxes,
         ha=ha,
         va=va,
-        fontsize=8.5,
+        fontsize=_scaled_font(8.5),
         bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.83, edgecolor="#C8C8C8"),
     )
+
+
+def _draw_scatter_on_ax(
+    ax,
+    frame: pd.DataFrame,
+    x: str,
+    y: str,
+    *,
+    hue: str | None = None,
+    reference_line: bool = True,
+    xlabel: str | None = None,
+    ylabel: str | None = None,
+    title: str | None = None,
+    panel_tag: str | None = None,
+    audit_lines: Sequence[str] | None = None,
+    audit_loc: str = "upper left",
+    show_legend: bool = True,
+) -> None:
+    palette = ["#4C78A8", "#E45756", "#54A24B", "#B279A2", "#F58518", "#72B7B2"]
+    if hue and hue in frame.columns:
+        for idx, (label, sub) in enumerate(frame.groupby(hue, sort=True)):
+            ax.scatter(
+                sub[x],
+                sub[y],
+                s=18,
+                alpha=0.75,
+                label=str(label),
+                color=palette[idx % len(palette)],
+            )
+        if show_legend:
+            ax.legend(frameon=False, fontsize=_scaled_font(8.0))
+    else:
+        ax.scatter(frame[x], frame[y], s=18, alpha=0.75, color="#4477aa")
+    if reference_line and not frame.empty:
+        lo = float(min(frame[x].min(), frame[y].min()))
+        hi = float(max(frame[x].max(), frame[y].max()))
+        ax.plot([lo, hi], [lo, hi], color="#222222", linewidth=1.0, linestyle="--")
+    _style_axes(ax, title or "", xlabel or x, ylabel or y)
+    if title:
+        ax.set_title(title, pad=8.0)
+    if panel_tag:
+        ax.text(
+            0.02,
+            0.98,
+            panel_tag,
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=_scaled_font(12.5),
+            fontweight="bold",
+        )
+    add_audit_callout(ax, audit_lines, loc=audit_loc)
 
 
 def plot_bar(
@@ -254,18 +323,16 @@ def plot_scatter(
 ) -> Path:
     plt = _import_pyplot()
     fig, ax = plt.subplots(figsize=(6.5, 6.5))
-    if hue and hue in frame.columns:
-        for label, sub in frame.groupby(hue):
-            ax.scatter(sub[x], sub[y], s=18, alpha=0.75, label=str(label))
-        ax.legend(frameon=False, fontsize=8)
-    else:
-        ax.scatter(frame[x], frame[y], s=18, alpha=0.75, color="#4477aa")
-    if reference_line and not frame.empty:
-        lo = float(min(frame[x].min(), frame[y].min()))
-        hi = float(max(frame[x].max(), frame[y].max()))
-        ax.plot([lo, hi], [lo, hi], color="#222222", linewidth=1.0, linestyle="--")
-    _style_axes(ax, title, x, y)
-    add_audit_callout(ax, audit_lines, loc=audit_loc)
+    _draw_scatter_on_ax(
+        ax,
+        frame,
+        x,
+        y,
+        hue=hue,
+        reference_line=reference_line,
+        audit_lines=audit_lines,
+        audit_loc=audit_loc,
+    )
     return save_figure(fig, path)
 
 
@@ -294,7 +361,7 @@ def plot_heatmap(
         for row_idx, row_label in enumerate(frame.index):
             for col_idx, col_label in enumerate(frame.columns):
                 value = matrix[row_idx, col_idx]
-                ax.text(col_idx, row_idx, f"{value:.2f}", ha="center", va="center", color="white", fontsize=8)
+                ax.text(col_idx, row_idx, f"{value:.2f}", ha="center", va="center", color="white", fontsize=_scaled_font(8.0))
     add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
@@ -344,6 +411,30 @@ def plot_line(
     return save_figure(fig, path)
 
 
+def plot_representative_panel(
+    specs: list[dict[str, Any]],
+    path: Path,
+) -> Path:
+    plt = _import_pyplot()
+    fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharey=False)
+    tags = ["(a)", "(b)", "(c)", "(d)"]
+    for ax, spec, tag in zip(axes.flatten(), specs, tags):
+        _draw_scatter_on_ax(
+            ax,
+            spec["frame"],
+            spec["x"],
+            spec["y"],
+            hue=spec.get("hue"),
+            reference_line=False,
+            xlabel=spec.get("xlabel"),
+            ylabel=spec.get("ylabel", "APE"),
+            title=spec.get("title"),
+            panel_tag=tag,
+            show_legend=spec.get("show_legend", True),
+        )
+    return save_figure(fig, path)
+
+
 def plot_cdf(
     values_by_label: dict[str, list[float]],
     path: Path,
@@ -386,7 +477,7 @@ def plot_flow(
             step,
             ha="center",
             va="center",
-            fontsize=10,
+            fontsize=_scaled_font(10.0),
             bbox=dict(boxstyle="round,pad=0.35", facecolor="#F7F7F7", edgecolor="#4C78A8", linewidth=1.2),
             transform=ax.transAxes,
         )
@@ -482,7 +573,7 @@ def plot_simple_graph(
         x, y = positions[int(node.node_idx)]
         color = color_map.get(str(node.partition), "#4C78A8")
         ax.scatter([x], [y], s=500, color=color, edgecolor="#222222", linewidth=0.7, zorder=3)
-        ax.text(x, y, str(node.label), ha="center", va="center", fontsize=8, color="white", zorder=4)
+        ax.text(x, y, str(node.label), ha="center", va="center", fontsize=_scaled_font(8.0), color="white", zorder=4)
 
     ax.set_xlabel("topological depth")
     ax.set_ylabel("node layer")
@@ -1609,6 +1700,8 @@ def run_single_op_core(
         ],
     )
 
+    representative_panel_specs: list[dict[str, Any]] = []
+
     gather_frame = test_dataset[test_dataset["op_type"] == "Gather"].copy()
     if not gather_frame.empty:
         gather_pred = selected_predictions[selected_predictions["op_type"] == "Gather"][["row_uid", "pred_us"]]
@@ -1617,8 +1710,9 @@ def run_single_op_core(
             (gather_frame["pred_us"].astype(float) - gather_frame["label_operator_actual_dur_us"].astype(float)).abs()
             / gather_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
         ).fillna(0.0)
+        gather_sample = gather_frame.sample(n=min(1500, len(gather_frame)), random_state=42)
         plot_scatter(
-            gather_frame.sample(n=min(1500, len(gather_frame)), random_state=42),
+            gather_sample,
             "feat_lookup_count",
             "ape",
             figures_dir / FIGURE_FILENAMES["4-5"],
@@ -1630,6 +1724,17 @@ def run_single_op_core(
                 f"p90 APE = {float(gather_frame['ape'].quantile(0.9)):.4f}",
             ],
         )
+        representative_panel_specs.append(
+            {
+                "frame": gather_sample,
+                "x": "feat_lookup_count",
+                "y": "ape",
+                "hue": "num_threads",
+                "xlabel": "feat_lookup_count",
+                "ylabel": "APE",
+                "title": "Gather",
+            }
+        )
 
     reduce_frame = test_dataset[test_dataset["op_type"] == "ReduceSum"].copy()
     if not reduce_frame.empty:
@@ -1639,8 +1744,9 @@ def run_single_op_core(
             (reduce_frame["pred_us"].astype(float) - reduce_frame["label_operator_actual_dur_us"].astype(float)).abs()
             / reduce_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
         ).fillna(0.0)
+        reduce_sample = reduce_frame.sample(n=min(1500, len(reduce_frame)), random_state=42)
         plot_scatter(
-            reduce_frame.sample(n=min(1500, len(reduce_frame)), random_state=42),
+            reduce_sample,
             "feat_reduction_work_items",
             "ape",
             figures_dir / FIGURE_FILENAMES["4-6"],
@@ -1652,6 +1758,17 @@ def run_single_op_core(
                 f"p90 APE = {float(reduce_frame['ape'].quantile(0.9)):.4f}",
             ],
         )
+        representative_panel_specs.append(
+            {
+                "frame": reduce_sample,
+                "x": "feat_reduction_work_items",
+                "y": "ape",
+                "hue": "num_threads",
+                "xlabel": "feat_reduction_work_items",
+                "ylabel": "APE",
+                "title": "ReduceSum",
+            }
+        )
 
     layout_frame = test_dataset[test_dataset["op_type"].isin(["Transpose", "Concat"])].copy()
     if not layout_frame.empty:
@@ -1661,8 +1778,9 @@ def run_single_op_core(
             (layout_frame["pred_us"].astype(float) - layout_frame["label_operator_actual_dur_us"].astype(float)).abs()
             / layout_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
         ).fillna(0.0)
+        layout_sample = layout_frame.sample(n=min(1500, len(layout_frame)), random_state=42)
         plot_scatter(
-            layout_frame.sample(n=min(1500, len(layout_frame)), random_state=42),
+            layout_sample,
             "feat_io_bytes_sum",
             "ape",
             figures_dir / FIGURE_FILENAMES["4-7"],
@@ -1674,6 +1792,17 @@ def run_single_op_core(
                 f"shown ops = Transpose / Concat",
             ],
         )
+        representative_panel_specs.append(
+            {
+                "frame": layout_sample,
+                "x": "feat_io_bytes_sum",
+                "y": "ape",
+                "hue": "op_type",
+                "xlabel": "feat_io_bytes_sum",
+                "ylabel": "APE",
+                "title": "Transpose / Concat",
+            }
+        )
 
     gemm_frame = test_dataset[test_dataset["op_type"].isin(["Gemm", "MatMul"])].copy()
     if not gemm_frame.empty:
@@ -1683,8 +1812,9 @@ def run_single_op_core(
             (gemm_frame["pred_us"].astype(float) - gemm_frame["label_operator_actual_dur_us"].astype(float)).abs()
             / gemm_frame["label_operator_actual_dur_us"].replace(0.0, pd.NA)
         ).fillna(0.0)
+        gemm_sample = gemm_frame.sample(n=min(1500, len(gemm_frame)), random_state=42)
         plot_scatter(
-            gemm_frame.sample(n=min(1500, len(gemm_frame)), random_state=42),
+            gemm_sample,
             "feat_gemm_mac_count",
             "ape",
             figures_dir / FIGURE_FILENAMES["4-8"],
@@ -1695,6 +1825,23 @@ def run_single_op_core(
                 f"rows = {len(gemm_frame):,}",
                 f"Gemm-like ops = {', '.join(sorted(gemm_frame['op_type'].unique().tolist()))}",
             ],
+        )
+        representative_panel_specs.append(
+            {
+                "frame": gemm_sample,
+                "x": "feat_gemm_mac_count",
+                "y": "ape",
+                "hue": "op_type",
+                "xlabel": "feat_gemm_mac_count",
+                "ylabel": "APE",
+                "title": "Gemm / MatMul",
+            }
+        )
+
+    if len(representative_panel_specs) == 4:
+        plot_representative_panel(
+            representative_panel_specs,
+            figures_dir / REPRESENTATIVE_PANEL_FILENAME,
         )
 
     section_payload = {
@@ -1710,6 +1857,7 @@ def run_single_op_core(
             "4-6": str(figures_dir / FIGURE_FILENAMES["4-6"]),
             "4-7": str(figures_dir / FIGURE_FILENAMES["4-7"]),
             "4-8": str(figures_dir / FIGURE_FILENAMES["4-8"]),
+            "4-5-panel": str(figures_dir / REPRESENTATIVE_PANEL_FILENAME),
         },
         "summary": {
             "analytical_test_mape": float(analytical_metrics["mape"]),
@@ -2614,6 +2762,15 @@ def build_figures_catalog(output_root: Path | None = None) -> SectionResult:
                 "path": str(layout["figures"] / filename),
             }
         )
+    rows.append(
+        {
+            "figure_no": "4-5-panel",
+            "stage": "single-op core",
+            "claim": "combined representative-op panel with four subplots",
+            "filename": REPRESENTATIVE_PANEL_FILENAME,
+            "path": str(layout["figures"] / REPRESENTATIVE_PANEL_FILENAME),
+        }
+    )
     frame = pd.DataFrame(rows).sort_values("figure_no").reset_index(drop=True)
     csv_path, md_path = write_frame_csv_md(frame, layout["manifests"] / "figures_catalog.csv", layout["manifests"] / "figures_catalog.md", "Chapter 4 Figure Catalog")
     payload = {"csv": str(csv_path), "md": str(md_path), "rows": rows}
@@ -2778,7 +2935,7 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         "",
         "### 4.2.3 典型算子预测结果分析",
         "",
-        f"图 4-5 至图 4-8 分别展示了四类代表性算子的相对误差与其主导规模特征之间的关系。图 4-5 给出了 `Gather` 的相对误差与索引查找工作量（`feat_lookup_count`）之间的关系。按索引查找工作量（`feat_lookup_count`）的分位区间统计，低规模区间 `{gather_low['work_min_fmt']}-{gather_low['work_max_fmt']}` 上的 `MAPE/P90 APE` 分别为 `{gather_low['mape']:.4f}/{gather_low['p90']:.4f}`，而高规模区间 `{gather_high['work_min_fmt']}-{gather_high['work_max_fmt']}` 上对应上升到 `{gather_high['mape']:.4f}/{gather_high['p90']:.4f}`，说明随着索引查找工作量（`feat_lookup_count`）增大，随机访存波动更容易放大尾部误差。图 4-6 给出了 `ReduceSum` 的相对误差与归约工作量（`feat_reduction_work_items`）之间的关系。按归约工作量（`feat_reduction_work_items`）的四分位区间统计，`MAPE` 由低工作量区间 `{reduce_low['work_min_fmt']}-{reduce_low['work_max_fmt']}` 上的 `{reduce_low['mape']:.4f}` 下降到高工作量区间 `{reduce_high['work_min_fmt']}-{reduce_high['work_max_fmt']}` 上的 `{reduce_high['mape']:.4f}`，`P50/P90 APE` 也分别由 `{reduce_low['p50']:.4f}/{reduce_low['p90']:.4f}` 下降到 `{reduce_high['p50']:.4f}/{reduce_high['p90']:.4f}`，说明当归约工作量（`feat_reduction_work_items`）足够大时，解析代理对主导成本的刻画更稳定。图 4-7 给出了 `Transpose` 与 `Concat` 的相对误差随数据搬移字节量（`feat_io_bytes_sum`）变化的情况。按数据搬移字节量（`feat_io_bytes_sum`）的四分位区间统计，若取上下界不重合的有效区间进行比较，`MAPE` 由中低规模区间 `4.80×10^1-5.90×10^5` 上的 `0.0666` 增加到最高区间 `{layout_high['work_min_fmt']}-{layout_high['work_max_fmt']}` 上的 `{layout_high['mape']:.4f}`，`P90 APE` 也由 `0.1342` 增加到 `{layout_high['p90']:.4f}`，说明这两类算子的预测偏差主要随数据搬移量（`feat_io_bytes_sum`）扩大而上升。图 4-8 给出了 `Gemm/MatMul` 的相对误差与乘加运算量（`feat_gemm_mac_count`）之间的关系，`MAPE` 由低乘加运算量区间 `{gemm_low['work_min_fmt']}-{gemm_low['work_max_fmt']}` 上的 `{gemm_low['mape']:.4f}` 下降到高区间 `{gemm_high['work_min_fmt']}-{gemm_high['work_max_fmt']}` 上的 `{gemm_high['mape']:.4f}`，`P90 APE` 也由 `{gemm_low['p90']:.4f}` 下降到 `{gemm_high['p90']:.4f}`，反映出小维度下微核利用率不足会更明显地放大误差。整体来看，这些现象与第三章关于随机访存、数据搬移和 kernel 饱和度的分析是相互印证的。",
+        f"图 4-5(a) 至图 4-5(d) 分别展示了四类代表性算子的相对误差与其主导规模特征之间的关系。图 4-5(a) 给出了 `Gather` 的相对误差与索引查找工作量（`feat_lookup_count`）之间的关系。按索引查找工作量（`feat_lookup_count`）的分位区间统计，低规模区间 `{gather_low['work_min_fmt']}-{gather_low['work_max_fmt']}` 上的 `MAPE/P90 APE` 分别为 `{gather_low['mape']:.4f}/{gather_low['p90']:.4f}`，而高规模区间 `{gather_high['work_min_fmt']}-{gather_high['work_max_fmt']}` 上对应上升到 `{gather_high['mape']:.4f}/{gather_high['p90']:.4f}`，说明随着索引查找工作量（`feat_lookup_count`）增大，随机访存波动更容易放大尾部误差。图 4-5(b) 给出了 `ReduceSum` 的相对误差与归约工作量（`feat_reduction_work_items`）之间的关系。按归约工作量（`feat_reduction_work_items`）的四分位区间统计，`MAPE` 由低工作量区间 `{reduce_low['work_min_fmt']}-{reduce_low['work_max_fmt']}` 上的 `{reduce_low['mape']:.4f}` 下降到高工作量区间 `{reduce_high['work_min_fmt']}-{reduce_high['work_max_fmt']}` 上的 `{reduce_high['mape']:.4f}`，`P50/P90 APE` 也分别由 `{reduce_low['p50']:.4f}/{reduce_low['p90']:.4f}` 下降到 `{reduce_high['p50']:.4f}/{reduce_high['p90']:.4f}`，说明当归约工作量（`feat_reduction_work_items`）足够大时，解析代理对主导成本的刻画更稳定。图 4-5(c) 给出了 `Transpose` 与 `Concat` 的相对误差随数据搬移字节量（`feat_io_bytes_sum`）变化的情况。按数据搬移字节量（`feat_io_bytes_sum`）的四分位区间统计，若取上下界不重合的有效区间进行比较，`MAPE` 由中低规模区间 `4.80×10^1-5.90×10^5` 上的 `0.0666` 增加到最高区间 `{layout_high['work_min_fmt']}-{layout_high['work_max_fmt']}` 上的 `{layout_high['mape']:.4f}`，`P90 APE` 也由 `0.1342` 增加到 `{layout_high['p90']:.4f}`，说明这两类算子的预测偏差主要随数据搬移量（`feat_io_bytes_sum`）扩大而上升。图 4-5(d) 给出了 `Gemm/MatMul` 的相对误差与乘加运算量（`feat_gemm_mac_count`）之间的关系，`MAPE` 由低乘加运算量区间 `{gemm_low['work_min_fmt']}-{gemm_low['work_max_fmt']}` 上的 `{gemm_low['mape']:.4f}` 下降到高区间 `{gemm_high['work_min_fmt']}-{gemm_high['work_max_fmt']}` 上的 `{gemm_high['mape']:.4f}`，`P90 APE` 也由 `{gemm_low['p90']:.4f}` 下降到 `{gemm_high['p90']:.4f}`，反映出小维度下微核利用率不足会更明显地放大误差。整体来看，这些现象与第三章关于随机访存、数据搬移和 kernel 饱和度的分析是相互印证的。",
         "",
         "## 4.3 整图性能聚合实验",
         "",
