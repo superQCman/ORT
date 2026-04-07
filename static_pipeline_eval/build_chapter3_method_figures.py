@@ -161,68 +161,81 @@ def _draw_structure_figure(output_dir: Path) -> list[Path]:
     Polygon = polygon
     _configure_style(plt, font_manager)
 
-    fig = plt.figure(figsize=(13.8, 6.2))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.05, 1.0], wspace=0.10)
+    fig = plt.figure(figsize=(15.2, 6.5))
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.0], wspace=0.08)
     ax_left = fig.add_subplot(gs[0, 0])
     ax_right = fig.add_subplot(gs[0, 1])
 
     _panel(ax_left, "(a)")
     _panel(ax_right, "(b)")
 
-    bottom_nodes = [(0.08, 0.75, "Bottom\nop 1"), (0.23, 0.75, "Bottom\nop 2"), (0.38, 0.75, "Bottom\nop 3"), (0.53, 0.75, "Bottom\nop 4")]
+    col_x = [0.08, 0.25, 0.42, 0.59, 0.79]
+    top_y = 0.73
+    mid_y = 0.48
+    mid_h = 0.082
+    branch_gap = 0.035
+    op_w = 0.115
+    task_w = 0.095
+    tail_w = 0.14
+    tail_h = 0.09
+
+    bottom_nodes = [(col_x[0], top_y, "Bottom\nop 1"), (col_x[1], top_y, "Bottom\nop 2"), (col_x[2], top_y, "Bottom\nop 3"), (col_x[3], top_y, "Bottom\nop 4")]
     for idx, (x, y, label) in enumerate(bottom_nodes):
-        _box(ax_left, x, y, 0.11, 0.10, label, face=PALETTE["bottom"])
+        _box(ax_left, x, y, op_w, 0.10, label, face=PALETTE["bottom"], fontsize=10.6)
         if idx:
             prev_x, prev_y, _ = bottom_nodes[idx - 1]
-            _arrow(ax_left, (prev_x + 0.11, prev_y + 0.05), (x, y + 0.05))
+            _arrow(ax_left, (prev_x + op_w, prev_y + 0.05), (x, y + 0.05))
 
-    branch_columns = [0.09, 0.23, 0.37, 0.61]
+    branch_cols = [col_x[0] + 0.015, col_x[1] + 0.015, col_x[2] + 0.015, 0.70]
     branch_labels = ["emb_l0", "emb_l1", "emb_l2", "emb_l7"]
-    for x, branch_label in zip(branch_columns, branch_labels):
-        ax_left.text(x + 0.045, 0.605, branch_label, ha="center", va="bottom", fontsize=9.2, color=PALETTE["muted"])
-        _box(ax_left, x, 0.50, 0.09, 0.075, "Gather", face="#FDBA73", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.2)
-        _box(ax_left, x, 0.395, 0.09, 0.075, "Reshape", face="#FFE1BF", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.0)
-        _box(ax_left, x, 0.29, 0.09, 0.075, "Reduce\nSum", face="#FBCFA7", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=8.7)
-        _arrow(ax_left, (x + 0.045, 0.50), (x + 0.045, 0.47))
-        _arrow(ax_left, (x + 0.045, 0.395), (x + 0.045, 0.365))
+    for x, branch_label in zip(branch_cols, branch_labels):
+        ax_left.text(x + 0.05, mid_y + 0.12, branch_label, ha="center", va="bottom", fontsize=9.6, color=PALETTE["muted"])
+        _box(ax_left, x, mid_y, 0.10, mid_h, "Gather", face="#FDBA73", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.6, rounded=0.016)
+        _box(ax_left, x, mid_y - (mid_h + branch_gap), 0.10, mid_h, "Reshape", face="#FFE1BF", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.2, rounded=0.016)
+        _box(ax_left, x, mid_y - 2 * (mid_h + branch_gap), 0.10, mid_h, "Reduce\nSum", face="#FBCFA7", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=8.9, rounded=0.016)
+        _arrow(ax_left, (x + 0.05, mid_y), (x + 0.05, mid_y - branch_gap))
+        _arrow(ax_left, (x + 0.05, mid_y - (mid_h + branch_gap)), (x + 0.05, mid_y - (mid_h + 2 * branch_gap)))
 
-    ax_left.text(0.505, 0.455, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
-    ax_left.text(0.505, 0.345, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
+    ax_left.text(0.545, mid_y - 0.02, "⋯", fontsize=30, color=PALETTE["muted"], ha="center", va="center")
+    ax_left.text(0.545, mid_y - (mid_h + branch_gap) - 0.01, "⋯", fontsize=30, color=PALETTE["muted"], ha="center", va="center")
+    ax_left.text(0.545, mid_y - 2 * (mid_h + branch_gap), "⋯", fontsize=30, color=PALETTE["muted"], ha="center", va="center")
 
-    _box(ax_left, 0.74, 0.50, 0.16, 0.09, "Feature\ninteraction", face=PALETTE["tail"], fontsize=10.0)
-    _box(ax_left, 0.74, 0.35, 0.16, 0.09, "Top MLP\n/ output", face="#6FBF85", edge=PALETTE["tail"], fontsize=10.0)
-    _arrow(ax_left, (0.64, 0.80), (0.74, 0.545), connectionstyle="arc3,rad=-0.16")
-    for x in branch_columns:
-        _arrow(ax_left, (x + 0.045, 0.29), (0.74, 0.545), connectionstyle="arc3,rad=0.08")
-    _arrow(ax_left, (0.82, 0.50), (0.82, 0.44))
-    task_bottom = [(0.08, 0.74, r"$u_1$"), (0.22, 0.74, r"$u_2$"), (0.36, 0.74, r"$u_3$"), (0.50, 0.74, r"$u_4$")]
+    tail_x = 0.83
+    _box(ax_left, tail_x, 0.50, tail_w, tail_h, "Feature\ninteraction", face=PALETTE["tail"], fontsize=10.3)
+    _box(ax_left, tail_x, 0.33, tail_w, tail_h, "Top MLP\n/ output", face="#6FBF85", edge=PALETTE["tail"], fontsize=10.3)
+    _arrow(ax_left, (col_x[3] + op_w, top_y + 0.05), (tail_x, 0.545), connectionstyle="arc3,rad=-0.16")
+    for x in branch_cols:
+        _arrow(ax_left, (x + 0.05, mid_y - 2 * (mid_h + branch_gap)), (tail_x, 0.545), connectionstyle="arc3,rad=0.04")
+    _arrow(ax_left, (tail_x + 0.085, 0.50), (tail_x + 0.085, 0.42))
+
+    task_bottom = [(col_x[0], top_y, r"$u_1$"), (col_x[1], top_y, r"$u_2$"), (col_x[2], top_y, r"$u_3$"), (col_x[3], top_y, r"$u_4$")]
     for idx, (x, y, label) in enumerate(task_bottom):
-        _box(ax_right, x, y, 0.09, 0.09, label, face=PALETTE["bottom"], fontsize=11.5)
+        _box(ax_right, x + 0.02, y, task_w, 0.09, label, face=PALETTE["bottom"], fontsize=11.8)
         if idx:
             prev_x, prev_y, _ = task_bottom[idx - 1]
-            _arrow(ax_right, (prev_x + 0.09, prev_y + 0.045), (x, y + 0.045))
-    ax_right.text(0.08, 0.86, r"$\mathcal{U}_{\mathrm{bot}}$", fontsize=10.8, color=PALETTE["bottom"], fontweight="bold")
+            _arrow(ax_right, (prev_x + 0.02 + task_w, prev_y + 0.045), (x + 0.02, y + 0.045))
+    ax_right.text(col_x[0] + 0.02, 0.86, r"$\mathcal{U}_{\mathrm{bot}}$", fontsize=11.0, color=PALETTE["bottom"], fontweight="bold")
 
-    task_branches = [(0.09, 0.44, r"$B_0$"), (0.23, 0.44, r"$B_1$"), (0.37, 0.44, r"$B_2$"), (0.64, 0.44, r"$B_7$")]
+    task_branches = [(col_x[0] + 0.03, 0.42, r"$B_0$"), (col_x[1] + 0.03, 0.42, r"$B_1$"), (col_x[2] + 0.03, 0.42, r"$B_2$"), (col_x[4] - 0.045, 0.42, r"$B_7$")]
     for x, y, label in task_branches:
-        _box(ax_right, x, y, 0.09, 0.09, label, face=PALETTE["embedding"], fontsize=11.5)
-    ax_right.text(0.515, 0.485, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
-    ax_right.text(0.09, 0.58, r"$\mathcal{U}_{\mathrm{emb}}=\{B_0,\ldots,B_7\}$", fontsize=10.8, color=PALETTE["embedding"], fontweight="bold")
+        _box(ax_right, x, y, task_w, 0.09, label, face=PALETTE["embedding"], fontsize=11.8)
+    ax_right.text(0.57, 0.465, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
+    ax_right.text(col_x[0] + 0.03, 0.58, r"$\mathcal{U}_{\mathrm{emb}}=\{B_0,\ldots,B_7\}$", fontsize=11.0, color=PALETTE["embedding"], fontweight="bold")
 
-    _diamond(ax_right, 0.77, 0.42, 0.12, 0.11, r"$u_{\mathrm{bar}}$", face=PALETTE["barrier"], fontsize=11.5)
+    _diamond(ax_right, 0.79, 0.40, 0.11, 0.11, r"$u_{\mathrm{bar}}$", face=PALETTE["barrier"], fontsize=11.5)
     for x, y, _ in task_bottom:
-        _arrow(ax_right, (x + 0.045, y), (0.83, 0.53), connectionstyle="arc3,rad=-0.12")
+        _arrow(ax_right, (x + 0.02 + task_w / 2.0, y), (0.845, 0.51), connectionstyle="arc3,rad=-0.10")
     for x, y, _ in task_branches:
-        _arrow(ax_right, (x + 0.045, y + 0.09), (0.83, 0.42), connectionstyle="arc3,rad=0.06")
+        _arrow(ax_right, (x + task_w / 2.0, y + 0.09), (0.845, 0.40), connectionstyle="arc3,rad=0.05")
 
-    ax_right.text(0.77, 0.28, r"$\mathcal{U}_{\mathrm{tail}}$", fontsize=10.8, color=PALETTE["tail"], fontweight="bold")
-    tail_nodes = [(0.74, 0.16, r"$v_1$"), (0.85, 0.16, r"$v_2$"), (0.74, 0.05, r"$v_3$"), (0.85, 0.05, r"$v_4$")]
+    ax_right.text(0.79, 0.26, r"$\mathcal{U}_{\mathrm{tail}}$", fontsize=11.0, color=PALETTE["tail"], fontweight="bold")
+    tail_nodes = [(0.74, 0.15, r"$v_1$"), (0.86, 0.15, r"$v_2$"), (0.74, 0.04, r"$v_3$"), (0.86, 0.04, r"$v_4$")]
     for x, y, label in tail_nodes:
-        _box(ax_right, x, y, 0.085, 0.08, label, face=PALETTE["tail"], fontsize=11.0)
-    _arrow(ax_right, (0.83, 0.42), (0.785, 0.24))
-    _arrow(ax_right, (0.825, 0.20), (0.85, 0.20))
-    _arrow(ax_right, (0.785, 0.16), (0.785, 0.13))
-    _arrow(ax_right, (0.825, 0.09), (0.85, 0.09))
+        _box(ax_right, x, y, 0.08, 0.08, label, face=PALETTE["tail"], fontsize=11.0)
+    _arrow(ax_right, (0.845, 0.40), (0.78, 0.23))
+    _arrow(ax_right, (0.82, 0.19), (0.86, 0.19))
+    _arrow(ax_right, (0.78, 0.15), (0.78, 0.12))
+    _arrow(ax_right, (0.82, 0.08), (0.86, 0.08))
 
     outputs = _save_all_formats(fig, output_dir / "fig_3_3_4_task_graph_construction")
     plt.close(fig)

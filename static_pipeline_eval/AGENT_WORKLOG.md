@@ -145,6 +145,29 @@ Validation run:
 Open risks:
 - The current body text uses placeholder numbering `图 3-x` / `图 3-y`; these should be replaced with final figure numbers once the thesis layout is fixed.
 
+### 2026-04-07 - Re-grid the Chapter 3 structure figure for consistent spacing
+
+Request summary:
+- Improve the first Chapter 3 figure again because the two subpanels still felt visually inconsistent and too cramped.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+
+Behavior changes:
+- Rebuilt the Section 3.3.4 structure figure on a shared column grid so the left and right subpanels now use the same horizontal rhythm.
+- Increased the overall canvas width and widened the gaps between bottom nodes, branch columns, barrier, and tail nodes.
+- Shifted and narrowed the left-panel tail blocks so the `emb_l7` branch no longer crowds the post-join tail region.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- Visually checked the regenerated:
+  - `fig_3_3_4_task_graph_construction.png`
+
+Open risks:
+- The current figure is intentionally more schematic and whitespace-heavy; if a later thesis template aggressively shrinks figure width in the final PDF, some spacing may still need a final pass against the actual page layout.
+
 ### 2026-04-06 - Remove titles from Chapter 4 single-only figures
 
 Request summary:
