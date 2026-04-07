@@ -115,6 +115,36 @@ Validation run:
 Open risks:
 - The top timeline still uses a real long-makespan case, so the bottom path remains visually tiny relative to the branch pool; this is structurally accurate, but if the thesis prioritizes pedagogical clarity over artifact fidelity, a later schematic-only version may still be preferable for Section 3.3.5.
 
+### 2026-04-07 - Remove in-figure titles/explanatory text and move explanation into the method writeup
+
+Request summary:
+- Remove titles and extra explanatory sentences from the Chapter 3 method figures, further reduce text overlap, and move the explanatory burden back into the paper body so the figures stay compact and formal.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/STATIC_PIPELINE_SCHEDULER_PAPER.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+
+Behavior changes:
+- Simplified the Section 3.3.4 figure to a minimal two-panel diagram with only structural labels and no figure-internal title or prose annotation.
+- Simplified the Section 3.3.5 figure to:
+  - remove figure-internal title/subtitle
+  - remove formula callouts and explanatory sentences
+  - keep only the minimal scheduling labels, barrier marker, and makespan symbol
+  - use a cleaner post-barrier zoom panel with segment labels arranged to avoid overlap
+- Added short figure-reference paragraphs to the paper writeup so the structural explanation now lives in the surrounding text instead of on the figure canvas.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- Visually checked regenerated outputs:
+  - `fig_3_3_4_task_graph_construction.png`
+  - `fig_3_3_5_static_schedule_timeline.png`
+- Re-read the inserted paragraphs in `STATIC_PIPELINE_SCHEDULER_PAPER.md` Sections 5 and 6.
+
+Open risks:
+- The current body text uses placeholder numbering `图 3-x` / `图 3-y`; these should be replaced with final figure numbers once the thesis layout is fixed.
+
 ### 2026-04-06 - Remove titles from Chapter 4 single-only figures
 
 Request summary:

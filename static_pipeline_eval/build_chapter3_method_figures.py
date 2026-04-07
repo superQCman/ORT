@@ -94,7 +94,7 @@ def _save_all_formats(fig, output_stem: Path) -> list[Path]:
     return outputs
 
 
-def _panel(ax, title: str) -> None:
+def _panel(ax, label: str) -> None:
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
@@ -110,7 +110,7 @@ def _panel(ax, title: str) -> None:
             zorder=0,
         )
     )
-    ax.text(0.04, 0.94, title, fontsize=13, fontweight="bold", color=PALETTE["ink"], va="top")
+    ax.text(0.04, 0.95, label, fontsize=12, fontweight="bold", color=PALETTE["ink"], va="top")
 
 
 def _box(ax, x: float, y: float, w: float, h: float, text: str, *, face: str, edge: str | None = None, text_color: str = "white", fontsize: float = 10.5, rounded: float = 0.018, lw: float = 1.0) -> None:
@@ -166,12 +166,8 @@ def _draw_structure_figure(output_dir: Path) -> list[Path]:
     ax_left = fig.add_subplot(gs[0, 0])
     ax_right = fig.add_subplot(gs[0, 1])
 
-    _panel(ax_left, "(a) Original operator DAG")
-    _panel(ax_right, "(b) Hybrid task DAG used by the scheduler")
-
-    ax_left.text(0.08, 0.87, "Bottom path", fontsize=10.5, color=PALETTE["bottom"], fontweight="bold")
-    ax_left.text(0.08, 0.65, "Representative embedding branches", fontsize=10.5, color=PALETTE["embedding"], fontweight="bold")
-    ax_left.text(0.74, 0.65, "Post-join tail", fontsize=10.5, color=PALETTE["tail"], fontweight="bold", ha="center")
+    _panel(ax_left, "(a)")
+    _panel(ax_right, "(b)")
 
     bottom_nodes = [(0.08, 0.75, "Bottom\nop 1"), (0.23, 0.75, "Bottom\nop 2"), (0.38, 0.75, "Bottom\nop 3"), (0.53, 0.75, "Bottom\nop 4")]
     for idx, (x, y, label) in enumerate(bottom_nodes):
@@ -199,28 +195,19 @@ def _draw_structure_figure(output_dir: Path) -> list[Path]:
     for x in branch_columns:
         _arrow(ax_left, (x + 0.045, 0.29), (0.74, 0.545), connectionstyle="arc3,rad=0.08")
     _arrow(ax_left, (0.82, 0.50), (0.82, 0.44))
-    ax_left.text(
-        0.08,
-        0.10,
-        "Constants are omitted. Each embedding branch contributes one lookup,\none reshape, and one reduction operator before the global join.",
-        color=PALETTE["muted"],
-        fontsize=9.3,
-    )
-
-    ax_right.text(0.08, 0.86, r"$\mathcal{U}_{\mathrm{bot}}$", fontsize=10.8, color=PALETTE["bottom"], fontweight="bold")
     task_bottom = [(0.08, 0.74, r"$u_1$"), (0.22, 0.74, r"$u_2$"), (0.36, 0.74, r"$u_3$"), (0.50, 0.74, r"$u_4$")]
     for idx, (x, y, label) in enumerate(task_bottom):
         _box(ax_right, x, y, 0.09, 0.09, label, face=PALETTE["bottom"], fontsize=11.5)
         if idx:
             prev_x, prev_y, _ = task_bottom[idx - 1]
             _arrow(ax_right, (prev_x + 0.09, prev_y + 0.045), (x, y + 0.045))
+    ax_right.text(0.08, 0.86, r"$\mathcal{U}_{\mathrm{bot}}$", fontsize=10.8, color=PALETTE["bottom"], fontweight="bold")
 
-    ax_right.text(0.08, 0.58, r"$\mathcal{U}_{\mathrm{emb}}=\{B_0,\ldots,B_7\}$", fontsize=10.8, color=PALETTE["embedding"], fontweight="bold")
     task_branches = [(0.09, 0.44, r"$B_0$"), (0.23, 0.44, r"$B_1$"), (0.37, 0.44, r"$B_2$"), (0.64, 0.44, r"$B_7$")]
     for x, y, label in task_branches:
         _box(ax_right, x, y, 0.09, 0.09, label, face=PALETTE["embedding"], fontsize=11.5)
     ax_right.text(0.515, 0.485, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
-    ax_right.text(0.09, 0.37, r"$B_j=\mathrm{Gather}_j+\mathrm{Reshape}_j+\mathrm{ReduceSum}_j$", color=PALETTE["muted"], fontsize=10.1)
+    ax_right.text(0.09, 0.58, r"$\mathcal{U}_{\mathrm{emb}}=\{B_0,\ldots,B_7\}$", fontsize=10.8, color=PALETTE["embedding"], fontweight="bold")
 
     _diamond(ax_right, 0.77, 0.42, 0.12, 0.11, r"$u_{\mathrm{bar}}$", face=PALETTE["barrier"], fontsize=11.5)
     for x, y, _ in task_bottom:
@@ -237,15 +224,6 @@ def _draw_structure_figure(output_dir: Path) -> list[Path]:
     _arrow(ax_right, (0.785, 0.16), (0.785, 0.13))
     _arrow(ax_right, (0.825, 0.09), (0.85, 0.09))
 
-    ax_right.text(
-        0.08,
-        0.10,
-        "The scheduler keeps bottom/tail operators at node granularity,\ncontracts every embedding branch into one composite task, and inserts\nan explicit synchronization barrier before the tail.",
-        color=PALETTE["muted"],
-        fontsize=9.1,
-    )
-
-    fig.suptitle("Static task-graph construction for branch-parallel DLRM inference", fontsize=15, fontweight="bold", y=0.99)
     outputs = _save_all_formats(fig, output_dir / "fig_3_3_4_task_graph_construction")
     plt.close(fig)
     return outputs
@@ -281,10 +259,9 @@ def _compress_tail_segments(critical_path: pd.DataFrame) -> list[dict[str, float
     if tail_rows.empty:
         return []
     segments = [
-        ("Concat + reshape", 0, 5),
-        ("Interaction", 5, 11),
-        ("Top MLP block 1", 11, 16),
-        ("Top MLP block 2 / output", 16, len(tail_rows)),
+        ("Pre-tail", 0, 11),
+        ("Top MLP", 11, 16),
+        ("Output", 16, len(tail_rows)),
     ]
     compressed = []
     for label, start_idx, end_idx in segments:
@@ -349,14 +326,6 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
             edgecolors="white",
             linewidth=1.0,
         )
-        ax.text(
-            max(bottom_start_ms + bottom_duration_ms + total_ms * 0.006, total_ms * 0.010),
-            y_positions["Bottom ops"],
-            r"$\mathcal{U}_{\mathrm{bot}}$",
-            color=PALETTE["bottom"],
-            fontsize=10.5,
-            va="center",
-        )
 
     for lane, span in branch_slots:
         y = y_positions[lane]
@@ -368,16 +337,7 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
     barrier_ms = barrier_us / 1000.0
     ax.axvspan(barrier_ms, finish_us / 1000.0, ymin=0.0, ymax=0.22, facecolor="#F6EEF5", alpha=0.8, zorder=0)
     ax.vlines(barrier_ms, y_positions["Tail summary"] - 0.35, y_positions["Bottom ops"] + 0.40, colors=PALETTE["barrier"], linewidth=2.2, linestyles=(0, (4, 2)))
-    ax.text(barrier_ms + total_ms * 0.008, y_positions["Barrier"], r"$u_{\mathrm{bar}}$", color=PALETTE["barrier"], fontsize=12, fontweight="bold", va="center")
-    ax.text(
-        barrier_ms + total_ms * 0.008,
-        y_positions["Barrier"] - 0.26,
-        r"$s(u_{\mathrm{bar}})=\max(\max f(u), \max f(B_j))$",
-        color=PALETTE["muted"],
-        fontsize=9.5,
-        va="center",
-        bbox=dict(boxstyle="round,pad=0.2", facecolor="white", edgecolor="none", alpha=0.9),
-    )
+    ax.text(barrier_ms + total_ms * 0.006, y_positions["Barrier"], r"$u_{\mathrm{bar}}$", color=PALETTE["barrier"], fontsize=12, fontweight="bold", va="center")
 
     finish_ms = finish_us / 1000.0
 
@@ -397,25 +357,6 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
         ha="center",
         va="center",
     )
-    branch3 = branch_frame[branch_frame["label"] == "branch:3"].iloc[0]
-    wait_ms = float(branch3["start_us"]) / 1000.0
-    ax.annotate(
-        r"$s(B_3)=\max\{r(B_3), a_{\min}\}$",
-        xy=(wait_ms, y_positions["Slot 2"] + 0.28),
-        xytext=(wait_ms + total_ms * 0.07, y_positions["Slot 2"] + 0.95),
-        arrowprops=dict(arrowstyle="->", color=PALETTE["muted"], lw=1.2),
-        fontsize=10.2,
-        color=PALETTE["ink"],
-        bbox=dict(boxstyle="round,pad=0.22", facecolor="white", edgecolor="none", alpha=0.92),
-    )
-    ax.text(
-        wait_ms + total_ms * 0.06,
-        y_positions["Slot 2"] + 0.60,
-        "B3 can start only after the earliest slot releases.",
-        fontsize=9.5,
-        color=PALETTE["muted"],
-        bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.88),
-    )
 
     ax.annotate(
         "",
@@ -423,16 +364,7 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
         xytext=(0.0, y_positions["Tail summary"] - 0.55),
         arrowprops=dict(arrowstyle="<->", color=PALETTE["ink"], lw=1.2),
     )
-    ax.text(finish_ms / 2.0, y_positions["Tail summary"] - 0.80, r"predicted full-graph latency $\hat{M}$", ha="center", va="center", fontsize=11, color=PALETTE["ink"])
-
-    ax.annotate(
-        "zoomed below",
-        xy=(barrier_ms + (finish_ms - barrier_ms) * 0.35, y_positions["Tail summary"] - 0.02),
-        xytext=(barrier_ms + (finish_ms - barrier_ms) * 0.58, y_positions["Tail summary"] - 0.55),
-        arrowprops=dict(arrowstyle="->", color=PALETTE["muted"], lw=1.1),
-        fontsize=9.6,
-        color=PALETTE["muted"],
-    )
+    ax.text(finish_ms / 2.0, y_positions["Tail summary"] - 0.80, r"$\hat{M}$", ha="center", va="center", fontsize=12, color=PALETTE["ink"])
 
     ax.set_xlim(-0.06 * total_ms, total_ms * 1.03)
     ax.set_ylim(-0.15, 6.2)
@@ -443,46 +375,31 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
         ax.spines[side].set_visible(False)
     ax.spines["bottom"].set_color(PALETTE["line"])
 
-    ax.text(
-        0.0,
-        6.05,
-        "Static timeline generation under slot-limited FIFO branch scheduling",
-        fontsize=15,
-        fontweight="bold",
-        color=PALETTE["ink"],
-    )
-    ax.text(
-        0.0,
-        5.78,
-        f"Example aligned with the actual scheduler artifact: case_10_3_3 / bs2048_nip2000, kappa = {slot_count}.",
-        fontsize=10.2,
-        color=PALETTE["muted"],
-    )
-
     local_tail_ms = max((finish_us - barrier_us) / 1000.0, 1e-6)
-    zoom_labels = {
-        "Concat + reshape": "Concat\n+ reshape",
-        "Interaction": "Interaction",
-        "Top MLP block 1": "Top MLP\nblock 1",
-        "Top MLP block 2 / output": "Top MLP\nblock 2",
-    }
     ax_zoom.axvline(0.0, color=PALETTE["barrier"], linewidth=2.0, linestyle=(0, (4, 2)))
+    tiny_label_y = [0.93, 0.84, 0.75]
+    tiny_label_idx = 0
     for segment in tail_segments:
         start_ms = (float(segment["start_us"]) - barrier_us) / 1000.0
         duration_ms = (float(segment["end_us"]) - float(segment["start_us"])) / 1000.0
         ax_zoom.broken_barh([(start_ms, duration_ms)], (0.25, 0.55), facecolors=PALETTE["tail"], edgecolors="white", linewidth=1.0)
-        ax_zoom.text(
-            start_ms + duration_ms / 2.0,
-            0.525,
-            zoom_labels.get(str(segment["label"]), str(segment["label"])),
-            ha="center",
-            va="center",
-            fontsize=8.8,
-            color="white",
-            linespacing=0.9,
-        )
-    ax_zoom.text(local_tail_ms * 0.01, 0.92, r"post-barrier detailed view ($t=0$ at $u_{\mathrm{bar}}$)", color=PALETTE["ink"], fontsize=11.0)
-    ax_zoom.text(0.0, 0.10, r"$u_{\mathrm{bar}}$", color=PALETTE["barrier"], fontsize=11.5, fontweight="bold", ha="left")
+        center_ms = start_ms + duration_ms / 2.0
+        if duration_ms >= 18.0:
+            ax_zoom.text(
+                center_ms,
+                0.525,
+                str(segment["label"]),
+                ha="center",
+                va="center",
+                fontsize=9.6,
+                color="white",
+            )
+        else:
+            label_y = tiny_label_y[min(tiny_label_idx, len(tiny_label_y) - 1)]
+            tiny_label_idx += 1
+            ax_zoom.plot([center_ms, center_ms], [0.82, 0.68], color=PALETTE["muted"], linewidth=0.8)
+            ax_zoom.text(center_ms, label_y, str(segment["label"]), ha="center", va="bottom", fontsize=8.8, color=PALETTE["ink"])
+    ax_zoom.text(0.0, 0.10, r"$u_{\mathrm{bar}}$", color=PALETTE["barrier"], fontsize=11.0, fontweight="bold", ha="left")
     ax_zoom.set_xlim(0.0, local_tail_ms)
     ax_zoom.set_ylim(0.0, 1.0)
     ax_zoom.set_yticks([])
