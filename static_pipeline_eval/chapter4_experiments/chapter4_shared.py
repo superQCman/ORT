@@ -247,11 +247,11 @@ def _draw_scatter_on_ax(
         ax.set_title(title, pad=8.0)
     if panel_tag:
         ax.text(
-            0.02,
-            0.98,
+            0.5,
+            -0.22,
             panel_tag,
             transform=ax.transAxes,
-            ha="left",
+            ha="center",
             va="top",
             fontsize=_scaled_font(12.5),
             fontweight="bold",
@@ -432,6 +432,7 @@ def plot_representative_panel(
             panel_tag=tag,
             show_legend=spec.get("show_legend", True),
         )
+    fig.subplots_adjust(hspace=0.42, wspace=0.24, bottom=0.10)
     return save_figure(fig, path)
 
 

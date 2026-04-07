@@ -1518,3 +1518,28 @@ Validation run:
 
 Open risks:
 - The combined panel is now the only representative-operator figure embedded in the single-only draft, but later chapter-wide figure numbering has not been globally renumbered; downstream figure numbers remain unchanged for now.
+
+### 2026-04-07 - Move representative-panel subfigure labels below each subplot
+
+Request summary:
+- Reposition the `(a)` to `(d)` labels in the combined representative-operator panel so each label appears directly below its corresponding subplot.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+
+Behavior changes:
+- Moved the representative-panel subfigure tags from the upper-left corner of each subplot to the bottom-center area below each subplot.
+- Added slightly larger subplot spacing in the combined panel so the labels remain visually separated from the axes content.
+- Regenerated the single-only representative-operator panel figure with the updated label placement.
+
+Validation run:
+- Ran:
+  - `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- Rebuilt the single-only representative panel by calling:
+  - `run_single_op_core(..., prediction_source='single_fair')`
+- Verified regeneration of:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only/figures/fig_4_5_single_op_representative_panel.png`
+
+Open risks:
+- The new subfigure labels are centered below each subplot, so if the global font scale is increased substantially later, the panel spacing may need one more small adjustment.
