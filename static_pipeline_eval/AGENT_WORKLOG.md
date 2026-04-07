@@ -89,6 +89,32 @@ Open risks:
 - The method figures currently use English in-figure labels to avoid font-embedding issues across PDF/SVG export; if the thesis requires Chinese labels inside the figure canvas, the script may need a follow-up font selection pass on the target machine.
 - The Section 3.3.5 figure uses one real timeline case (`case_10_3_3 / bs2048_nip2000`, `kappa=3`) as the visual anchor; if you later prefer a fully schematic `kappa=2` teaching example, the same script should be adjusted rather than reusing the current export directly.
 
+### 2026-04-07 - Refine Chapter 3 method figures for spacing and post-barrier tail zoom
+
+Request summary:
+- Improve the visual quality of the newly added Chapter 3 method figures by removing text overlap, cleaning the layout, and correcting the semantics of the tail zoom so it clearly represents the region after the synchronization barrier.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+
+Behavior changes:
+- Reworked the Section 3.3.4 structure figure to use clearer group headings and a cleaner two-panel composition with less crowded annotation text.
+- Reworked the Section 3.3.5 scheduling figure from a single-axis timeline with an inset into a two-level composition:
+  - top panel for the full static schedule and barrier position
+  - bottom panel for a dedicated post-barrier tail zoom whose time origin is explicitly reset to `u_bar`
+- Added a highlighted post-barrier region and an explicit “zoomed below” linkage so the zoom semantics are visually unambiguous.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- Visually checked regenerated outputs:
+  - `fig_3_3_4_task_graph_construction.png`
+  - `fig_3_3_5_static_schedule_timeline.png`
+
+Open risks:
+- The top timeline still uses a real long-makespan case, so the bottom path remains visually tiny relative to the branch pool; this is structurally accurate, but if the thesis prioritizes pedagogical clarity over artifact fidelity, a later schematic-only version may still be preferable for Section 3.3.5.
+
 ### 2026-04-06 - Remove titles from Chapter 4 single-only figures
 
 Request summary:

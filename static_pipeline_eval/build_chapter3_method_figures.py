@@ -161,71 +161,89 @@ def _draw_structure_figure(output_dir: Path) -> list[Path]:
     Polygon = polygon
     _configure_style(plt, font_manager)
 
-    fig = plt.figure(figsize=(13.6, 5.8))
-    gs = fig.add_gridspec(1, 2, width_ratios=[1.12, 1.0], wspace=0.12)
+    fig = plt.figure(figsize=(13.8, 6.2))
+    gs = fig.add_gridspec(1, 2, width_ratios=[1.05, 1.0], wspace=0.10)
     ax_left = fig.add_subplot(gs[0, 0])
     ax_right = fig.add_subplot(gs[0, 1])
 
     _panel(ax_left, "(a) Original operator DAG")
     _panel(ax_right, "(b) Hybrid task DAG used by the scheduler")
 
-    bottom_nodes = [(0.08, 0.76, "Bottom\nop 1"), (0.23, 0.76, "Bottom\nop 2"), (0.38, 0.76, "Bottom\nop 3"), (0.53, 0.76, "Bottom\nop 4")]
+    ax_left.text(0.08, 0.87, "Bottom path", fontsize=10.5, color=PALETTE["bottom"], fontweight="bold")
+    ax_left.text(0.08, 0.65, "Representative embedding branches", fontsize=10.5, color=PALETTE["embedding"], fontweight="bold")
+    ax_left.text(0.74, 0.65, "Post-join tail", fontsize=10.5, color=PALETTE["tail"], fontweight="bold", ha="center")
+
+    bottom_nodes = [(0.08, 0.75, "Bottom\nop 1"), (0.23, 0.75, "Bottom\nop 2"), (0.38, 0.75, "Bottom\nop 3"), (0.53, 0.75, "Bottom\nop 4")]
     for idx, (x, y, label) in enumerate(bottom_nodes):
         _box(ax_left, x, y, 0.11, 0.10, label, face=PALETTE["bottom"])
         if idx:
             prev_x, prev_y, _ = bottom_nodes[idx - 1]
             _arrow(ax_left, (prev_x + 0.11, prev_y + 0.05), (x, y + 0.05))
 
-    branch_columns = [0.09, 0.22, 0.35, 0.61]
+    branch_columns = [0.09, 0.23, 0.37, 0.61]
     branch_labels = ["emb_l0", "emb_l1", "emb_l2", "emb_l7"]
     for x, branch_label in zip(branch_columns, branch_labels):
-        ax_left.text(x + 0.045, 0.655, branch_label, ha="center", va="bottom", fontsize=9.5, color=PALETTE["muted"])
-        _box(ax_left, x, 0.54, 0.09, 0.08, "Gather", face="#FDBA73", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.5)
-        _box(ax_left, x, 0.42, 0.09, 0.08, "Reshape", face="#FFE1BF", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.2)
-        _box(ax_left, x, 0.30, 0.09, 0.08, "Reduce\nSum", face="#FBCFA7", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.0)
-        _arrow(ax_left, (x + 0.045, 0.54), (x + 0.045, 0.50))
-        _arrow(ax_left, (x + 0.045, 0.42), (x + 0.045, 0.38))
+        ax_left.text(x + 0.045, 0.605, branch_label, ha="center", va="bottom", fontsize=9.2, color=PALETTE["muted"])
+        _box(ax_left, x, 0.50, 0.09, 0.075, "Gather", face="#FDBA73", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.2)
+        _box(ax_left, x, 0.395, 0.09, 0.075, "Reshape", face="#FFE1BF", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=9.0)
+        _box(ax_left, x, 0.29, 0.09, 0.075, "Reduce\nSum", face="#FBCFA7", edge=PALETTE["embedding"], text_color=PALETTE["ink"], fontsize=8.7)
+        _arrow(ax_left, (x + 0.045, 0.50), (x + 0.045, 0.47))
+        _arrow(ax_left, (x + 0.045, 0.395), (x + 0.045, 0.365))
 
-    ax_left.text(0.495, 0.46, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
-    ax_left.text(0.495, 0.34, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
+    ax_left.text(0.505, 0.455, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
+    ax_left.text(0.505, 0.345, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
 
-    _box(ax_left, 0.74, 0.54, 0.16, 0.09, "Feature\ninteraction", face=PALETTE["tail"], fontsize=10.2)
-    _box(ax_left, 0.74, 0.37, 0.16, 0.09, "Top MLP\n/ output", face="#6FBF85", edge=PALETTE["tail"], fontsize=10.2)
-    _arrow(ax_left, (0.64, 0.81), (0.74, 0.585), connectionstyle="arc3,rad=-0.18")
+    _box(ax_left, 0.74, 0.50, 0.16, 0.09, "Feature\ninteraction", face=PALETTE["tail"], fontsize=10.0)
+    _box(ax_left, 0.74, 0.35, 0.16, 0.09, "Top MLP\n/ output", face="#6FBF85", edge=PALETTE["tail"], fontsize=10.0)
+    _arrow(ax_left, (0.64, 0.80), (0.74, 0.545), connectionstyle="arc3,rad=-0.16")
     for x in branch_columns:
-        _arrow(ax_left, (x + 0.045, 0.30), (0.74, 0.585), connectionstyle="arc3,rad=0.08")
-    _arrow(ax_left, (0.82, 0.54), (0.82, 0.46))
-    ax_left.text(0.08, 0.10, "Constants are omitted; each embedding branch contains\nthree scheduled operators: Gather, Reshape, and ReduceSum.", color=PALETTE["muted"], fontsize=9.4)
+        _arrow(ax_left, (x + 0.045, 0.29), (0.74, 0.545), connectionstyle="arc3,rad=0.08")
+    _arrow(ax_left, (0.82, 0.50), (0.82, 0.44))
+    ax_left.text(
+        0.08,
+        0.10,
+        "Constants are omitted. Each embedding branch contributes one lookup,\none reshape, and one reduction operator before the global join.",
+        color=PALETTE["muted"],
+        fontsize=9.3,
+    )
 
-    task_bottom = [(0.07, 0.76, r"$u_1$"), (0.20, 0.76, r"$u_2$"), (0.33, 0.76, r"$u_3$"), (0.46, 0.76, r"$u_4$")]
+    ax_right.text(0.08, 0.86, r"$\mathcal{U}_{\mathrm{bot}}$", fontsize=10.8, color=PALETTE["bottom"], fontweight="bold")
+    task_bottom = [(0.08, 0.74, r"$u_1$"), (0.22, 0.74, r"$u_2$"), (0.36, 0.74, r"$u_3$"), (0.50, 0.74, r"$u_4$")]
     for idx, (x, y, label) in enumerate(task_bottom):
         _box(ax_right, x, y, 0.09, 0.09, label, face=PALETTE["bottom"], fontsize=11.5)
         if idx:
             prev_x, prev_y, _ = task_bottom[idx - 1]
             _arrow(ax_right, (prev_x + 0.09, prev_y + 0.045), (x, y + 0.045))
-    ax_right.text(0.07, 0.69, r"$\mathcal{U}_{\mathrm{bot}}$", color=PALETTE["bottom"], fontsize=11.5, fontweight="bold")
 
-    task_branches = [(0.08, 0.47, r"$B_0$"), (0.21, 0.47, r"$B_1$"), (0.34, 0.47, r"$B_2$"), (0.60, 0.47, r"$B_7$")]
+    ax_right.text(0.08, 0.58, r"$\mathcal{U}_{\mathrm{emb}}=\{B_0,\ldots,B_7\}$", fontsize=10.8, color=PALETTE["embedding"], fontweight="bold")
+    task_branches = [(0.09, 0.44, r"$B_0$"), (0.23, 0.44, r"$B_1$"), (0.37, 0.44, r"$B_2$"), (0.64, 0.44, r"$B_7$")]
     for x, y, label in task_branches:
         _box(ax_right, x, y, 0.09, 0.09, label, face=PALETTE["embedding"], fontsize=11.5)
-    ax_right.text(0.445, 0.515, "⋯", fontsize=30, color=PALETTE["muted"], ha="center", va="center")
-    ax_right.text(0.08, 0.40, r"$B_j = \mathrm{Gather}_j + \mathrm{Reshape}_j + \mathrm{ReduceSum}_j$", color=PALETTE["muted"], fontsize=10.5)
-    ax_right.text(0.08, 0.62, r"$\mathcal{U}_{\mathrm{emb}}=\{B_0,\ldots,B_7\}$", color=PALETTE["embedding"], fontsize=11.5, fontweight="bold")
+    ax_right.text(0.515, 0.485, "⋯", fontsize=28, color=PALETTE["muted"], ha="center", va="center")
+    ax_right.text(0.09, 0.37, r"$B_j=\mathrm{Gather}_j+\mathrm{Reshape}_j+\mathrm{ReduceSum}_j$", color=PALETTE["muted"], fontsize=10.1)
 
-    _diamond(ax_right, 0.70, 0.45, 0.14, 0.12, r"$u_{\mathrm{bar}}$", face=PALETTE["barrier"], fontsize=12)
+    _diamond(ax_right, 0.77, 0.42, 0.12, 0.11, r"$u_{\mathrm{bar}}$", face=PALETTE["barrier"], fontsize=11.5)
     for x, y, _ in task_bottom:
-        _arrow(ax_right, (x + 0.045, y), (0.77, 0.57), connectionstyle="arc3,rad=-0.15")
+        _arrow(ax_right, (x + 0.045, y), (0.83, 0.53), connectionstyle="arc3,rad=-0.12")
     for x, y, _ in task_branches:
-        _arrow(ax_right, (x + 0.045, y + 0.09), (0.77, 0.45), connectionstyle="arc3,rad=0.08")
+        _arrow(ax_right, (x + 0.045, y + 0.09), (0.83, 0.42), connectionstyle="arc3,rad=0.06")
 
-    tail_nodes = [(0.72, 0.26, r"$v_1$"), (0.84, 0.26, r"$v_2$"), (0.72, 0.12, r"$v_3$"), (0.84, 0.12, r"$v_4$")]
+    ax_right.text(0.77, 0.28, r"$\mathcal{U}_{\mathrm{tail}}$", fontsize=10.8, color=PALETTE["tail"], fontweight="bold")
+    tail_nodes = [(0.74, 0.16, r"$v_1$"), (0.85, 0.16, r"$v_2$"), (0.74, 0.05, r"$v_3$"), (0.85, 0.05, r"$v_4$")]
     for x, y, label in tail_nodes:
-        _box(ax_right, x, y, 0.09, 0.09, label, face=PALETTE["tail"], fontsize=11.5)
-    _arrow(ax_right, (0.77, 0.45), (0.765, 0.35))
-    _arrow(ax_right, (0.81, 0.305), (0.84, 0.305))
-    _arrow(ax_right, (0.765, 0.26), (0.765, 0.21))
-    _arrow(ax_right, (0.81, 0.165), (0.84, 0.165))
-    ax_right.text(0.72, 0.06, r"$\mathcal{U}_{\mathrm{tail}}$", color=PALETTE["tail"], fontsize=11.5, fontweight="bold")
+        _box(ax_right, x, y, 0.085, 0.08, label, face=PALETTE["tail"], fontsize=11.0)
+    _arrow(ax_right, (0.83, 0.42), (0.785, 0.24))
+    _arrow(ax_right, (0.825, 0.20), (0.85, 0.20))
+    _arrow(ax_right, (0.785, 0.16), (0.785, 0.13))
+    _arrow(ax_right, (0.825, 0.09), (0.85, 0.09))
+
+    ax_right.text(
+        0.08,
+        0.10,
+        "The scheduler keeps bottom/tail operators at node granularity,\ncontracts every embedding branch into one composite task, and inserts\nan explicit synchronization barrier before the tail.",
+        color=PALETTE["muted"],
+        fontsize=9.1,
+    )
 
     fig.suptitle("Static task-graph construction for branch-parallel DLRM inference", fontsize=15, fontweight="bold", y=0.99)
     outputs = _save_all_formats(fig, output_dir / "fig_3_3_4_task_graph_construction")
@@ -305,17 +323,20 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
     finish_us = float(task_spans["end_us"].max())
     total_ms = finish_us / 1000.0
 
-    fig, ax = plt.subplots(figsize=(13.8, 5.6))
+    fig = plt.figure(figsize=(14.0, 7.2))
+    gs = fig.add_gridspec(2, 1, height_ratios=[3.2, 1.45], hspace=0.22)
+    ax = fig.add_subplot(gs[0, 0])
+    ax_zoom = fig.add_subplot(gs[1, 0])
     y_positions = {
-        "Bottom ops": 5.5,
-        **{f"Slot {idx}": 4.6 - 0.9 * (idx - 1) for idx in range(1, slot_count + 1)},
-        "Barrier": 1.55,
-        "Tail critical chain": 0.55,
+        "Bottom ops": 5.6,
+        **{f"Slot {idx}": 4.7 - 0.9 * (idx - 1) for idx in range(1, slot_count + 1)},
+        "Barrier": 1.6,
+        "Tail summary": 0.7,
     }
 
     for lane, y in y_positions.items():
         ax.hlines(y, 0.0, total_ms, color=PALETTE["accent"], linewidth=1.0, zorder=0)
-        ax.text(-0.20 * total_ms / 7.0, y, lane, ha="right", va="center", fontsize=11, color=PALETTE["ink"])
+        ax.text(-0.16 * total_ms / 7.0, y, lane, ha="right", va="center", fontsize=11, color=PALETTE["ink"])
 
     if not bottom_frame.empty:
         bottom_start_ms = float(bottom_frame["start_us"].min()) / 1000.0
@@ -328,6 +349,14 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
             edgecolors="white",
             linewidth=1.0,
         )
+        ax.text(
+            max(bottom_start_ms + bottom_duration_ms + total_ms * 0.006, total_ms * 0.010),
+            y_positions["Bottom ops"],
+            r"$\mathcal{U}_{\mathrm{bot}}$",
+            color=PALETTE["bottom"],
+            fontsize=10.5,
+            va="center",
+        )
 
     for lane, span in branch_slots:
         y = y_positions[lane]
@@ -337,7 +366,8 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
         ax.text(start_ms + duration_ms / 2.0, y, span.label, ha="center", va="center", color="white", fontsize=10.2)
 
     barrier_ms = barrier_us / 1000.0
-    ax.vlines(barrier_ms, y_positions["Tail critical chain"] - 0.35, y_positions["Bottom ops"] + 0.40, colors=PALETTE["barrier"], linewidth=2.2, linestyles=(0, (4, 2)))
+    ax.axvspan(barrier_ms, finish_us / 1000.0, ymin=0.0, ymax=0.22, facecolor="#F6EEF5", alpha=0.8, zorder=0)
+    ax.vlines(barrier_ms, y_positions["Tail summary"] - 0.35, y_positions["Bottom ops"] + 0.40, colors=PALETTE["barrier"], linewidth=2.2, linestyles=(0, (4, 2)))
     ax.text(barrier_ms + total_ms * 0.008, y_positions["Barrier"], r"$u_{\mathrm{bar}}$", color=PALETTE["barrier"], fontsize=12, fontweight="bold", va="center")
     ax.text(
         barrier_ms + total_ms * 0.008,
@@ -353,17 +383,26 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
 
     ax.broken_barh(
         [(barrier_ms, finish_ms - barrier_ms)],
-        (y_positions["Tail critical chain"] - 0.24, 0.48),
+        (y_positions["Tail summary"] - 0.24, 0.48),
         facecolors=PALETTE["tail"],
         edgecolors="white",
         linewidth=1.0,
+    )
+    ax.text(
+        barrier_ms + (finish_ms - barrier_ms) / 2.0,
+        y_positions["Tail summary"],
+        r"$\mathcal{U}_{\mathrm{tail}}$",
+        color="white",
+        fontsize=10.0,
+        ha="center",
+        va="center",
     )
     branch3 = branch_frame[branch_frame["label"] == "branch:3"].iloc[0]
     wait_ms = float(branch3["start_us"]) / 1000.0
     ax.annotate(
         r"$s(B_3)=\max\{r(B_3), a_{\min}\}$",
         xy=(wait_ms, y_positions["Slot 2"] + 0.28),
-        xytext=(wait_ms + total_ms * 0.06, y_positions["Slot 2"] + 0.95),
+        xytext=(wait_ms + total_ms * 0.07, y_positions["Slot 2"] + 0.95),
         arrowprops=dict(arrowstyle="->", color=PALETTE["muted"], lw=1.2),
         fontsize=10.2,
         color=PALETTE["ink"],
@@ -380,11 +419,20 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
 
     ax.annotate(
         "",
-        xy=(finish_ms, y_positions["Tail critical chain"] - 0.55),
-        xytext=(0.0, y_positions["Tail critical chain"] - 0.55),
+        xy=(finish_ms, y_positions["Tail summary"] - 0.55),
+        xytext=(0.0, y_positions["Tail summary"] - 0.55),
         arrowprops=dict(arrowstyle="<->", color=PALETTE["ink"], lw=1.2),
     )
-    ax.text(finish_ms / 2.0, y_positions["Tail critical chain"] - 0.78, r"predicted full-graph latency $\hat{M}$", ha="center", va="center", fontsize=11, color=PALETTE["ink"])
+    ax.text(finish_ms / 2.0, y_positions["Tail summary"] - 0.80, r"predicted full-graph latency $\hat{M}$", ha="center", va="center", fontsize=11, color=PALETTE["ink"])
+
+    ax.annotate(
+        "zoomed below",
+        xy=(barrier_ms + (finish_ms - barrier_ms) * 0.35, y_positions["Tail summary"] - 0.02),
+        xytext=(barrier_ms + (finish_ms - barrier_ms) * 0.58, y_positions["Tail summary"] - 0.55),
+        arrowprops=dict(arrowstyle="->", color=PALETTE["muted"], lw=1.1),
+        fontsize=9.6,
+        color=PALETTE["muted"],
+    )
 
     ax.set_xlim(-0.06 * total_ms, total_ms * 1.03)
     ax.set_ylim(-0.15, 6.2)
@@ -411,39 +459,40 @@ def _draw_timeline_figure(case_dir: Path, output_dir: Path) -> list[Path]:
         color=PALETTE["muted"],
     )
 
-    inset = ax.inset_axes([0.70, 0.06, 0.25, 0.16])
-    inset.set_facecolor("white")
     local_tail_ms = max((finish_us - barrier_us) / 1000.0, 1e-6)
-    inset_labels = {
+    zoom_labels = {
         "Concat + reshape": "Concat\n+ reshape",
         "Interaction": "Interaction",
         "Top MLP block 1": "Top MLP\nblock 1",
         "Top MLP block 2 / output": "Top MLP\nblock 2",
     }
+    ax_zoom.axvline(0.0, color=PALETTE["barrier"], linewidth=2.0, linestyle=(0, (4, 2)))
     for segment in tail_segments:
         start_ms = (float(segment["start_us"]) - barrier_us) / 1000.0
         duration_ms = (float(segment["end_us"]) - float(segment["start_us"])) / 1000.0
-        inset.broken_barh([(start_ms, duration_ms)], (0.1, 0.55), facecolors=PALETTE["tail"], edgecolors="white", linewidth=1.0)
-        inset.text(
+        ax_zoom.broken_barh([(start_ms, duration_ms)], (0.25, 0.55), facecolors=PALETTE["tail"], edgecolors="white", linewidth=1.0)
+        ax_zoom.text(
             start_ms + duration_ms / 2.0,
-            0.375,
-            inset_labels.get(str(segment["label"]), str(segment["label"])),
+            0.525,
+            zoom_labels.get(str(segment["label"]), str(segment["label"])),
             ha="center",
             va="center",
-            fontsize=7.4,
+            fontsize=8.8,
             color="white",
             linespacing=0.9,
         )
-    inset.set_xlim(0.0, local_tail_ms)
-    inset.set_ylim(0.0, 0.8)
-    inset.set_yticks([])
-    inset.grid(True, axis="x", color=PALETTE["accent"], linewidth=0.6)
-    inset.set_title("Tail zoom", fontsize=9.5, color=PALETTE["ink"], pad=2.0)
-    inset.set_xlabel("ms after barrier", fontsize=8.6)
-    inset.tick_params(axis="x", labelsize=8.2)
-    for spine in inset.spines.values():
+    ax_zoom.text(local_tail_ms * 0.01, 0.92, r"post-barrier detailed view ($t=0$ at $u_{\mathrm{bar}}$)", color=PALETTE["ink"], fontsize=11.0)
+    ax_zoom.text(0.0, 0.10, r"$u_{\mathrm{bar}}$", color=PALETTE["barrier"], fontsize=11.5, fontweight="bold", ha="left")
+    ax_zoom.set_xlim(0.0, local_tail_ms)
+    ax_zoom.set_ylim(0.0, 1.0)
+    ax_zoom.set_yticks([])
+    ax_zoom.set_xlabel("Time after barrier (ms)")
+    ax_zoom.grid(True, axis="x", color=PALETTE["accent"], linewidth=0.8)
+    for spine in ax_zoom.spines.values():
         spine.set_color(PALETTE["line"])
         spine.set_linewidth(0.8)
+    ax_zoom.spines["left"].set_visible(False)
+    ax_zoom.text(-0.015 * local_tail_ms, 0.52, "Tail critical chain", ha="right", va="center", fontsize=10.8, color=PALETTE["ink"])
 
     outputs = _save_all_formats(fig, output_dir / "fig_3_3_5_static_schedule_timeline")
     plt.close(fig)
