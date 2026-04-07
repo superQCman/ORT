@@ -57,6 +57,38 @@ This project is a self-contained static pipeline evaluator for ORT DLRM branch-p
 
 ## Change History
 
+### 2026-04-07 - Add Chapter 3 method-figure generator for task-graph construction and static scheduling
+
+Request summary:
+- Create professional, publication-style figures for Sections 3.3.4 and 3.3.5 that align with the actual static scheduler implementation rather than using Mermaid diagrams.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+
+Behavior changes:
+- Added a new standalone figure builder that exports vector and raster assets for the Chapter 3 method section.
+- The Section 3.3.4 figure now visualizes:
+  - the original operator DAG with bottom ops, representative embedding branches, and the tail join
+  - the rewritten hybrid task DAG with `U_bot`, contracted branch tasks `B_j`, explicit barrier `u_bar`, and `U_tail`
+- The Section 3.3.5 figure now visualizes:
+  - FIFO slot-limited branch scheduling using the real exported `task_spans.csv` case
+  - the explicit tail barrier
+  - a tail zoom inset so the post-barrier critical chain remains readable despite the much longer branch phase
+- The builder writes `.pdf`, `.svg`, and `.png` outputs plus a small manifest under:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter3_method_figures`
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- `python3 /data/qc/dlrm/ORT/static_pipeline_eval/build_chapter3_method_figures.py`
+- Visually inspected generated outputs:
+  - `fig_3_3_4_task_graph_construction.png`
+  - `fig_3_3_5_static_schedule_timeline.png`
+
+Open risks:
+- The method figures currently use English in-figure labels to avoid font-embedding issues across PDF/SVG export; if the thesis requires Chinese labels inside the figure canvas, the script may need a follow-up font selection pass on the target machine.
+- The Section 3.3.5 figure uses one real timeline case (`case_10_3_3 / bs2048_nip2000`, `kappa=3`) as the visual anchor; if you later prefer a fully schematic `kappa=2` teaching example, the same script should be adjusted rather than reusing the current export directly.
+
 ### 2026-04-06 - Remove titles from Chapter 4 single-only figures
 
 Request summary:
