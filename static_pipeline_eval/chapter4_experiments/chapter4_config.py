@@ -10,7 +10,7 @@ CHAPTER4_OUTPUT_ROOT = (
 )
 CHAPTER4_DRAFT_PATH = DEFAULT_ORT_ROOT / "static_pipeline_eval" / "chapter4_cpu_experiments_draft.md"
 CHAPTER4_SINGLE_ONLY_OUTPUT_ROOT = (
-    DEFAULT_ORT_ROOT / "static_pipeline_eval" / "artifacts" / "latest" / "chapter4_cpu_single_only"
+    DEFAULT_ORT_ROOT / "static_pipeline_eval" / "artifacts" / "latest" / "chapter4_cpu_single_only_2"
 )
 CHAPTER4_SINGLE_ONLY_DRAFT_PATH = (
     DEFAULT_ORT_ROOT / "static_pipeline_eval" / "chapter4_cpu_single_only_experiments_draft.md"
@@ -55,7 +55,7 @@ FAIR_SINGLE_MLP_SEED = 42
 
 # Global font-size control for Chapter 4 figures.
 # Increase or decrease this single scale factor to adjust figure text uniformly.
-CHAPTER4_FIGURE_FONT_SCALE = 1.0
+CHAPTER4_FIGURE_FONT_SCALE = 2.0
 
 OOD_BATCH_HOLDS = (1856, 1920, 1984, 2016, 2048)
 OOD_NUM_THREADS_HOLD = 3

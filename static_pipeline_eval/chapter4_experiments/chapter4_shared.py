@@ -5,6 +5,7 @@ import math
 import re
 import subprocess
 import sys
+import textwrap
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -167,6 +168,70 @@ def _scaled_font(size: float) -> float:
     return float(size) * CHAPTER4_FIGURE_FONT_SCALE
 
 
+def _scaled_figsize(width: float, height: float, *, width_boost: float = 0.18, height_boost: float = 0.28) -> tuple[float, float]:
+    scale_delta = max(0.0, CHAPTER4_FIGURE_FONT_SCALE - 1.0)
+    return (
+        float(width) * (1.0 + width_boost * scale_delta),
+        float(height) * (1.0 + height_boost * scale_delta),
+    )
+
+
+def _dynamic_width(base: float, label_count: int, *, per_label: float = 0.55, max_width: float = 22.0) -> float:
+    return min(max_width, max(base, base + max(0, label_count - 4) * per_label))
+
+
+def _dynamic_height(base: float, item_count: int, *, per_item: float = 0.22, max_height: float = 18.0) -> float:
+    return min(max_height, max(base, base + max(0, item_count - 4) * per_item))
+
+
+def _wrap_axis_label(label: Any, *, width: int = 18) -> str:
+    return textwrap.fill(str(label), width=width, break_long_words=False, break_on_hyphens=False)
+
+
+def _set_categorical_xticklabels(ax, labels: Sequence[Any], *, wrap_width: int = 18, rotation: float = 0.0) -> None:
+    rendered_labels = [_wrap_axis_label(label, width=wrap_width) for label in labels]
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(rendered_labels, rotation=rotation, ha="center" if rotation == 0 else "right")
+
+
+def _place_legend_outside(ax, *, ncols: int = 1, side: str = "right", loc: str | None = None) -> None:
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    if side == "inside":
+        ax.legend(
+            handles,
+            labels,
+            frameon=False,
+            ncols=ncols,
+            loc=loc or "best",
+            handlelength=1.6,
+        )
+        return
+    if side == "top":
+        ax.legend(
+            handles,
+            labels,
+            frameon=False,
+            ncols=ncols,
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            borderaxespad=0.0,
+            handlelength=1.6,
+        )
+        return
+    ax.legend(
+        handles,
+        labels,
+        frameon=False,
+        ncols=ncols,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        borderaxespad=0.0,
+        handlelength=1.6,
+    )
+
+
 def _style_axes(ax, title: str, xlabel: str = "", ylabel: str = "") -> None:
     if xlabel:
         ax.set_xlabel(xlabel)
@@ -177,7 +242,8 @@ def _style_axes(ax, title: str, xlabel: str = "", ylabel: str = "") -> None:
 
 def save_figure(fig, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
+    pad = 1.0 + 0.55 * max(0.0, CHAPTER4_FIGURE_FONT_SCALE - 1.0)
+    fig.tight_layout(pad=pad, w_pad=pad * 0.8, h_pad=pad * 0.9)
     fig.savefig(path, dpi=180, bbox_inches="tight")
     return path
 
@@ -186,10 +252,16 @@ def add_audit_callout(ax, lines: Sequence[str] | None, *, loc: str = "upper righ
     if not lines:
         return
     anchors = {
-        "upper left": (0.02, 0.98, "left", "top"),
-        "upper right": (0.98, 0.98, "right", "top"),
-        "lower left": (0.02, 0.02, "left", "bottom"),
-        "lower right": (0.98, 0.02, "right", "bottom"),
+        "upper left": (0.0, 1.02, "left", "bottom"),
+        "upper right": (1.0, 1.02, "right", "bottom"),
+        "lower left": (0.0, -0.16, "left", "top"),
+        "lower right": (1.0, -0.16, "right", "top"),
+        "inside upper left": (0.02, 0.98, "left", "top"),
+        "inside upper center": (0.50, 0.98, "center", "top"),
+        "inside upper right": (0.98, 0.98, "right", "top"),
+        "inside lower left": (0.02, 0.02, "left", "bottom"),
+        "inside lower center": (0.50, 0.02, "center", "bottom"),
+        "inside lower right": (0.98, 0.02, "right", "bottom"),
     }
     x, y, ha, va = anchors.get(loc, anchors["upper right"])
     text = "\n".join(str(line) for line in lines if line is not None and str(line).strip())
@@ -204,6 +276,7 @@ def add_audit_callout(ax, lines: Sequence[str] | None, *, loc: str = "upper righ
         va=va,
         fontsize=_scaled_font(8.5),
         bbox=dict(boxstyle="round,pad=0.35", facecolor="white", alpha=0.83, edgecolor="#C8C8C8"),
+        clip_on=False,
     )
 
 
@@ -235,7 +308,7 @@ def _draw_scatter_on_ax(
                 color=palette[idx % len(palette)],
             )
         if show_legend:
-            ax.legend(frameon=False, fontsize=_scaled_font(8.0))
+            _place_legend_outside(ax, side="right")
     else:
         ax.scatter(frame[x], frame[y], s=18, alpha=0.75, color="#4477aa")
     if reference_line and not frame.empty:
@@ -271,12 +344,14 @@ def plot_bar(
     color: str = "#4477aa",
     audit_lines: Sequence[str] | None = None,
     audit_loc: str = "upper right",
+    label_rotation: float = 0.0,
+    label_wrap_width: int = 20,
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(_dynamic_width(10.0, len(frame), per_label=0.9), 5.8))
     ax.bar(frame[x].astype(str), frame[y].astype(float), color=color)
     _style_axes(ax, title, xlabel or x, ylabel or y)
-    ax.tick_params(axis="x", rotation=30)
+    _set_categorical_xticklabels(ax, frame[x].astype(str).tolist(), wrap_width=label_wrap_width, rotation=label_rotation)
     add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
@@ -292,19 +367,22 @@ def plot_grouped_bar(
     legend_labels: list[str] | None = None,
     audit_lines: Sequence[str] | None = None,
     audit_loc: str = "upper right",
+    legend_side: str = "top",
+    legend_loc: str | None = None,
+    label_rotation: float = 0.0,
+    label_wrap_width: int = 18,
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(11, 5))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(_dynamic_width(11.0, len(frame), per_label=0.95), 6.0))
     x = range(len(frame))
     width = 0.8 / max(1, len(value_cols))
     labels = legend_labels or value_cols
     for idx, col in enumerate(value_cols):
         offsets = [pos + (idx - (len(value_cols) - 1) / 2.0) * width for pos in x]
         ax.bar(offsets, frame[col].astype(float), width=width, label=labels[idx])
-    ax.set_xticks(list(x))
-    ax.set_xticklabels(frame[index_col].astype(str).tolist(), rotation=30, ha="right")
+    _set_categorical_xticklabels(ax, frame[index_col].astype(str).tolist(), wrap_width=label_wrap_width, rotation=label_rotation)
     _style_axes(ax, title, index_col, ylabel)
-    ax.legend(frameon=False, ncols=min(len(value_cols), 3))
+    _place_legend_outside(ax, ncols=min(len(value_cols), 3), side=legend_side, loc=legend_loc)
     add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
@@ -322,7 +400,7 @@ def plot_scatter(
     audit_loc: str = "upper left",
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(6.5, 6.5))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(7.3 if hue else 6.8, 6.8))
     _draw_scatter_on_ax(
         ax,
         frame,
@@ -348,7 +426,12 @@ def plot_heatmap(
     audit_loc: str = "upper right",
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(
+        figsize=_scaled_figsize(
+            _dynamic_width(8.5, len(frame.columns), per_label=0.85),
+            _dynamic_height(4.8, len(frame.index), per_item=0.55),
+        )
+    )
     matrix = frame.to_numpy(dtype=float)
     image = ax.imshow(matrix, aspect="auto", cmap="viridis")
     ax.set_xticks(range(len(frame.columns)))
@@ -358,10 +441,11 @@ def plot_heatmap(
     _style_axes(ax, title, xlabel, ylabel)
     fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
     if annot:
+        annotation_font = _scaled_font(max(6.2, 8.0 - 0.25 * max(len(frame.columns), len(frame.index))))
         for row_idx, row_label in enumerate(frame.index):
             for col_idx, col_label in enumerate(frame.columns):
                 value = matrix[row_idx, col_idx]
-                ax.text(col_idx, row_idx, f"{value:.2f}", ha="center", va="center", color="white", fontsize=_scaled_font(8.0))
+                ax.text(col_idx, row_idx, f"{value:.2f}", ha="center", va="center", color="white", fontsize=annotation_font)
     add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
@@ -376,12 +460,12 @@ def plot_boxplot(
     audit_loc: str = "upper right",
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(_dynamic_width(10.0, len(values_by_label), per_label=0.9), 5.8))
     labels = list(values_by_label.keys())
     values = [values_by_label[label] for label in labels]
     ax.boxplot(values, labels=labels, showmeans=True)
     _style_axes(ax, title, "", ylabel)
-    ax.tick_params(axis="x", rotation=25)
+    ax.set_xticklabels([_wrap_axis_label(label, width=18) for label in labels], rotation=0.0, ha="center")
     add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
@@ -397,13 +481,16 @@ def plot_line(
     ylabel: str | None = None,
     audit_lines: Sequence[str] | None = None,
     audit_loc: str = "upper right",
+    legend_side: str = "right",
+    legend_loc: str | None = None,
+    legend_ncols: int = 1,
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(_dynamic_width(10.0, frame[x].nunique() if x in frame.columns else len(frame), per_label=0.55), 5.8))
     if group_col and group_col in frame.columns:
         for label, sub in frame.groupby(group_col):
             ax.plot(sub[x], sub[y], marker="o", linewidth=1.5, label=str(label))
-        ax.legend(frameon=False)
+        _place_legend_outside(ax, side=legend_side, loc=legend_loc, ncols=legend_ncols)
     else:
         ax.plot(frame[x], frame[y], marker="o", linewidth=1.5, color="#4477aa")
     _style_axes(ax, title, x, ylabel or y)
@@ -416,7 +503,7 @@ def plot_representative_panel(
     path: Path,
 ) -> Path:
     plt = _import_pyplot()
-    fig, axes = plt.subplots(2, 2, figsize=(13, 10), sharey=False)
+    fig, axes = plt.subplots(2, 2, figsize=_scaled_figsize(15.5, 11.5), sharey=False)
     tags = ["(a)", "(b)", "(c)", "(d)"]
     for ax, spec, tag in zip(axes.flatten(), specs, tags):
         _draw_scatter_on_ax(
@@ -432,7 +519,7 @@ def plot_representative_panel(
             panel_tag=tag,
             show_legend=spec.get("show_legend", True),
         )
-    fig.subplots_adjust(hspace=0.42, wspace=0.24, bottom=0.10)
+    fig.subplots_adjust(hspace=0.58, wspace=0.58, bottom=0.12)
     return save_figure(fig, path)
 
 
@@ -444,18 +531,52 @@ def plot_cdf(
     xlabel: str,
     audit_lines: Sequence[str] | None = None,
     audit_loc: str = "lower right",
+    legend_side: str = "right",
+    legend_loc: str | None = None,
+    xlim: tuple[float, float] | None = None,
+    marker_x: float | None = None,
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(8.5, 5.5))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(9.8, 6.2))
     palette = ["#E45756", "#4C78A8", "#54A24B", "#B279A2", "#F58518"]
+    marker_points: list[tuple[str, float, float, str]] = []
     for idx, (label, values) in enumerate(values_by_label.items()):
         clean = sorted(float(value) for value in values if value is not None and not math.isnan(float(value)))
         if not clean:
             continue
         cdf = [(pos + 1) / len(clean) * 100.0 for pos in range(len(clean))]
-        ax.plot(clean, cdf, linewidth=2.0, label=label, color=palette[idx % len(palette)])
+        color = palette[idx % len(palette)]
+        ax.plot(clean, cdf, linewidth=2.0, label=label, color=color)
+        if marker_x is not None:
+            hit_idx = int(np.searchsorted(clean, float(marker_x), side="right"))
+            hit_y = (hit_idx / len(clean)) * 100.0
+            marker_points.append((str(label), float(marker_x), hit_y, color))
     _style_axes(ax, title, xlabel, "CDF (%)")
-    ax.legend(frameon=False)
+    if xlim is not None:
+        ax.set_xlim(float(xlim[0]), float(xlim[1]))
+    if marker_x is not None:
+        ax.axvline(float(marker_x), color="#444444", linestyle="--", linewidth=1.2, alpha=0.9)
+        if marker_points:
+            min_gap = 4.0
+            sorted_points = sorted(marker_points, key=lambda item: item[2])
+            adjusted_y: list[float] = []
+            for _, _, y_value, _ in sorted_points:
+                adjusted_y.append(y_value if not adjusted_y else max(y_value, adjusted_y[-1] + min_gap))
+            for (label, x_value, actual_y, color), label_y in zip(sorted_points, adjusted_y):
+                ax.scatter([x_value], [actual_y], color=color, s=28, zorder=5)
+                ax.annotate(
+                    f"{actual_y:.1f}%",
+                    xy=(x_value, actual_y),
+                    xytext=(x_value + 0.025, min(label_y, 99.0)),
+                    textcoords="data",
+                    ha="left",
+                    va="center",
+                    fontsize=_scaled_font(8.0),
+                    color=color,
+                    arrowprops=dict(arrowstyle="-", color=color, lw=0.9, alpha=0.9),
+                    bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor=color, alpha=0.8),
+                )
+    _place_legend_outside(ax, side=legend_side, loc=legend_loc)
     add_audit_callout(ax, audit_lines, loc=audit_loc)
     return save_figure(fig, path)
 
@@ -468,14 +589,15 @@ def plot_flow(
     subtitle: str | None = None,
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(13, 2.8))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(14.0, 3.6))
     ax.axis("off")
     x_positions = [0.08 + idx * (0.84 / max(1, len(steps) - 1)) for idx in range(len(steps))]
     for idx, (x_pos, step) in enumerate(zip(x_positions, steps)):
+        wrapped_step = textwrap.fill(step, width=16)
         ax.text(
             x_pos,
             0.58,
-            step,
+            wrapped_step,
             ha="center",
             va="center",
             fontsize=_scaled_font(10.0),
@@ -507,7 +629,7 @@ def plot_gantt(
     audit_loc: str = "upper right",
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(12, max(4.5, 0.3 * len(frame))))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(12.8, _dynamic_height(4.8, len(frame), per_item=0.34)))
     labels = frame[label_col].astype(str).tolist()
     colors = {
         "bottom": "#4C78A8",
@@ -535,7 +657,7 @@ def plot_simple_graph(
     audit_loc: str = "upper right",
 ) -> Path:
     plt = _import_pyplot()
-    fig, ax = plt.subplots(figsize=(12, 7))
+    fig, ax = plt.subplots(figsize=_scaled_figsize(13.0, 8.0))
     if nodes.empty:
         ax.text(0.5, 0.5, "No graph data", ha="center", va="center")
         ax.axis("off")
@@ -573,7 +695,7 @@ def plot_simple_graph(
     for node in nodes.itertuples(index=False):
         x, y = positions[int(node.node_idx)]
         color = color_map.get(str(node.partition), "#4C78A8")
-        ax.scatter([x], [y], s=500, color=color, edgecolor="#222222", linewidth=0.7, zorder=3)
+        ax.scatter([x], [y], s=500 * max(1.0, CHAPTER4_FIGURE_FONT_SCALE), color=color, edgecolor="#222222", linewidth=0.7, zorder=3)
         ax.text(x, y, str(node.label), ha="center", va="center", fontsize=_scaled_font(8.0), color="white", zorder=4)
 
     ax.set_xlabel("topological depth")
@@ -812,6 +934,19 @@ def _load_model_prediction_frame(
             "num_indices_per_lookup",
             "inter_threads",
         ]
+        missing_metadata_columns = [column for column in metadata_columns if column not in test_dataset.columns]
+        if missing_metadata_columns:
+            metadata_source = pd.read_csv(
+                single_op_root / "classed_dataset_full.csv",
+                usecols=["row_uid", *missing_metadata_columns],
+                low_memory=False,
+            ).drop_duplicates("row_uid")
+            test_dataset = test_dataset.merge(
+                metadata_source,
+                on="row_uid",
+                how="left",
+                validate="one_to_one",
+            )
         metadata = test_dataset[metadata_columns].drop_duplicates("row_uid")
         prediction_df = prediction_df.merge(metadata, on="row_uid", how="left", validate="one_to_one")
         if "split" not in prediction_df.columns:
@@ -1685,6 +1820,7 @@ def run_single_op_core(
             f"MAPE = {active_metrics['mape']:.4f}",
             f"R2 = {active_metrics['r2']:.4f}",
         ],
+        audit_loc="inside upper right",
     )
 
     plot_bar(
@@ -1695,10 +1831,9 @@ def run_single_op_core(
         "Figure 4-4 MAPE by operator category",
         ylabel="MAPE",
         color="#54A24B",
-        audit_lines=[
-            f"best = {table_4_4.sort_values('mape').iloc[0]['operator_category']}",
-            f"worst = {table_4_4.iloc[0]['operator_category']}",
-        ],
+        audit_lines=None,
+        label_rotation=22.0,
+        label_wrap_width=999,
     )
 
     representative_panel_specs: list[dict[str, Any]] = []
@@ -1989,12 +2124,9 @@ def run_single_op_ood(
             "Figure 4-10 Analytical reference under unseen configuration splits",
             ylabel="mean MAPE",
             legend_labels=["leave-one-case-out", "leave-one-combo-out"],
-            audit_lines=[
-                f"test rows = {len(test_reference):,}",
-                f"families = {len(test_pivot):,}",
-                f"best family = {test_pivot.mean(axis=1).idxmin()}",
-                f"worst family = {test_pivot.mean(axis=1).idxmax()}",
-            ],
+            audit_lines=None,
+            legend_side="inside",
+            legend_loc="upper right",
         )
 
     payload = {
@@ -2195,15 +2327,27 @@ def run_single_op_ablation(
         "Table 4-6 Fair-comparison ablation summary",
     )
 
+    cdf_plot_map = {str(label).replace("single MLP", "MLP"): values for label, values in cdf_map.items()}
     plot_cdf(
-        cdf_map,
+        cdf_plot_map,
         figures_dir / FIGURE_FILENAMES["4-16"],
         "Figure 4-16 CDF of E2E relative error under fair-comparison variants",
         xlabel="relative error",
-        audit_lines=[
-            f"full combos = {len(e2e_joined):,}",
-            f"best mean APE = {float(table_4_6['e2e_mape'].min()):.4f}",
-        ],
+        audit_lines=None,
+        legend_side="inside",
+        legend_loc="lower right",
+    )
+    figure_4_16_zoom_path = figures_dir / "fig_4_16_ablation_delta_bars_zoom_0_0p5.png"
+    plot_cdf(
+        cdf_plot_map,
+        figure_4_16_zoom_path,
+        "Figure 4-16 Supplement: zoomed CDF of E2E relative error",
+        xlabel="relative error",
+        audit_lines=None,
+        legend_side="inside",
+        legend_loc="lower right",
+        xlim=(0.0, 0.5),
+        marker_x=0.15,
     )
     gt10_frame = pd.DataFrame(gt10_rows)
     gt10_audit_lines = [
@@ -2223,10 +2367,14 @@ def run_single_op_ablation(
         ylabel="ratio",
         legend_labels=["mean APE", ">10% rate"],
         audit_lines=gt10_audit_lines,
+        legend_side="top",
+        audit_loc="inside upper right",
     )
     inter_frame = pd.DataFrame(inter_rows).sort_values(["inter_threads", "variant"]).reset_index(drop=True)
+    inter_plot_frame = inter_frame.copy()
+    inter_plot_frame["variant"] = inter_plot_frame["variant"].str.replace("single MLP", "MLP", regex=False)
     plot_line(
-        inter_frame,
+        inter_plot_frame,
         "inter_threads",
         "mape",
         figures_dir / FIGURE_FILENAMES["4-18"],
@@ -2235,14 +2383,17 @@ def run_single_op_ablation(
         ylabel="MAPE",
         audit_lines=[
             f"inter_threads = {_sanitize_list(sorted(inter_frame['inter_threads'].unique().tolist()))}",
-            "Single-only experiment keeps every variant on the fair single MLP path." if normalized_prediction_source == PREDICTION_SOURCE_SINGLE_FAIR else "Grouped pipeline should outperform single pipeline at every branch-parallel setting.",
         ],
+        legend_side="inside",
+        legend_loc="upper left",
+        audit_loc="upper right",
     )
 
     payload = {
         "tables": {"4-6": str(csv_46)},
         "figures": {
             "4-16": str(figures_dir / FIGURE_FILENAMES["4-16"]),
+            "4-16-zoom-0-0.5": str(figure_4_16_zoom_path),
             "4-17": str(figures_dir / FIGURE_FILENAMES["4-17"]),
             "4-18": str(figures_dir / FIGURE_FILENAMES["4-18"]),
         },
@@ -2310,10 +2461,12 @@ def run_e2e_core(
             }
         ]
     )
-    table_5 = pd.concat([overall_row, table_5], ignore_index=True)
     table_5 = table_5[
         ["batch_bucket", "sample_count", "mean_actual_us", "mae_us", "mape", "r2", "p50_ape", "p90_ape"]
     ]
+    table_5 = pd.DataFrame(
+        [overall_row.iloc[0].to_dict(), *table_5.to_dict(orient="records")]
+    )
     csv_5, md_5 = write_frame_csv_md(
         table_5,
         tables_dir / TABLE_FILENAMES["4-5"],
@@ -2339,6 +2492,7 @@ def run_e2e_core(
             f"MAPE = {summary_metrics['mape']:.4f}",
             f"P90 = {summary_metrics['p90_ape']:.4f}",
         ],
+        audit_loc="upper right",
     )
     plot_line(
         batch_curve,
@@ -2351,6 +2505,7 @@ def run_e2e_core(
             f"batch sizes = {len(batch_curve):,}",
             f"best batch MAPE = {float(batch_curve['mape'].min()):.4f}",
         ],
+        audit_loc="inside upper right",
     )
     inter_plot = pd.concat(
         [
@@ -2371,6 +2526,10 @@ def run_e2e_core(
             f"parallelism settings = {_sanitize_list(sorted(inter_curve['inter_threads'].astype(int).tolist()))}",
             f"lowest MAPE = {float(inter_curve['mape'].min()):.4f}",
         ],
+        legend_side="inside",
+        legend_loc="upper center",
+        legend_ncols=2,
+        audit_loc="inside upper right",
     )
 
     payload = {
@@ -2641,7 +2800,12 @@ def run_timeline_cases(
         plot_frame = pd.concat(gantt_frames, ignore_index=True)
         if not plot_frame.empty:
             plt = _import_pyplot()
-            fig, axes = plt.subplots(len(TIMELINE_CASES), 1, figsize=(13, 3.5 * len(TIMELINE_CASES)), sharex=False)
+            fig, axes = plt.subplots(
+                len(TIMELINE_CASES),
+                1,
+                figsize=_scaled_figsize(14.0, max(4.2, 3.9 * len(TIMELINE_CASES))),
+                sharex=False,
+            )
             if len(TIMELINE_CASES) == 1:
                 axes = [axes]
             timeline_colors = {
@@ -2686,7 +2850,7 @@ def run_timeline_cases(
         )
         if not critical_plot.empty:
             plt = _import_pyplot()
-            fig, ax = plt.subplots(figsize=(13, 5))
+            fig, ax = plt.subplots(figsize=_scaled_figsize(14.0, 6.2))
             colors = {"bottom": "#4C78A8", "embedding": "#F58518", "tail": "#54A24B"}
             for case_label, sub in critical_plot.groupby("case_label"):
                 left = 0.0
@@ -2694,7 +2858,11 @@ def run_timeline_cases(
                     ax.bar(case_label, row.predicted_duration_us, bottom=left, color=colors.get(row.partition, "#7F7F7F"))
                     left += row.predicted_duration_us
             ax.set_ylabel("predicted duration (us)")
-            ax.tick_params(axis="x", rotation=25)
+            ax.set_xticks(
+                ax.get_xticks(),
+                [_wrap_axis_label(tick.get_text(), width=22) for tick in ax.get_xticklabels()],
+                rotation=0.0,
+            )
             ax.grid(True, axis="y", alpha=0.25, linewidth=0.6)
             ax.legend(
                 handles=_partition_legend_handles(include_barrier=False),
