@@ -52,6 +52,29 @@ The parent repo coordinates the full-model sweep, branch-parallel execution, dyn
 
 ## Change History
 
+### 2026-04-09 - Establish CPU_Perf_Model as a nested repository with local workflow guardrails
+
+Request summary:
+- Turn `ORT/CPU_Perf_Model` into an independently managed nested repository.
+- Add a repository-local worklog and local skills so future agents must read project context before modifying it.
+- Keep the parent `ORT` workflow aware that `CPU_Perf_Model` must be committed separately.
+
+Files changed:
+- `/data/qc/dlrm/ORT/AGENTS.md`
+- `/data/qc/dlrm/ORT/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/.codex/skills/ort-root-workflow/SKILL.md`
+
+Behavior changes:
+- The parent repository now explicitly lists `CPU_Perf_Model` as a nested repository that has its own workflow and commit boundary.
+- Future parent-repository agents are now told to defer to the nested `CPU_Perf_Model` worklog and commit history for work in that subtree.
+
+Validation run:
+- `git -C /data/qc/dlrm/ORT diff --check -- AGENTS.md AGENT_WORKLOG.md .codex/skills/ort-root-workflow/SKILL.md`
+
+Open risks:
+- The parent `ORT` repository has a very dirty worktree, so the parent commit for this change must remain narrowly scoped.
+- The external push for the nested `CPU_Perf_Model` repository still depends on network access and remote permissions.
+
 ### 2026-04-04 - Refresh nested NPU microbenchmark hardware inputs
 
 Request summary:

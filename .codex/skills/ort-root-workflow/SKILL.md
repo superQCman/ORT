@@ -20,6 +20,7 @@ Do not skip the worklog. It contains the current repository snapshot and the run
 
 - Preserve the parent ORT repository as a self-contained workspace.
 - If the task touches a nested repository, also follow that repository's own AGENTS/worklog workflow.
+- `/data/qc/dlrm/ORT/CPU_Perf_Model` is one such nested repository and must be committed separately from the parent `ORT` repository.
 - If you change repository-wide conventions, document the new rule in the worklog entry.
 
 ## Before finishing

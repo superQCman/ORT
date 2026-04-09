@@ -12,6 +12,7 @@ Before making any change anywhere in this repository:
 
 If the task touches a nested git repository under `ORT/` such as:
 
+- `/data/qc/dlrm/ORT/CPU_Perf_Model`
 - `/data/qc/dlrm/ORT/single_op_stage1_mlp`
 - `/data/qc/dlrm/ORT/static_pipeline_eval`
 
