@@ -26,8 +26,9 @@ chapter4_experiments/
 
 - Output root: `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu`
 - Draft: `ORT/static_pipeline_eval/chapter4_cpu_experiments_draft.md`
-- Single-only output root: `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only`
-- Single-only draft: `ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Single-only output root: `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only_2`
+- Single-only stable draft: `ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- Single-only auto-sync draft: `ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_data_sync.md`
 - Single-op source: `ORT/single_op_stage1_mlp/artifacts/latest/classed_op_mlp_test_78910_analytical_5_300_iter_quick_nodrop`
 - E2E source: `ORT/static_pipeline_eval/artifacts/latest/v1_300_iter_quick_nodrop`
 - OOD source: `ORT/single_op_stage1_mlp/artifacts/latest/analytical_generalization`
@@ -64,7 +65,9 @@ grouped model can be contrasted against a weaker but still plausible baseline.
 If you want a parallel Chapter 4 package that removes every grouped-MLP result
 and recomputes the whole section with the fair single MLP only, use
 `run_all_chapter4_single_only_experiments.py`. It writes to its own output root
-and draft path, so the original grouped-MLP artifacts remain untouched.
+and regenerates the single-only auto-sync draft at
+`chapter4_cpu_single_only_experiments_data_sync.md`, so the stable thesis prose
+in `chapter4_cpu_single_only_experiments_draft.md` is not overwritten.
 
 ## Usage
 

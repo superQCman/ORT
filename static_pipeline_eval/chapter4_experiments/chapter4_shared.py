@@ -41,7 +41,7 @@ from .chapter4_config import (
     CHAPTER4_FIGURE_FONT_SCALE,
     CHAPTER4_DRAFT_PATH,
     CHAPTER4_OUTPUT_ROOT,
-    CHAPTER4_SINGLE_ONLY_DRAFT_PATH,
+    CHAPTER4_SINGLE_ONLY_DATA_SYNC_PATH,
     E2E_ARTIFACT_ROOT,
     FIGURE_FILENAMES,
     MODEL_GROUP_ORDER,
@@ -3035,7 +3035,18 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
         if str(group).strip()
     ]
     analytical_excluded_groups_text = "/".join(analytical_excluded_groups)
-    selected_draft_path = Path(draft_path or (CHAPTER4_SINGLE_ONLY_DRAFT_PATH if single_only_mode else CHAPTER4_DRAFT_PATH))
+    selected_draft_path = Path(
+        draft_path or (CHAPTER4_SINGLE_ONLY_DATA_SYNC_PATH if single_only_mode else CHAPTER4_DRAFT_PATH)
+    )
+    artifact_output_root_text = (
+        "ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only_2/"
+        if single_only_mode
+        else "ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/"
+    )
+    single_only_sync_notice = [
+        "> 本文件由 Chapter 4 single-only runner 自动刷新，用于同步最新实验数据；稳定正文与复现约束请见 `ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`。",
+        "",
+    ] if single_only_mode else []
     single_op_intro = (
         "本节首先给出 fair single MLP 在测试集上的总体精度，再按五类算子统计误差，并对 Gather、ReduceSum、Transpose/Concat 以及 Gemm/MatMul 的代表性行为做可视化分析。整体作图风格参考 Concorde 中“真实值-预测值关系、误差分布、典型 case 解释”的组织方式，但在本组实验里不再引入 grouped MLP 对照。"
         if single_only_mode
@@ -3070,9 +3081,10 @@ def build_chapter4_draft(output_root: Path | None = None, *, draft_path: Path | 
     lines = [
         "# 第四章 CPU 实验与结果分析",
         "",
+        *single_only_sync_notice,
         "## 4.1 实验平台与数据采集方法",
         "",
-        "本章实验围绕 ORT 上的 DLRM CPU 推理路径展开，目标是验证第三章提出的两级建模思路，即先对单算子时延进行静态预测，再将节点级预测结果通过静态流水线模型聚合为整图时延。所有第四章脚本统一维护在 `ORT/static_pipeline_eval/chapter4_experiments/`，最终产物写入 `ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu/`。",
+        f"本章实验围绕 ORT 上的 DLRM CPU 推理路径展开，目标是验证第三章提出的两级建模思路，即先对单算子时延进行静态预测，再将节点级预测结果通过静态流水线模型聚合为整图时延。所有第四章脚本统一维护在 `ORT/static_pipeline_eval/chapter4_experiments/`，最终产物写入 `{artifact_output_root_text}`。",
         "",
         "### 4.1.1 实验平台",
         "",

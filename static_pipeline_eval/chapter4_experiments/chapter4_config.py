@@ -15,6 +15,9 @@ CHAPTER4_SINGLE_ONLY_OUTPUT_ROOT = (
 CHAPTER4_SINGLE_ONLY_DRAFT_PATH = (
     DEFAULT_ORT_ROOT / "static_pipeline_eval" / "chapter4_cpu_single_only_experiments_draft.md"
 )
+CHAPTER4_SINGLE_ONLY_DATA_SYNC_PATH = (
+    DEFAULT_ORT_ROOT / "static_pipeline_eval" / "chapter4_cpu_single_only_experiments_data_sync.md"
+)
 
 SINGLE_OP_ARTIFACT_ROOT = (
     DEFAULT_ORT_ROOT

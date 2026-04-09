@@ -13,7 +13,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from chapter4_experiments.chapter4_config import (  # noqa: E402
     ABLATION_ARTIFACT_ROOT,
-    CHAPTER4_SINGLE_ONLY_DRAFT_PATH,
+    CHAPTER4_SINGLE_ONLY_DATA_SYNC_PATH,
     CHAPTER4_SINGLE_ONLY_OUTPUT_ROOT,
     E2E_ARTIFACT_ROOT,
     ONLY_CHOICES,
@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
         description="One-click runner for the single-only Chapter 4 experiment suite."
     )
     parser.add_argument("--output-root", type=Path, default=CHAPTER4_SINGLE_ONLY_OUTPUT_ROOT)
-    parser.add_argument("--draft-path", type=Path, default=CHAPTER4_SINGLE_ONLY_DRAFT_PATH)
+    parser.add_argument("--draft-path", type=Path, default=CHAPTER4_SINGLE_ONLY_DATA_SYNC_PATH)
     parser.add_argument("--single-op-artifact-root", type=Path, default=SINGLE_OP_ARTIFACT_ROOT)
     parser.add_argument("--e2e-artifact-root", type=Path, default=E2E_ARTIFACT_ROOT)
     parser.add_argument("--skip-ood", action="store_true")

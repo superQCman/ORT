@@ -1543,3 +1543,43 @@ Validation run:
 
 Open risks:
 - The new subfigure labels are centered below each subplot, so if the global font scale is increased substantially later, the panel spacing may need one more small adjustment.
+
+### 2026-04-09 - Split stable single-only chapter prose from auto-synced experiment draft
+
+Request summary:
+- Roll back `chapter4_cpu_single_only_experiments_draft.md` to the last committed thesis-style version identified by commit `2762f75`.
+- Stop future single-only reruns from overwriting that stable prose document.
+- Add explicit reproducibility information covering ORT version, OS environment, Turbo/frequency handling, thread affinity, repeat count, and the active case families.
+
+Files changed:
+- `/data/qc/dlrm/ORT/static_pipeline_eval/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_data_sync.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/README.md`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_config.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_single_only_experiments.py`
+
+Behavior changes:
+- Restored the stable single-only chapter draft to the earlier thesis-style prose structure and added a new reproducibility subsection that now records:
+  - `ONNX Runtime CANN 1.23.2`
+  - `Huawei Cloud EulerOS 2.0 (aarch64)`
+  - no script-level evidence of explicit Turbo/governor disabling
+  - single-NUMA `numactl --cpunodebind --membind` affinity with `NUMA_NODE=1` in `run_ort_sweep_extensible_no_trace.sh`
+  - `2` warmup batches plus `3` measured batches, with the earliest measured batch dropped before averaging
+  - the active case families `7/8/9/10` and the 9 concrete case IDs present in the dataset
+- Introduced a separate auto-synced single-only draft path:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_data_sync.md`
+- Updated the single-only Chapter 4 generator so future reruns write the auto-synced data draft instead of overwriting the stable prose document.
+- Added an explicit auto-generated notice to the auto-synced draft and corrected its output-root text to `chapter4_cpu_single_only_2`.
+- Updated the Chapter 4 experiment README to document the split between the stable prose draft and the auto-synced data draft.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_config.py /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/run_all_chapter4_single_only_experiments.py /data/qc/dlrm/ORT/static_pipeline_eval/chapter4_experiments/chapter4_shared.py`
+- `/data/qc/anaconda3/envs/ort/bin/python -c "import sys; from pathlib import Path; sys.path.insert(0, '/data/qc/dlrm/ORT/static_pipeline_eval'); from chapter4_experiments.chapter4_shared import build_chapter4_draft; print(build_chapter4_draft(Path('/data/qc/dlrm/ORT/static_pipeline_eval/artifacts/latest/chapter4_cpu_single_only_2')).outputs)"`
+- Re-read:
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_draft.md`
+  - `/data/qc/dlrm/ORT/static_pipeline_eval/chapter4_cpu_single_only_experiments_data_sync.md`
+
+Open risks:
+- The current reproducibility note can only state that Turbo/governor locking was not explicitly recorded in the runner, logs, or hardware profile; if the thesis later requires a stronger claim about frequency determinism, the machine-level CPU governor state should be archived separately alongside the experiment manifests.
