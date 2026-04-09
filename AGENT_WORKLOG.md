@@ -52,6 +52,24 @@ The parent repo coordinates the full-model sweep, branch-parallel execution, dyn
 
 ## Change History
 
+### 2026-04-09 - Record CPU_Perf_Model feature-contract documentation
+
+Request summary:
+- Confirm the current default `CPU_Perf_Model` MLP input features against a provided 30-feature list.
+- Add a repository-local feature-contract document under the nested `CPU_Perf_Model` repository.
+
+Files changed:
+- `/data/qc/dlrm/ORT/AGENT_WORKLOG.md`
+
+Behavior changes:
+- The parent ORT worklog now records that `CPU_Perf_Model` carries its own checked-in MLP feature-contract document for future agent reference.
+
+Validation run:
+- Verified the nested repository feature definitions from `CPU_Perf_Model/cpu_perf_model/single_fair.py`, `CPU_Perf_Model/cpu_perf_model/classed/contracts.py`, and `CPU_Perf_Model/cpu_perf_model/train_mlp.py`.
+
+Open risks:
+- The actual feature contract still lives in the nested repository code; if nested feature definitions change later, the checked-in document there must be updated in the same task.
+
 ### 2026-04-09 - Establish CPU_Perf_Model as a nested repository with local workflow guardrails
 
 Request summary:
