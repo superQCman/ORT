@@ -2814,3 +2814,36 @@ Validation run:
 Open risks:
 - This change only updates the default single-MLP hyperparameters and README wording; it does not change the generic `feature_contract.py` baseline feature list itself.
 - Existing helper scripts such as `model.sh` still contain explicit user-chosen hyperparameters and were left untouched because they are not the parser defaults.
+
+### 2026-04-10 - Add per-op feature distribution analysis for dataset_all_78910_nodrop
+
+Request summary:
+- Analyze `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop`.
+- Quantify per-operator feature distributions and flag features whose support is highly concentrated, so we can judge whether weak load transfer may come from narrow per-op feature coverage.
+
+Files changed:
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_feature_distribution.py`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/AGENT_WORKLOG.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type/categorical_feature_distribution_by_group.csv`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type/distribution_summary.json`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type/distribution_summary.md`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type/group_concentration_summary.csv`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type/highly_concentrated_categorical_features.csv`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type/highly_concentrated_numeric_features.csv`
+- `/data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type/numeric_feature_distribution_by_group.csv`
+
+Behavior changes:
+- Added `analyze_feature_distribution.py`, which reads a dataset CSV plus `feature_columns.json`, groups rows by a chosen column, and exports per-feature distribution statistics.
+- The new analyzer flags concentrated numeric features when they are constant, low-cardinality, dominated by one value, or have a very narrow `IQR / range`.
+- The exported Markdown/CSV summaries make it explicit that per-op feature coverage is very uneven in `dataset_all_78910_nodrop`:
+  - `Add`, `Mul`, and `Unsqueeze` each have `17 / 25` numeric features flagged as concentrated.
+  - `Gather` only has `5 / 25` concentrated numeric features, so its load coverage is much broader.
+  - Several structural features such as `feat_reduction_axes_count`, `feat_reduction_input_rank`, and `feat_reduction_output_rank` are concentrated in nearly every op type, so they likely contribute little to within-op load transfer.
+
+Validation run:
+- `python3 -m py_compile /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_feature_distribution.py`
+- `python3 /data/qc/dlrm/ORT/single_op_stage1_mlp/analyze_feature_distribution.py --input-csv /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/dataset_full.csv --feature-manifest /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/feature_columns.json --output-dir /data/qc/dlrm/ORT/single_op_stage1_mlp/artifacts/latest/dataset_all_78910_nodrop/distribution_analysis_by_op_type`
+
+Open risks:
+- The concentration rules are heuristic thresholds for coverage inspection, not a direct causal proof of generalization failure.
+- The current export analyzes the full dataset grouped by `op_type`; if later we need to isolate train-only support gaps or unseen validation/test values, we should add a split-aware coverage report on top of this.
